@@ -1,60 +1,45 @@
-# Arf — the app
+# Arf
 
-The real Arf application: a local-first second brain for scientists and coders,
-built with **Svelte 5 (runes) + Vite** as an installable, offline **PWA**. This is
-the web target of the plan in `../ARF-IMPLEMENTATION-PLAN.md`; the Tauri v2 desktop
-shell (for a real plain-file vault) is the remaining platform piece.
+A local-first second brain for scientists and coders. Write notes on papers, books, and concepts; link them; and let a private, on-device engine surface the connections you didn't draw.
+
+- **Use it now (web):** https://tunabirgun.github.io/arf-app/ — no install, no account
+- **Download for desktop:** https://github.com/tunabirgun/arf/releases/latest — Windows, macOS, Linux
+- **Documentation:** https://tunabirgun.github.io/arf-docs/
+
+## What it does
+
+- **Write** in Markdown, with LaTeX math and syntax-highlighted code.
+- **Link** notes with `[[wikilinks]]`; backlinks and concept `#tags` build themselves. Links resolve by a stable id, so renaming a note never breaks them.
+- **See** your knowledge as a graph — a local view beside each note and a full-window view of the whole vault, with zoom, pan, and multi-select.
+- **Discover** with the on-device machine: **Resonance** surfaces notes similar to the one you're reading, and a weekly **Synthesis** digest points out pairs that belong together but were never linked. It runs entirely on your device — your notes never leave it.
+- **Cite** from the **Library**: references of every kind, fetched from open sources, exported to BibTeX, RIS, CSL-JSON, formatted styles, and Zenodo.
+- **Own your data**: your notes are plain Markdown files in a folder you choose — copy them to a USB stick, sync them through a folder or Git, and open them in any editor. Export any note to Markdown, HTML, or PDF.
 
 ## Run it
 
+Requires [Node.js](https://nodejs.org) 18+.
+
 ```bash
-cd app
 npm install
-npm run dev      # http://localhost:5175
-npm run build    # production build to app/dist (also emits a service worker + manifest)
+npm run dev        # http://localhost:5175
+npm run build      # production web build → dist/
 npm run preview
 ```
 
-Requires Node (tested on v24). No other toolchain for the web build.
+### Build the desktop app
 
-## What's implemented (and verified by rendering)
+The desktop app is built with [Tauri](https://tauri.app). You need the [Rust toolchain](https://rustup.rs) and, on Windows, the MSVC C++ build tools.
 
-- **Vault** — notes with a stable ULID id, title, tags, timestamps, Markdown body;
-  autosave. `lib/vault.js` also emits the real on-disk Markdown + YAML-frontmatter
-  form via `toMarkdown()`. (Storage here is `localStorage` as the browser stand-in
-  for the real plain-file vault — the note *shape* is the shipping one.)
-- **Editor** — Write mode is a real **CodeMirror 6** Markdown editor (ink-only
-  highlighting); Read mode renders Markdown with **KaTeX** math, resolved
-  `[[wikilinks]]`, clickable `#tags`, blockquotes, code, lists, and tables.
-- **Links & tags** — `[[wikilinks]]` resolve by title to a stable id; backlinks are
-  computed ("Referenced in N"); a tag cloud filters the note list.
-- **Search** — a Cmd/Ctrl+K palette with a lexical tier and an on-device "Related" tier.
-- **Graph** — a rail ego-graph and a full-window force-directed vault graph with
-  wheel zoom, pan, hover-highlight, node drag, click-to-open, and Ctrl+right-click
-  multi-select.
-- **On-device machine** — real TF-IDF cosine similarity (private, no download;
-  debounced so typing never triggers a full rescan) drives **Resonance** and the
-  weekly **Synthesis digest**. `lib/graphindex.js` is the seam where the shipping
-  app swaps in MiniLM embeddings (Transformers.js).
-- **Library** — references of every type (articles, books, magazines, preprints,
-  archived webpages) with type filters, a detail panel with provenance, a
-  multi-source "Add reference" fetch, and export to BibTeX, RIS, CSL-JSON, APA,
-  Nature, and Zenodo.
-- **Focus mode**, universal keyboard shortcuts (Ctrl on Win/Linux, ⌘ on Mac),
-  light/dark, and PWA install + offline.
+```bash
+npm run tauri build
+```
 
-## What's next (per the plan)
+Installers are written to `src-tauri/target/release/bundle/`. Pushing a `v*` tag also builds Windows, macOS, and Linux installers automatically and attaches them to a GitHub Release.
 
-- **Tauri v2 desktop shell** + the real plain-file vault (File System Access / OPFS
-  adapters) — needs the Rust toolchain, not present in the build environment used here.
-- **Editor Phase 2** — Typora-style live-preview, a selection bubble toolbar, and a
-  `/` slash menu; then the opt-in Milkdown rich-text mode
-  (see `../research/wysiwyg-editor-recommendation.md`).
-- **MiniLM embeddings** in place of TF-IDF; real DOI network fetch in place of the
-  small mock lookup; incremental indexing and code-splitting for large vaults.
+## Built with
 
-## Files
+Svelte 5 + Vite, CodeMirror 6, KaTeX, marked, MiniSearch, Transformers.js (all-MiniLM-L6-v2), and Tauri 2 for the desktop app.
 
-`src/App.svelte` (shell), `src/lib/vault.js`, `src/lib/graphindex.js`,
-`src/lib/markdown.js`, `src/lib/Editor.svelte`, `src/lib/GraphView.svelte`,
-`src/lib/Library.svelte`, `src/appshell.css`, `src/app.css`.
+## License
+
+MIT.

@@ -4,6 +4,7 @@
   import { buildIndex, buildVectors, related, hasLinks, digestPairs } from './lib/graphindex.js';
   import { renderMarkdown, setLinkResolver } from './lib/markdown.js';
   import { initEmbedder, embedNotes, cosine as mlCosine } from './lib/ml.js';
+  import { connectVault, reconnectVault, folderVaultSupported, isTauri } from './lib/vaultadapter.js';
   import Editor from './lib/Editor.svelte';
   import GraphView from './lib/GraphView.svelte';
   import Library from './lib/Library.svelte';
@@ -22,6 +23,11 @@
   let mlStatus = $state('off');   // off | loading | ready | error
   let mlPct = $state(0);
   let mlVecs = $state({});         // MiniLM embeddings (id -> 384-dim), when ready
+  let vaultBackend = $state(null); // when set, notes are real Markdown files on disk
+  let vaultBusy = $state(false);
+  let vaultErr = $state(false);
+  let dirty = new Set();           // note ids changed since the last file flush
+  let reconnected = false;
   let saved = $state(false);
   let paletteOpen = $state(false);
   let digestOpen = $state(false);
@@ -114,12 +120,47 @@
   let saveError = $state(false);
   let flashTimer, saveTimer;
   function writeNow() {
-    const ok = saveNotes(notes);
+    const ok = saveNotes(notes);       // localStorage stays as an always-on local cache
     saveError = !ok;
     if (ok) { saved = true; clearTimeout(flashTimer); flashTimer = setTimeout(() => (saved = false), 800); }
+    flushVault();                       // and mirror changed notes to real files, if connected
   }
   function persist() { clearTimeout(saveTimer); saveTimer = setTimeout(writeNow, 400); }
   function flushSave() { clearTimeout(saveTimer); writeNow(); }
+  function markDirty(id) { if (vaultBackend && id) dirty.add(id); }
+  async function flushVault() {
+    if (!vaultBackend || !dirty.size) return;
+    const ids = [...dirty]; dirty.clear();
+    for (const id of ids) { const n = notes.find((x) => x.id === id); if (n) { try { await vaultBackend.saveNote(n); vaultErr = false; } catch (e) { vaultErr = true; } } }
+  }
+  async function connectFolder() {
+    if (vaultBusy || vaultBackend) return; vaultBusy = true;
+    try {
+      const b = await connectVault();
+      if (b) {
+        const existing = await b.loadAll();
+        if (existing.length) {                 // the folder already holds notes → open them
+          flushSave(); notes = existing; currentId = existing[0].id;
+          folders = [...new Set(existing.map((n) => n.folder).filter(Boolean))]; saveFolders(folders);
+        } else {                               // empty folder → write the current vault into it
+          for (const n of notes) { try { await b.saveNote(n); } catch (e) {} }
+        }
+        vaultBackend = b;
+      }
+    } catch (e) {} finally { vaultBusy = false; }
+  }
+  function disconnectFolder() { vaultBackend = null; dirty.clear(); }
+  $effect(() => {
+    if (reconnected) return; reconnected = true;
+    (async () => {
+      try {
+        const b = await reconnectVault(); if (!b) return;
+        const ex = await b.loadAll();
+        if (ex.length) { notes = ex; currentId = (ex.find((n) => n.id === currentId) || ex[0]).id; folders = [...new Set(ex.map((n) => n.folder).filter(Boolean))]; }
+        vaultBackend = b;
+      } catch (e) {}
+    })();
+  });
   // converge across tabs: pick up another tab's writes instead of clobbering them
   $effect(() => {
     const h = (e) => { if (e.key === 'arf-vault-v0' && e.newValue) { try { notes = JSON.parse(e.newValue); } catch (x) {} } };
@@ -127,9 +168,9 @@
     window.addEventListener('beforeunload', flushSave);
     return () => { window.removeEventListener('storage', h); window.removeEventListener('beforeunload', flushSave); };
   });
-  function editBody(v) { const n = notes.find((x) => x.id === currentId); if (!n) return; n.body = v; n.updated = new Date().toISOString(); persist(); }
-  function editTitle(v) { const n = notes.find((x) => x.id === currentId); if (!n) return; n.title = v; n.updated = new Date().toISOString(); persist(); }
-  function create() { const n = newNote(activeFolder); notes.unshift(n); currentId = n.id; mode = 'write'; view = 'notes'; persist(); if (isMobile) { mtab = 'notes'; mNoteOpen = true; } }
+  function editBody(v) { const n = notes.find((x) => x.id === currentId); if (!n) return; n.body = v; n.updated = new Date().toISOString(); markDirty(currentId); persist(); }
+  function editTitle(v) { const n = notes.find((x) => x.id === currentId); if (!n) return; n.title = v; n.updated = new Date().toISOString(); markDirty(currentId); persist(); }
+  function create() { const n = newNote(activeFolder); notes.unshift(n); currentId = n.id; mode = 'write'; view = 'notes'; markDirty(n.id); persist(); if (isMobile) { mtab = 'notes'; mNoteOpen = true; } }
   function addFolder() {
     const raw = (newFolderName || '').trim(); newFolderName = null;
     if (!raw) return;
@@ -139,7 +180,7 @@
     saveFolders(folders); collapsed[activeFolder] = false;
   }
   function toggleFolder(path) { collapsed[path] = !collapsed[path]; }
-  function moveNote(id, folder) { const n = notes.find((x) => x.id === id); if (n) { n.folder = folder; n.updated = new Date().toISOString(); persist(); } }
+  function moveNote(id, folder) { const n = notes.find((x) => x.id === id); if (n) { n.folder = folder; n.updated = new Date().toISOString(); markDirty(id); persist(); } }
 
   function esc(s) { return (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
   function exportHTML(n) {
@@ -177,7 +218,7 @@
     const s = window.prompt('Write the sentence that connects “' + a.title + '” and “' + b.title + '”:', '');
     if (s === null) return; // cancelled — do not fake the connection
     const line = s.trim() ? s.trim().replace(/\.?$/, '') + ' — see [[' + b.title + ']].' : 'Related to [[' + b.title + ']].';
-    a.body = (a.body || '').trimEnd() + '\n\n' + line; a.updated = new Date().toISOString(); flushSave();
+    a.body = (a.body || '').trimEnd() + '\n\n' + line; a.updated = new Date().toISOString(); markDirty(aId); flushSave();
   }
 
   // read-view delegation
@@ -287,6 +328,10 @@
         </div>
       {:else if mtab === 'notes'}
         <div class="mlist">
+          <div class="vaultbar">
+            {#if vaultBackend}<span class="vlabel on">◆ Folder vault</span><button class="vbtn" onclick={disconnectFolder}>browser</button>
+            {:else}<span class="vlabel">◆ Browser storage</span>{#if folderVaultSupported()}<button class="vbtn" onclick={connectFolder}>{vaultBusy ? '…' : (isTauri ? 'open folder…' : 'use a folder…')}</button>{/if}{/if}
+          </div>
           <div class="lhrow"><span class="lh">Vault · {notes.length}</span>
             <button class="mini" onclick={() => (newFolderName = '')}>＋ Folder</button></div>
           {#if newFolderName !== null}
@@ -373,6 +418,16 @@
   {:else}
     <div class="ws">
       <aside class="list">
+        <div class="vaultbar">
+          {#if vaultBackend}
+            <span class="vlabel on" title="Your notes are Markdown files in the folder you chose">◆ Folder vault</span>
+            <button class="vbtn" onclick={disconnectFolder}>use browser</button>
+          {:else}
+            <span class="vlabel" title="Your notes are stored in this browser (still yours; export or connect a folder any time)">◆ Browser storage</span>
+            {#if folderVaultSupported()}<button class="vbtn" onclick={connectFolder}>{vaultBusy ? 'opening…' : (isTauri ? 'open folder…' : 'use a folder…')}</button>{/if}
+          {/if}
+          {#if vaultErr}<span class="verr" title="A file write failed">⚠</span>{/if}
+        </div>
         <div class="mobileacts">
           <button class:on={view === 'notes'} onclick={() => { view = 'notes'; drawer = false; }}>Notes</button>
           <button class:on={view === 'library'} onclick={() => { view = 'library'; drawer = false; }}>Library</button>

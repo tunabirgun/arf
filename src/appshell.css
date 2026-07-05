@@ -45,6 +45,12 @@
 .lhrow .lh { margin: 0; }
 .mini { font-family: var(--sans); font-size: 10.5px; color: var(--fg-faint); background: none; border: 1px solid var(--line); border-radius: 4px; padding: .12rem .4rem; cursor: pointer; }
 .mini:hover { border-color: var(--accent); color: var(--fg-bright); }
+.vaultbar { display: flex; align-items: center; gap: .4rem; padding: .2rem .3rem .55rem; margin-bottom: .35rem; border-bottom: 1px solid var(--line); font-family: var(--sans); }
+.vlabel { font-size: 11px; color: var(--fg-faint); }
+.vlabel.on { color: var(--accent); }
+.vbtn { font-size: 10.5px; color: var(--accent); background: none; border: 0; cursor: pointer; margin-left: auto; padding: 0; }
+.vbtn:hover { text-decoration: underline; }
+.verr { color: #b04a4a; font-size: 12px; }
 .nfinput { width: 100%; font-family: var(--sans); font-size: 13px; padding: .32rem .5rem; border: 1px solid var(--accent); border-radius: 4px; background: var(--surface); color: var(--fg-bright); margin-bottom: .4rem; outline: none; }
 .frow { display: flex; align-items: center; gap: .3rem; width: 100%; text-align: left; background: none; border: 0; border-radius: 4px; padding: .28rem .3rem; cursor: pointer; color: var(--fg-bright); font-family: var(--sans); font-size: 13px; font-weight: 600; }
 .frow:hover, .frow.active { background: var(--accent-soft); }

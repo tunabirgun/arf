@@ -2,6 +2,7 @@
 // marked for structure; KaTeX for math; custom inline tokens for [[wikilinks]] and #tags.
 import { marked } from 'marked';
 import katex from 'katex';
+import DOMPurify from 'dompurify';
 
 let resolveTitle = () => null; // (lowercaseTitle) -> note | null
 export function setLinkResolver(fn) { resolveTitle = fn; }
@@ -44,5 +45,9 @@ const tag = {
 marked.use({ gfm: true, breaks: false, extensions: [mathBlock, mathInline, wikilink, tag] });
 
 export function renderMarkdown(md) {
-  try { return marked.parse(md || ''); } catch (e) { return '<p>' + esc(md || '') + '</p>'; }
+  try {
+    // sanitize: a note may come from an external .md file in the vault, so strip
+    // scripts/handlers while keeping wikilink data-attrs and KaTeX's spans/styles
+    return DOMPurify.sanitize(marked.parse(md || ''), { ADD_ATTR: ['data-nav', 'data-tag'], ADD_TAGS: ['use'] });
+  } catch (e) { return '<p>' + esc(md || '') + '</p>'; }
 }
