@@ -26,7 +26,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["nsis", "app", "dmg", "deb", "appimage"],
     "category": "Productivity",
     "shortDescription": "A second brain for scientists",
     "longDescription": "Arf is a local-first second brain for scientists and coders: notes, bidirectional links, a knowledge graph, and a private on-device machine that suggests connections.",
