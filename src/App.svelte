@@ -4,7 +4,8 @@
   import { buildIndex, buildVectorizer, related, hasLinks, digestPairs, cosine } from './lib/graphindex.js';
   import { renderMarkdown, setLinkResolver, setCiteResolver } from './lib/markdown.js';
   import { loadRefs, saveRefs } from './lib/references.js';
-  import { initEmbedder, embedNotes, cosine as mlCosine } from './lib/ml.js';
+  import { initEmbedder, embedNotes, cosine as mlCosine, resetEmbedder } from './lib/ml.js';
+  const ML_MODELS = { en: 'Xenova/all-MiniLM-L6-v2', multi: 'Xenova/paraphrase-multilingual-MiniLM-L12-v2' };
   import { connectVault, reconnectVault, folderVaultSupported, isTauri } from './lib/vaultadapter.js';
   import Editor from './lib/Editor.svelte';
   import GraphView from './lib/GraphView.svelte';
@@ -25,6 +26,7 @@
   let vectorizer = buildVectorizer(notes);  // { vecs, vectorize } — TF-IDF, refreshed on the debounce
   let vecs = $state(vectorizer.vecs);       // seeded so Resonance is never blank on load
   let mlEnabled = $state((() => { try { return localStorage.getItem('arf-ml') === '1'; } catch (e) { return false; } })());
+  let mlModel = $state((() => { try { return localStorage.getItem('arf-mlmodel') === 'multi' ? 'multi' : 'en'; } catch (e) { return 'en'; } })());
   let mlStatus = $state('off');   // off | loading | ready | error
   let mlPct = $state(0);
   let mlVecs = $state({});         // MiniLM embeddings (id -> 384-dim), when ready
@@ -123,9 +125,15 @@
       if (s.status === 'loading') mlPct = s.pct || mlPct;
       else if (s.status === 'ready') { mlStatus = 'ready'; recomputeML(); }
       else if (s.status === 'error') mlStatus = 'error';
-    });
+    }, ML_MODELS[mlModel]);
   }
   function enableML() { mlEnabled = true; try { localStorage.setItem('arf-ml', '1'); } catch (e) {} startML(); }
+  // switch embedding model (English vs multilingual): reload the worker and re-embed under the new key
+  function setModel(m) {
+    if (m === mlModel) return;
+    mlModel = m; try { localStorage.setItem('arf-mlmodel', m); } catch (e) {}
+    if (mlEnabled) { resetEmbedder(); mlStatus = 'off'; mlPct = 0; mlVecs = {}; startML(); }
+  }
   $effect(() => { if (mlEnabled && mlStatus === 'off') startML(); });
   let mlTimer;
   $effect(() => {
@@ -825,11 +833,14 @@
       </div>
 
       <div class="setlabel">On-device machine</div>
-      <div class="setrow"><span class="sk">Connection suggestions <span class="sh">MiniLM — runs on your device, ~23 MB once</span></span>
+      <div class="setrow"><span class="sk">Connection suggestions <span class="sh">{mlModel === 'multi' ? 'Multilingual model — runs on your device, ~120 MB once' : 'MiniLM — runs on your device, ~23 MB once'}</span></span>
         {#if mlStatus === 'off'}<button class="setbtn" onclick={enableML}>Enable</button>
         {:else if mlStatus === 'loading'}<span class="setstat">downloading {mlPct}%…</span>
         {:else if mlStatus === 'ready'}<span class="setstat ok">✓ on</span>
         {:else}<span class="setstat">unavailable — using the light method</span>{/if}
+      </div>
+      <div class="setrow"><span class="sk">Model <span class="sh">English is smaller and faster; Multilingual understands 50+ languages, including Turkish</span></span>
+        <div class="seg"><button class:on={mlModel === 'en'} onclick={() => setModel('en')}>English</button><button class:on={mlModel === 'multi'} onclick={() => setModel('multi')}>Multilingual</button></div>
       </div>
 
       <div class="setlabel">Your data</div>
