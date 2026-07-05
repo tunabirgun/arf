@@ -7,7 +7,6 @@
   import { markdown } from '@codemirror/lang-markdown';
   import { syntaxHighlighting, HighlightStyle } from '@codemirror/language';
   import { tags as hlTags } from '@lezer/highlight';
-  import { t } from './i18n.svelte.js';
 
   let { value = '', onchange, resemble = null } = $props();
   let el;      // the CodeMirror host
@@ -146,17 +145,17 @@
 
 <div class="editorwrap" bind:this={wrapEl}>
   <div class="fmtbar">
-    <button type="button" title={t('Heading 1')} onclick={() => heading('#')}>H1</button>
-    <button type="button" title={t('Heading 2')} onclick={() => heading('##')}>H2</button>
-    <button type="button" title={t('Heading 3')} onclick={() => heading('###')}>H3</button>
+    <button type="button" title="Heading 1" onclick={() => heading('#')}>H1</button>
+    <button type="button" title="Heading 2" onclick={() => heading('##')}>H2</button>
+    <button type="button" title="Heading 3" onclick={() => heading('###')}>H3</button>
     <span class="fsep"></span>
-    <button type="button" class="fb" title="{t('Bold')} ({navigator.platform.includes('Mac') ? '⌘' : 'Ctrl'}+B)" onclick={() => wrap('**')}>B</button>
-    <button type="button" class="fi" title="{t('Italic')} ({navigator.platform.includes('Mac') ? '⌘' : 'Ctrl'}+I)" onclick={() => wrap('*')}>I</button>
-    <button type="button" class="fm" title={t('Inline code')} onclick={() => wrap('`')}>{'</>'}</button>
+    <button type="button" class="fb" title="Bold ({navigator.platform.includes('Mac') ? '⌘' : 'Ctrl'}+B)" onclick={() => wrap('**')}>B</button>
+    <button type="button" class="fi" title="Italic ({navigator.platform.includes('Mac') ? '⌘' : 'Ctrl'}+I)" onclick={() => wrap('*')}>I</button>
+    <button type="button" class="fm" title="Inline code" onclick={() => wrap('`')}>{'</>'}</button>
     <span class="fsep"></span>
-    <button type="button" title={t('Link')} onclick={link}>{t('Link')}</button>
-    <button type="button" title={t('Bullet list')} onclick={() => prefix('- ')}>{t('List')}</button>
-    <button type="button" title={t('Quote')} onclick={() => prefix('> ')}>{t('Quote')}</button>
+    <button type="button" title="Link" onclick={link}>Link</button>
+    <button type="button" title="Bullet list" onclick={() => prefix('- ')}>List</button>
+    <button type="button" title="Quote" onclick={() => prefix('> ')}>Quote</button>
   </div>
   <div class="cm-host" bind:this={el}></div>
   {#if hint}

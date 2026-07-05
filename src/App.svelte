@@ -4,7 +4,6 @@
   import { buildIndex, buildVectorizer, related, hasLinks, digestPairs, cosine } from './lib/graphindex.js';
   import { renderMarkdown, setLinkResolver, setCiteResolver } from './lib/markdown.js';
   import { loadRefs, saveRefs } from './lib/references.js';
-  import { t } from './lib/i18n.svelte.js';
   import { initEmbedder, embedNotes, cosine as mlCosine } from './lib/ml.js';
   import { connectVault, reconnectVault, folderVaultSupported, isTauri } from './lib/vaultadapter.js';
   import Editor from './lib/Editor.svelte';
@@ -473,18 +472,18 @@
       {#if mtab === 'notes' && mNoteOpen && current}
         <button class="micon back" aria-label="Back to notes" onclick={() => (mNoteOpen = false)}>‹</button>
         <div class="mseg">
-          <button class:on={mode === 'read'} onclick={() => (mode = 'read')}>{t('Read')}</button>
-          <button class:on={mode === 'write'} onclick={() => (mode = 'write')}>{t('Write')}</button>
+          <button class:on={mode === 'read'} onclick={() => (mode = 'read')}>Read</button>
+          <button class:on={mode === 'write'} onclick={() => (mode = 'write')}>Write</button>
         </div>
         <span class="msp"></span>
-        <button class="micon" aria-label={t('Export note')} onclick={() => (docExport = true)}>⇩</button>
+        <button class="micon" aria-label="Export note" onclick={() => (docExport = true)}>⇩</button>
       {:else if mtab === 'search'}
         <span class="mmag">⌕</span>
         <!-- svelte-ignore a11y_autofocus -->
-        <input class="msearchin" autofocus placeholder={t('Search notes, tags, ideas…')} bind:value={query} />
+        <input class="msearchin" autofocus placeholder="Search notes, tags, ideas…" bind:value={query} />
         {#if query}<button class="micon" aria-label="Clear" onclick={() => (query = '')}>✕</button>{/if}
       {:else}
-        <span class="mwm">{mtab === 'graph' ? t('Graph') : mtab === 'library' ? t('Library') : 'Arf'}{#if mtab === 'notes'}<span class="dot">.</span>{/if}</span>
+        <span class="mwm">{mtab === 'graph' ? 'Graph' : mtab === 'library' ? 'Library' : 'Arf'}{#if mtab === 'notes'}<span class="dot">.</span>{/if}</span>
         <span class="msp"></span>
         {#if mtab === 'notes'}<button class="micon" aria-label="Weekly synthesis" onclick={() => (digestOpen = true)}>◇</button>{/if}
         <button class="micon" aria-label="Light / dark" onclick={toggleTheme}>◑</button>
@@ -492,55 +491,55 @@
       {/if}
     </header>
 
-    {#if saveError}<div class="savebanner">{t('⚠ Couldn’t save — storage may be full. Export this note now.')}</div>{/if}
-    {#if vaultCorrupt}<div class="savebanner">{t('⚠ Saved notes couldn’t be read; a backup was kept.')} <button class="bnrbtn" onclick={() => (vaultCorrupt = false)}>{t('Dismiss')}</button></div>{/if}
+    {#if saveError}<div class="savebanner">⚠ Couldn’t save — storage may be full. Export this note now.</div>{/if}
+    {#if vaultCorrupt}<div class="savebanner">⚠ Saved notes couldn’t be read; a backup was kept. <button class="bnrbtn" onclick={() => (vaultCorrupt = false)}>Dismiss</button></div>{/if}
 
     <main class="mbody" class:nopad={mtab === 'graph'}>
       {#if mtab === 'notes' && mNoteOpen && current}
         <div class="mnote">
           <div class="mcrumbs">
             <select class="fmove" value={current.folder || ''} onchange={(e) => moveNote(current.id, e.currentTarget.value)}>
-              <option value="">{t('No folder')}</option>{#each allFolders as f}<option value={f}>{f}</option>{/each}
+              <option value="">No folder</option>{#each allFolders as f}<option value={f}>{f}</option>{/each}
             </select>
             {#if (current.tags || []).length}<span class="ctags"> · #{current.tags.join('  #')}</span>{/if}
-            {#if saved}<span class="saved">{t('saved')}</span>{/if}
+            {#if saved}<span class="saved">saved</span>{/if}
           </div>
           {#if mode === 'write'}
-            <input class="mtitle" value={current.title} oninput={(e) => editTitle(e.currentTarget.value)} aria-label={t('title')} />
+            <input class="mtitle" value={current.title} oninput={(e) => editTitle(e.currentTarget.value)} aria-label="title" />
             {#key currentId}<div class="meditor"><Editor value={current.body} onchange={editBody} resemble={resembleParagraph} /></div>{/key}
           {:else}
             <h1 class="mtitle ro">{current.title}<span class="inv" class:orphan={invDot(current.id) === '○'}>{invDot(current.id)}</span></h1>
             <div class="read mread" onclick={readClick}>{@html readHTML}</div>
             <div class="mconn">
-              <div class="rh">{t('Referenced in')} <span>{backlinks.length}</span></div>
-              {#if backlinks.length}{#each backlinks as b}<button class="ref" onclick={() => open(b.id)}>{b.title}</button>{/each}{:else}<div class="rempty">{t('No backlinks yet.')}</div>{/if}
-              <div class="rh" style="margin-top:1.1rem">{t('Resonance')} · {mlStatus === 'ready' ? 'MiniLM' : t('on-device')}
-                {#if mlStatus === 'off'}<button class="mltoggle" onclick={enableML}>{t('enable AI')}</button>
+              <div class="rh">Referenced in <span>{backlinks.length}</span></div>
+              {#if backlinks.length}{#each backlinks as b}<button class="ref" onclick={() => open(b.id)}>{b.title}</button>{/each}{:else}<div class="rempty">No backlinks yet.</div>{/if}
+              <div class="rh" style="margin-top:1.1rem">Resonance · {mlStatus === 'ready' ? 'MiniLM' : 'on-device'}
+                {#if mlStatus === 'off'}<button class="mltoggle" onclick={enableML}>enable AI</button>
                 {:else if mlStatus === 'loading'}<span class="mlstat">↓ {mlPct}%</span>
                 {:else if mlStatus === 'ready'}<span class="mlstat ok">✓</span>{/if}
               </div>
-              {#if resonance.length}{#each resonance as r}<button class="ref ml" onclick={() => open(r.note.id)}><span class="sim">{r.s.toFixed(2)}</span><span class="nm">{r.note.title}</span></button>{/each}{:else}<div class="rempty">{t('Nothing close enough yet.')}</div>{/if}
-              <button class="mconnbtn" onclick={() => (mtab = 'graph')}>✧&nbsp; {t('See this note in the graph')}</button>
+              {#if resonance.length}{#each resonance as r}<button class="ref ml" onclick={() => open(r.note.id)}><span class="sim">{r.s.toFixed(2)}</span><span class="nm">{r.note.title}</span></button>{/each}{:else}<div class="rempty">Nothing close enough yet.</div>{/if}
+              <button class="mconnbtn" onclick={() => (mtab = 'graph')}>✧&nbsp; See this note in the graph</button>
             </div>
           {/if}
         </div>
       {:else if mtab === 'notes'}
         <div class="mlist">
           <div class="vaultbar">
-            {#if vaultBackend}<span class="vlabel on" title="Auto-syncing to “{vaultBackend.name}”"><span class="syncdot"></span>{t('Synced')}</span><button class="vbtn" onclick={disconnectFolder}>{t('browser')}</button>
-            {:else}<span class="vlabel">◆ {t('Browser storage')}</span>{#if folderVaultSupported()}<button class="vbtn" onclick={connectFolder}>{vaultBusy ? '…' : (isTauri ? t('open folder…') : t('use a folder…'))}</button>{/if}{/if}
+            {#if vaultBackend}<span class="vlabel on" title="Auto-syncing to “{vaultBackend.name}”"><span class="syncdot"></span>Synced</span><button class="vbtn" onclick={disconnectFolder}>browser</button>
+            {:else}<span class="vlabel">◆ Browser storage</span>{#if folderVaultSupported()}<button class="vbtn" onclick={connectFolder}>{vaultBusy ? '…' : (isTauri ? 'open folder…' : 'use a folder…')}</button>{/if}{/if}
           </div>
-          <div class="lhrow"><span class="lh">{t('Vault')} · {notes.length}</span>
-            <button class="mini" onclick={() => (newFolderName = '')}>{t('+ Folder')}</button></div>
+          <div class="lhrow"><span class="lh">Vault · {notes.length}</span>
+            <button class="mini" onclick={() => (newFolderName = '')}>+ Folder</button></div>
           {#if newFolderName !== null}
             <!-- svelte-ignore a11y_autofocus -->
-            <input class="nfinput" autofocus placeholder={activeFolder ? t('Subfolder of') + ' ' + activeFolder : t('Folder name')} bind:value={newFolderName}
+            <input class="nfinput" autofocus placeholder={activeFolder ? 'Subfolder of' + ' ' + activeFolder : 'Folder name'} bind:value={newFolderName}
               onkeydown={(e) => { if (e.key === 'Enter') addFolder(); else if (e.key === 'Escape') newFolderName = null; }} onblur={addFolder} />
           {/if}
           {#if tagFilter}
-            <button class="clearfilter" onclick={() => (tagFilter = null)}>← {t('clear')} #{tagFilter}</button>
+            <button class="clearfilter" onclick={() => (tagFilter = null)}>← clear #{tagFilter}</button>
             {#each listNotes as n (n.id)}
-              <button class="mitem" onclick={() => open(n.id)}><span class="dot2" class:orphan={invDot(n.id) === '○'}>{invDot(n.id)}</span><span class="t">{n.title || t('Untitled')}</span></button>
+              <button class="mitem" onclick={() => open(n.id)}><span class="dot2" class:orphan={invDot(n.id) === '○'}>{invDot(n.id)}</span><span class="t">{n.title || 'Untitled'}</span></button>
             {/each}
           {:else}
             {#each folderRows as r}
@@ -549,12 +548,12 @@
                   <span class="caret">{r.hasChildren ? (r.collapsed ? '▸' : '▾') : '·'}</span><span class="fn">{r.name}</span>{#if r.count}<span class="fcount">{r.count}</span>{/if}
                 </button>
               {:else}
-                <button class="mitem" style="padding-left:{8 + r.depth * 14}px" onclick={() => open(r.note.id)}><span class="dot2" class:orphan={invDot(r.note.id) === '○'}>{invDot(r.note.id)}</span><span class="t">{r.note.title || t('Untitled')}</span></button>
+                <button class="mitem" style="padding-left:{8 + r.depth * 14}px" onclick={() => open(r.note.id)}><span class="dot2" class:orphan={invDot(r.note.id) === '○'}>{invDot(r.note.id)}</span><span class="t">{r.note.title || 'Untitled'}</span></button>
               {/if}
             {/each}
           {/if}
           {#if allTags.length}
-            <div class="lh" style="margin-top:1.1rem">{t('Tags')}</div>
+            <div class="lh" style="margin-top:1.1rem">Tags</div>
             <div class="tags">{#each allTags as tg}<button class="tag" class:on={tagFilter === tg} onclick={() => (tagFilter = tagFilter === tg ? null : tg)}>#{tg}</button>{/each}</div>
           {/if}
         </div>
@@ -562,10 +561,10 @@
       {:else if mtab === 'search'}
         <div class="msearch">
           {#each palItems.lex as l}
-            <button class="mitem" onclick={() => open(l.id)}><span class="dot2" class:orphan={invDot(l.id) === '○'}>{invDot(l.id)}</span><span class="txt"><span class="t">{idx.byId[l.id].title}</span>{#if l.why}<span class="s">{t(l.why)}</span>{/if}</span></button>
-          {:else}<div class="rempty" style="padding:2.5rem 1rem;text-align:center">{query ? t('No matches.') : t('Search your vault by title, tag, or text.')}</div>{/each}
+            <button class="mitem" onclick={() => open(l.id)}><span class="dot2" class:orphan={invDot(l.id) === '○'}>{invDot(l.id)}</span><span class="txt"><span class="t">{idx.byId[l.id].title}</span>{#if l.why}<span class="s">{l.why}</span>{/if}</span></button>
+          {:else}<div class="rempty" style="padding:2.5rem 1rem;text-align:center">{query ? 'No matches.' : 'Search your vault by title, tag, or text.'}</div>{/each}
           {#if palItems.sem.length}
-            <div class="lh" style="padding:.7rem 1rem .3rem">{t('Related · on-device')}</div>
+            <div class="lh" style="padding:.7rem 1rem .3rem">Related · on-device</div>
             {#each palItems.sem as s}<button class="mitem" onclick={() => open(s.id)}><span class="dot2 sem">◈</span><span class="txt"><span class="t i">{idx.byId[s.id].title}</span><span class="s">{s.s.toFixed(2)}</span></span></button>{/each}
           {/if}
         </div>
@@ -577,10 +576,10 @@
     </main>
 
     <nav class="mnav">
-      <button class="mnavt" class:on={mtab === 'notes'} onclick={() => { mtab = 'notes'; mNoteOpen = false; }}><span class="ic">☰</span>{t('Notes')}</button>
-      <button class="mnavt" class:on={mtab === 'search'} onclick={() => { mtab = 'search'; query = ''; }}><span class="ic">⌕</span>{t('Search')}</button>
-      <button class="mnavt" class:on={mtab === 'graph'} onclick={() => (mtab = 'graph')}><span class="ic">✧</span>{t('Graph')}</button>
-      <button class="mnavt" class:on={mtab === 'library'} onclick={() => (mtab = 'library')}><span class="ic">▤</span>{t('Library')}</button>
+      <button class="mnavt" class:on={mtab === 'notes'} onclick={() => { mtab = 'notes'; mNoteOpen = false; }}><span class="ic">☰</span>Notes</button>
+      <button class="mnavt" class:on={mtab === 'search'} onclick={() => { mtab = 'search'; query = ''; }}><span class="ic">⌕</span>Search</button>
+      <button class="mnavt" class:on={mtab === 'graph'} onclick={() => (mtab = 'graph')}><span class="ic">✧</span>Graph</button>
+      <button class="mnavt" class:on={mtab === 'library'} onclick={() => (mtab = 'library')}><span class="ic">▤</span>Library</button>
     </nav>
   </div>
 {:else}
@@ -589,25 +588,25 @@
     <button class="menubtn" aria-label="Menu" onclick={() => (drawer = !drawer)}>☰</button>
     <button class="wm" onclick={() => (view = 'notes')}>Arf<span class="dot">.</span></button>
     <div class="viewtoggle">
-      <button class:on={view === 'notes'} onclick={() => (view = 'notes')}>{t('Notes')}</button>
-      <button class:on={view === 'library'} onclick={() => (view = 'library')}>{t('Library')}</button>
+      <button class:on={view === 'notes'} onclick={() => (view = 'notes')}>Notes</button>
+      <button class:on={view === 'library'} onclick={() => (view = 'library')}>Library</button>
     </div>
     <span class="sp"></span>
     <button class="searchpill" onclick={() => { paletteOpen = true; query = ''; }}>
-      <span class="mag">⌕</span><span class="lbl">{t('Search')}</span><kbd>{MOD} K</kbd>
+      <span class="mag">⌕</span><span class="lbl">Search</span><kbd>{MOD} K</kbd>
     </button>
     <div class="topacts">
-      <button class="tbtn" onclick={() => (digestOpen = true)}>{t('Synthesis')}</button>
-      <button class="tbtn" onclick={() => (graphFull = true)}>{t('Graph')}</button>
-      <button class="tbtn" class:on={focus} onclick={() => (focus = !focus)}>{t('Focus')}</button>
-      <button class="tbtn" onclick={toggleTheme}>{t('Theme')}</button>
-      <button class="tbtn" onclick={() => (settingsOpen = true)}>{t('Settings')}</button>
+      <button class="tbtn" onclick={() => (digestOpen = true)}>Synthesis</button>
+      <button class="tbtn" onclick={() => (graphFull = true)}>Graph</button>
+      <button class="tbtn" class:on={focus} onclick={() => (focus = !focus)}>Focus</button>
+      <button class="tbtn" onclick={toggleTheme}>Theme</button>
+      <button class="tbtn" onclick={() => (settingsOpen = true)}>Settings</button>
     </div>
-    <button class="newbtn" onclick={create}>＋&nbsp;{t('New')}</button>
+    <button class="newbtn" onclick={create}>＋&nbsp;New</button>
   </header>
 
   {#if saveError}
-    <div class="savebanner">{t('⚠ Couldn’t save — your browser storage may be full or blocked. Export this note now to avoid losing it.')}</div>
+    <div class="savebanner">⚠ Couldn’t save — your browser storage may be full or blocked. Export this note now to avoid losing it.</div>
   {/if}
   {#if vaultCorrupt}
     <div class="savebanner">⚠ Your saved notes couldn’t be read and were backed up (<span class="mono">{corruptBackupKey()}</span>). Starting with an empty vault. <button class="bnrbtn" onclick={() => (vaultCorrupt = false)}>Dismiss</button></div>
@@ -626,37 +625,37 @@
       <aside class="list">
         <div class="vaultbar">
           {#if vaultBackend}
-            <span class="vlabel on" title="Auto-syncing to “{vaultBackend.name}”. Keep this folder in Dropbox, iCloud, OneDrive, or Syncthing to sync across your devices."><span class="syncdot"></span>{t('Synced')} · {vaultBackend.name}</span>
-            <button class="vbtn" onclick={disconnectFolder}>{t('use browser')}</button>
+            <span class="vlabel on" title="Auto-syncing to “{vaultBackend.name}”. Keep this folder in Dropbox, iCloud, OneDrive, or Syncthing to sync across your devices."><span class="syncdot"></span>Synced · {vaultBackend.name}</span>
+            <button class="vbtn" onclick={disconnectFolder}>use browser</button>
           {:else}
-            <span class="vlabel" title="Your notes are stored in this browser (still yours; export or connect a folder any time)">◆ {t('Browser storage')}</span>
-            {#if folderVaultSupported()}<button class="vbtn" onclick={connectFolder}>{vaultBusy ? t('Opening…') : (isTauri ? t('open folder…') : t('use a folder…'))}</button>{/if}
+            <span class="vlabel" title="Your notes are stored in this browser (still yours; export or connect a folder any time)">◆ Browser storage</span>
+            {#if folderVaultSupported()}<button class="vbtn" onclick={connectFolder}>{vaultBusy ? 'Opening…' : (isTauri ? 'open folder…' : 'use a folder…')}</button>{/if}
           {/if}
           {#if vaultErr}<span class="verr" title="A file write failed">⚠</span>{/if}
         </div>
         <div class="mobileacts">
-          <button class:on={view === 'notes'} onclick={() => { view = 'notes'; drawer = false; }}>{t('Notes')}</button>
-          <button class:on={view === 'library'} onclick={() => { view = 'library'; drawer = false; }}>{t('Library')}</button>
+          <button class:on={view === 'notes'} onclick={() => { view = 'notes'; drawer = false; }}>Notes</button>
+          <button class:on={view === 'library'} onclick={() => { view = 'library'; drawer = false; }}>Library</button>
           <span class="mspacer"></span>
           <button aria-label="Synthesis" onclick={() => { digestOpen = true; drawer = false; }}>◇</button>
           <button aria-label="Graph" onclick={() => { graphFull = true; drawer = false; }}>✧</button>
           <button aria-label="Focus" class:on={focus} onclick={() => { focus = !focus; drawer = false; }}>◎</button>
           <button aria-label="Theme" onclick={toggleTheme}>◑</button>
         </div>
-        <div class="lhrow"><span class="lh">{t('Vault')} · {notes.length}</span>
-          <button class="mini" title={t('New folder')} onclick={() => (newFolderName = '')}>{t('+ Folder')}</button></div>
+        <div class="lhrow"><span class="lh">Vault · {notes.length}</span>
+          <button class="mini" title="New folder" onclick={() => (newFolderName = '')}>+ Folder</button></div>
         {#if newFolderName !== null}
           <!-- svelte-ignore a11y_autofocus -->
-          <input class="nfinput" autofocus placeholder={activeFolder ? t('Subfolder of') + ' ' + activeFolder : t('Folder name')} bind:value={newFolderName}
+          <input class="nfinput" autofocus placeholder={activeFolder ? 'Subfolder of' + ' ' + activeFolder : 'Folder name'} bind:value={newFolderName}
             onkeydown={(e) => { if (e.key === 'Enter') addFolder(); else if (e.key === 'Escape') newFolderName = null; }} onblur={addFolder} />
         {/if}
 
         {#if tagFilter}
-          <button class="clearfilter" onclick={() => (tagFilter = null)}>← {t('clear')} #{tagFilter}</button>
+          <button class="clearfilter" onclick={() => (tagFilter = null)}>← clear #{tagFilter}</button>
           {#each listNotes as n (n.id)}
             <button class="item" class:on={n.id === currentId} onclick={() => open(n.id)}>
               <span class="dot2" class:orphan={invDot(n.id) === '○'}>{invDot(n.id)}</span>
-              <span class="txt"><span class="t">{n.title || t('Untitled')}</span></span>
+              <span class="txt"><span class="t">{n.title || 'Untitled'}</span></span>
             </button>
           {/each}
         {:else}
@@ -668,14 +667,14 @@
             {:else}
               <button class="item" class:on={r.note.id === currentId} style="padding-left:{6 + r.depth * 12}px" onclick={() => open(r.note.id)}>
                 <span class="dot2" class:orphan={invDot(r.note.id) === '○'} title={dotTitle(r.note.id)}>{invDot(r.note.id)}</span>
-                <span class="txt"><span class="t">{r.note.title || t('Untitled')}</span></span>
+                <span class="txt"><span class="t">{r.note.title || 'Untitled'}</span></span>
               </button>
             {/if}
           {/each}
         {/if}
 
         {#if allTags.length}
-          <div class="lh" style="margin-top:1rem">{t('Tags')}</div>
+          <div class="lh" style="margin-top:1rem">Tags</div>
           <div class="tags">
             {#each allTags as tg}
               <button class="tag" class:on={tagFilter === tg} onclick={() => (tagFilter = tagFilter === tg ? null : tg)}>#{tg}</button>
@@ -687,25 +686,25 @@
       <main class="center">
         {#if current}
           <div class="crumbs">
-            <select class="fmove" value={current.folder || ''} onchange={(e) => moveNote(current.id, e.currentTarget.value)} title={t('Move to folder')}>
-              <option value="">{t('No folder')}</option>
+            <select class="fmove" value={current.folder || ''} onchange={(e) => moveNote(current.id, e.currentTarget.value)} title="Move to folder">
+              <option value="">No folder</option>
               {#each allFolders as f}<option value={f}>{f}</option>{/each}
             </select>
             {#if (current.tags || []).length}<span class="ctags"> · #{current.tags.join('  #')}</span>{/if}
-            <span class="saved">{saved ? t('saved') : ''}</span>
+            <span class="saved">{saved ? 'saved' : ''}</span>
           </div>
           <div class="titlebar">
             {#if mode === 'write'}
-              <input class="title" value={current.title} oninput={(e) => editTitle(e.currentTarget.value)} aria-label={t('title')} />
+              <input class="title" value={current.title} oninput={(e) => editTitle(e.currentTarget.value)} aria-label="title" />
             {:else}
               <h1 class="title ro">{current.title}<span class="inv" class:orphan={invDot(current.id) === '○'} title={dotTitle(current.id)}>{invDot(current.id)}</span></h1>
             {/if}
             <div class="titlectl">
               <div class="seg">
-                <button class:on={mode === 'read'} onclick={() => (mode = 'read')}>{t('Read')}</button>
-                <button class:on={mode === 'write'} onclick={() => (mode = 'write')}>{t('Write')}</button>
+                <button class:on={mode === 'read'} onclick={() => (mode = 'read')}>Read</button>
+                <button class:on={mode === 'write'} onclick={() => (mode = 'write')}>Write</button>
               </div>
-              <button class="expbtn" title={t('Export this note')} aria-label={t('Export')} onclick={() => (docExport = true)}>⇩</button>
+              <button class="expbtn" title="Export this note" aria-label="Export" onclick={() => (docExport = true)}>⇩</button>
             </div>
           </div>
           {#if mode === 'write'}
@@ -719,24 +718,24 @@
       </main>
 
       <aside class="rail">
-        <div class="rh">{t('Referenced in')} <span>{backlinks.length}</span></div>
+        <div class="rh">Referenced in <span>{backlinks.length}</span></div>
         {#if backlinks.length}
           {#each backlinks as b}<button class="ref" onclick={() => open(b.id)}>{b.title}</button>{/each}
-        {:else}<div class="rempty">{t('No backlinks yet.')}</div>{/if}
+        {:else}<div class="rempty">No backlinks yet.</div>{/if}
 
-        <div class="rh" style="margin-top:1.3rem">{t('Resonance')} · {mlStatus === 'ready' ? 'MiniLM' : t('on-device')}
-          {#if mlStatus === 'off'}<button class="mltoggle" title="Downloads a ~23MB model once; runs entirely on your device" onclick={enableML}>{t('enable AI model')}</button>
-          {:else if mlStatus === 'loading'}<span class="mlstat">↓ {t('model')} {mlPct}%</span>
-          {:else if mlStatus === 'ready'}<span class="mlstat ok">✓ {t('on device')}</span>
+        <div class="rh" style="margin-top:1.3rem">Resonance · {mlStatus === 'ready' ? 'MiniLM' : 'on-device'}
+          {#if mlStatus === 'off'}<button class="mltoggle" title="Downloads a ~23MB model once; runs entirely on your device" onclick={enableML}>enable AI model</button>
+          {:else if mlStatus === 'loading'}<span class="mlstat">↓ model {mlPct}%</span>
+          {:else if mlStatus === 'ready'}<span class="mlstat ok">✓ on device</span>
           {:else}<span class="mlstat">TF-IDF</span>{/if}
         </div>
         {#if resonance.length}
           {#each resonance as r}
             <button class="ref ml" onclick={() => open(r.note.id)}><span class="sim" title="Similarity 0–1 (on-device)">{r.s.toFixed(2)}</span><span class="nm">{r.note.title}</span></button>
           {/each}
-        {:else}<div class="rempty">{t('Nothing close enough yet.')}</div>{/if}
+        {:else}<div class="rempty">Nothing close enough yet.</div>{/if}
 
-        <div class="rh" style="margin-top:1.3rem">{t('Local graph')} <button class="expand" onclick={() => (graphFull = true)}>⤢ {t('full')}</button></div>
+        <div class="rh" style="margin-top:1.3rem">Local graph <button class="expand" onclick={() => (graphFull = true)}>⤢ full</button></div>
         <GraphView {notes} {idx} centerId={currentId} mode="ego" onopen={open} />
       </aside>
     </div>
@@ -746,15 +745,15 @@
 
 {#if graphFull && !isMobile}
   <div class="overlay">
-    <div class="ovhead"><h3>{t('Knowledge graph')}</h3>
+    <div class="ovhead"><h3>Knowledge graph</h3>
       <div class="ghint">
-        <span class="gh"><kbd>{t('scroll')}</kbd> {t('zoom')}</span>
-        <span class="gh"><kbd>{t('drag bg')}</kbd> {t('pan')}</span>
-        <span class="gh"><kbd>{t('drag node')}</kbd> {t('move')}</span>
-        <span class="gh"><kbd>{t('click')}</kbd> {t('open')}</span>
-        <span class="gh"><kbd>{MOD}-{t('click')}</kbd> {t('select')}</span>
+        <span class="gh"><kbd>scroll</kbd> zoom</span>
+        <span class="gh"><kbd>drag bg</kbd> pan</span>
+        <span class="gh"><kbd>drag node</kbd> move</span>
+        <span class="gh"><kbd>click</kbd> open</span>
+        <span class="gh"><kbd>{MOD}-click</kbd> select</span>
       </div>
-      <span class="sp"></span><button class="ovclose" onclick={() => (graphFull = false)}>✕ {t('Close')}</button></div>
+      <span class="sp"></span><button class="ovclose" onclick={() => (graphFull = false)}>✕ Close</button></div>
     <GraphView {notes} {idx} centerId={currentId} mode="full" onopen={open} />
   </div>
 {/if}
@@ -763,12 +762,12 @@
   <div class="scrim" onclick={(e) => { if (e.target === e.currentTarget) paletteOpen = false; }}>
     <div class="palette">
       <!-- svelte-ignore a11y_autofocus -->
-      <input autofocus placeholder={t('Search notes, tags, or ideas…')} bind:value={query} onkeydown={(e) => { if (e.key === 'Enter' && (palItems.lex[0] || palItems.sem[0])) open((palItems.lex[0] || palItems.sem[0]).id); }} />
+      <input autofocus placeholder="Search notes, tags, or ideas…" bind:value={query} onkeydown={(e) => { if (e.key === 'Enter' && (palItems.lex[0] || palItems.sem[0])) open((palItems.lex[0] || palItems.sem[0]).id); }} />
       <div class="presults">
-        <div class="pg">{t('Notes')}</div>
-        {#each palItems.lex as l}<button class="prow" onclick={() => open(l.id)}><span class="pt">{idx.byId[l.id].title}</span><span class="pm">{t(l.why)}</span></button>{:else}<div class="prow none">{t('No matches')}</div>{/each}
+        <div class="pg">Notes</div>
+        {#each palItems.lex as l}<button class="prow" onclick={() => open(l.id)}><span class="pt">{idx.byId[l.id].title}</span><span class="pm">{l.why}</span></button>{:else}<div class="prow none">No matches</div>{/each}
         {#if palItems.sem.length}
-          <div class="pg sem">{t('Related · on-device')}</div>
+          <div class="pg sem">Related · on-device</div>
           {#each palItems.sem as s}<button class="prow" onclick={() => open(s.id)}><span class="pt i">{idx.byId[s.id].title}</span><span class="psim">{s.s.toFixed(2)}</span></button>{/each}
         {/if}
       </div>
@@ -780,18 +779,18 @@
   <div class="scrim" onclick={(e) => { if (e.target === e.currentTarget) docExport = false; }}>
     <div class="modal">
       <button class="mclose" onclick={() => (docExport = false)}>✕</button>
-      <h3>{t('Export writing')}</h3>
-      <p class="msub">{t('Your note as a clean document — headings kept with their text, images fit to the page.')}</p>
+      <h3>Export writing</h3>
+      <p class="msub">Your note as a clean document — headings kept with their text, images fit to the page.</p>
       <div class="fmtpick">
         {#each ['Markdown', 'HTML', 'PDF'] as f}<button class:on={deFmt === f} onclick={() => (deFmt = f)}>{f}</button>{/each}
       </div>
-      <div class="optrow"><label for="de-page">{t('Page size')}</label><select id="de-page" class="expsel" bind:value={dePage}>{#each PAGE_SIZES as p}<option>{p}</option>{/each}</select></div>
-      <div class="optrow"><label for="de-margin">{t('Margins')}</label><select id="de-margin" class="expsel" bind:value={deMargin}><option value="Narrow">{t('Narrow')}</option><option value="Normal">{t('Normal')}</option><option value="Wide">{t('Wide')}</option></select></div>
-      <div class="optrow"><label for="de-t">{t('Include title heading')}</label><input id="de-t" type="checkbox" bind:checked={deOpts.title} /></div>
-      <div class="optrow"><label for="de-n">{t('Number section headings')}</label><input id="de-n" type="checkbox" bind:checked={deOpts.numberHeadings} /></div>
-      <div class="optrow"><label for="de-k">{t('Keep headings with their text (no orphans)')}</label><input id="de-k" type="checkbox" bind:checked={deOpts.keepHeadings} /></div>
-      <div class="optrow"><label for="de-i">{t('Fit images & code to the page (no out-scaling)')}</label><input id="de-i" type="checkbox" bind:checked={deOpts.fitImages} /></div>
-      <button class="libbtn pri" onclick={doExport}>{t('Export as ' + deFmt)}</button>
+      <div class="optrow"><label for="de-page">Page size</label><select id="de-page" class="expsel" bind:value={dePage}>{#each PAGE_SIZES as p}<option>{p}</option>{/each}</select></div>
+      <div class="optrow"><label for="de-margin">Margins</label><select id="de-margin" class="expsel" bind:value={deMargin}><option value="Narrow">Narrow</option><option value="Normal">Normal</option><option value="Wide">Wide</option></select></div>
+      <div class="optrow"><label for="de-t">Include title heading</label><input id="de-t" type="checkbox" bind:checked={deOpts.title} /></div>
+      <div class="optrow"><label for="de-n">Number section headings</label><input id="de-n" type="checkbox" bind:checked={deOpts.numberHeadings} /></div>
+      <div class="optrow"><label for="de-k">Keep headings with their text (no orphans)</label><input id="de-k" type="checkbox" bind:checked={deOpts.keepHeadings} /></div>
+      <div class="optrow"><label for="de-i">Fit images & code to the page (no out-scaling)</label><input id="de-i" type="checkbox" bind:checked={deOpts.fitImages} /></div>
+      <button class="libbtn pri" onclick={doExport}>{'Export as ' + deFmt}</button>
     </div>
   </div>
 {/if}
@@ -800,12 +799,12 @@
   <div class="scrim" onclick={(e) => { if (e.target === e.currentTarget) digestOpen = false; }}>
     <div class="modal">
       <button class="mclose" onclick={() => (digestOpen = false)}>✕</button>
-      <h3>{t("This week's synthesis")}</h3>
-      <p class="msub">{t("Pairs of notes that resemble each other but you've never linked. Write the sentence that connects them.")}</p>
+      <h3>This week's synthesis</h3>
+      <p class="msub">Pairs of notes that resemble each other but you've never linked. Write the sentence that connects them.</p>
       <div class="dgbody">
         {#each digest as p}
-          <div class="pair"><span class="txt"><button class="a" onclick={() => open(p.a)}>{idx.byId[p.a].title}</button> <span class="mid">{t('might connect to')}</span> <button class="a" onclick={() => open(p.b)}>{idx.byId[p.b].title}</button></span><span class="psim">{p.s.toFixed(2)}</span><button class="link" onclick={() => linkPair(p.a, p.b)}>{t('Link')}</button></div>
-        {:else}<div class="rempty" style="padding:1rem 0">{t('Everything similar is already linked. Good week.')}</div>{/each}
+          <div class="pair"><span class="txt"><button class="a" onclick={() => open(p.a)}>{idx.byId[p.a].title}</button> <span class="mid">might connect to</span> <button class="a" onclick={() => open(p.b)}>{idx.byId[p.b].title}</button></span><span class="psim">{p.s.toFixed(2)}</span><button class="link" onclick={() => linkPair(p.a, p.b)}>Link</button></div>
+        {:else}<div class="rempty" style="padding:1rem 0">Everything similar is already linked. Good week.</div>{/each}
       </div>
     </div>
   </div>
@@ -815,38 +814,38 @@
   <div class="scrim" onclick={(e) => { if (e.target === e.currentTarget) settingsOpen = false; }}>
     <div class="modal settings">
       <button class="mclose" onclick={() => (settingsOpen = false)}>✕</button>
-      <h3>{t('Settings')}</h3>
+      <h3>Settings</h3>
 
-      <div class="setlabel">{t('Appearance')}</div>
-      <div class="setrow"><span class="sk">{t('Theme')}</span>
-        <div class="seg"><button class:on={theme === 'light'} onclick={() => setTheme('light')}>{t('Light')}</button><button class:on={theme === 'dark'} onclick={() => setTheme('dark')}>{t('Dark')}</button></div>
+      <div class="setlabel">Appearance</div>
+      <div class="setrow"><span class="sk">Theme</span>
+        <div class="seg"><button class:on={theme === 'light'} onclick={() => setTheme('light')}>Light</button><button class:on={theme === 'dark'} onclick={() => setTheme('dark')}>Dark</button></div>
       </div>
-      <div class="setrow"><span class="sk">{t('View zoom')}</span>
-        <div class="zoomctl"><button onclick={() => setZoom(zoom - 8)} aria-label="Smaller">−</button><span class="zval">{zoom}%</span><button onclick={() => setZoom(zoom + 8)} aria-label="Larger">+</button><button class="zreset" onclick={() => setZoom(100)}>{t('reset')}</button></div>
-      </div>
-
-      <div class="setlabel">{t('On-device machine')}</div>
-      <div class="setrow"><span class="sk">{t('Connection suggestions')} <span class="sh">{t('MiniLM — runs on your device, ~23 MB once')}</span></span>
-        {#if mlStatus === 'off'}<button class="setbtn" onclick={enableML}>{t('Enable')}</button>
-        {:else if mlStatus === 'loading'}<span class="setstat">{t('downloading')} {mlPct}%…</span>
-        {:else if mlStatus === 'ready'}<span class="setstat ok">✓ {t('on')}</span>
-        {:else}<span class="setstat">{t('unavailable — using the light method')}</span>{/if}
+      <div class="setrow"><span class="sk">View zoom</span>
+        <div class="zoomctl"><button onclick={() => setZoom(zoom - 8)} aria-label="Smaller">−</button><span class="zval">{zoom}%</span><button onclick={() => setZoom(zoom + 8)} aria-label="Larger">+</button><button class="zreset" onclick={() => setZoom(100)}>reset</button></div>
       </div>
 
-      <div class="setlabel">{t('Your data')}</div>
-      <div class="setrow"><span class="sk">{t('Storage')} <span class="sh">{vaultBackend ? t('Auto-syncing to') + ' “' + vaultBackend.name + '” — ' + t('Markdown files on your disk') : t('This browser (still yours — connect a folder any time)')}</span></span>
-        {#if vaultBackend}<button class="setbtn" onclick={disconnectFolder}>{t('Use browser')}</button>
-        {:else if folderVaultSupported()}<button class="setbtn" onclick={connectFolder}>{vaultBusy ? t('Opening…') : (isTauri ? t('Open folder…') : t('Choose a folder…'))}</button>{/if}
+      <div class="setlabel">On-device machine</div>
+      <div class="setrow"><span class="sk">Connection suggestions <span class="sh">MiniLM — runs on your device, ~23 MB once</span></span>
+        {#if mlStatus === 'off'}<button class="setbtn" onclick={enableML}>Enable</button>
+        {:else if mlStatus === 'loading'}<span class="setstat">downloading {mlPct}%…</span>
+        {:else if mlStatus === 'ready'}<span class="setstat ok">✓ on</span>
+        {:else}<span class="setstat">unavailable — using the light method</span>{/if}
       </div>
-      <div class="setrow"><span class="sk">{t('Sync across devices')} <span class="sh">{t('Put the folder in Dropbox, iCloud Drive, OneDrive, or Syncthing, then open the same folder on your other devices. Arf keeps it in step automatically — desktop and web, both ways.')}</span></span></div>
-      <div class="setrow"><span class="sk">{t('Workspace backup')} <span class="sh">{importMsg || t('one .arf file with every note, folder, and reference')}</span></span>
-        <span class="setbtnrow"><button class="setbtn" onclick={exportWorkspace}>{t('Export .arf')}</button><button class="setbtn" onclick={() => fileInput.click()}>{t('Import…')}</button></span>
+
+      <div class="setlabel">Your data</div>
+      <div class="setrow"><span class="sk">Storage <span class="sh">{vaultBackend ? 'Auto-syncing to' + ' “' + vaultBackend.name + '” — ' + 'Markdown files on your disk' : 'This browser (still yours — connect a folder any time)'}</span></span>
+        {#if vaultBackend}<button class="setbtn" onclick={disconnectFolder}>Use browser</button>
+        {:else if folderVaultSupported()}<button class="setbtn" onclick={connectFolder}>{vaultBusy ? 'Opening…' : (isTauri ? 'Open folder…' : 'Choose a folder…')}</button>{/if}
+      </div>
+      <div class="setrow"><span class="sk">Sync across devices <span class="sh">Put the folder in Dropbox, iCloud Drive, OneDrive, or Syncthing, then open the same folder on your other devices. Arf keeps it in step automatically — desktop and web, both ways.</span></span></div>
+      <div class="setrow"><span class="sk">Workspace backup <span class="sh">{importMsg || 'one .arf file with every note, folder, and reference'}</span></span>
+        <span class="setbtnrow"><button class="setbtn" onclick={exportWorkspace}>Export .arf</button><button class="setbtn" onclick={() => fileInput.click()}>Import…</button></span>
       </div>
       <input type="file" accept=".arf,application/json" bind:this={fileInput} onchange={importWorkspace} style="display:none" />
 
-      <div class="setlabel">{t('About')}</div>
+      <div class="setlabel">About</div>
       <div class="setrow"><span class="sk">Arf {APP_VERSION}</span>
-        <span class="setstat"><a href="https://tunabirgun.github.io/arf-docs/" target="_blank" rel="noopener">{t('Docs')}</a> · <a href="https://github.com/tunabirgun/arf" target="_blank" rel="noopener">{t('Source')}</a></span>
+        <span class="setstat"><a href="https://tunabirgun.github.io/arf-docs/" target="_blank" rel="noopener">Docs</a> · <a href="https://github.com/tunabirgun/arf" target="_blank" rel="noopener">Source</a></span>
       </div>
     </div>
   </div>
