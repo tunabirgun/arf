@@ -40,6 +40,9 @@ const SEED = [
     body: 'Nonparametric confidence intervals by resampling with replacement.\n\n```r\nboot_mean <- function(x, B = 2000) {\n  n <- length(x)\n  replicate(B, mean(x[sample.int(n, n, replace = TRUE)]))\n}\nquantile(boot_mean(y), c(0.025, 0.975))\n```\n\nNo distributional assumption, just the empirical distribution doing the work.' },
 ];
 
+let _corruptKey = null;
+export function corruptBackupKey() { return _corruptKey; } // set if the last load hit corrupt storage
+
 export function loadNotes() {
   let raw = null;
   try { raw = localStorage.getItem(KEY); } catch (e) {}
@@ -47,8 +50,9 @@ export function loadNotes() {
     // real vault present — never silently reseed over it
     try { return JSON.parse(raw); }
     catch (e) {
-      // corrupt but recoverable: back it up, do not overwrite
-      try { localStorage.setItem(KEY + '-corrupt-' + Date.now(), raw); } catch (e2) {}
+      // corrupt but recoverable: back it up, flag it, do not overwrite
+      const key = KEY + '-corrupt-' + Date.now();
+      try { localStorage.setItem(key, raw); _corruptKey = key; } catch (e2) {}
       return [];
     }
   }

@@ -97,16 +97,25 @@
     const setHi = (i) => { if (i == null) { svgEl.classList.remove('dim'); nodeEls.forEach((g) => g.classList.remove('hi')); edgeEls.forEach((l) => l.classList.remove('hi')); return; } svgEl.classList.add('dim'); nodeEls.forEach((g, j) => g.classList.toggle('hi', j === i || adjN[i].includes(j))); edgeEls.forEach((l, j) => l.classList.toggle('hi', adjE[i].includes(j))); };
     const sel = {};
     let drag = null, pan = null;
-    svgEl.addEventListener('pointerdown', (ev) => { if (ev.button !== 0 || ev.target.closest('[data-i]')) return; pan = { x: ev.clientX, y: ev.clientY, tx: view.tx, ty: view.ty }; svgEl.style.cursor = 'grabbing'; });
+    const endPan = () => { pan = null; svgEl.style.cursor = 'grab'; };
+    svgEl.addEventListener('pointerdown', (ev) => { if (ev.button !== 0 || ev.target.closest('[data-i]')) return; pan = { x: ev.clientX, y: ev.clientY, tx: view.tx, ty: view.ty }; svgEl.style.cursor = 'grabbing'; try { svgEl.setPointerCapture(ev.pointerId); } catch (e) {} });
     svgEl.addEventListener('pointermove', (ev) => { if (!pan) return; const rect = svgEl.getBoundingClientRect(); view.tx = pan.tx + (ev.clientX - pan.x) / rect.width * W; view.ty = pan.ty + (ev.clientY - pan.y) / rect.height * H; applyVP(); });
-    svgEl.addEventListener('pointerup', () => { pan = null; svgEl.style.cursor = 'grab'; });
+    svgEl.addEventListener('pointerup', endPan);
+    svgEl.addEventListener('pointercancel', endPan);
     nodeEls.forEach((g, i) => {
       g.addEventListener('mouseenter', () => { if (!drag && !pan) setHi(i); });
       g.addEventListener('mouseleave', () => { if (!drag) setHi(null); });
-      g.addEventListener('pointerdown', (ev) => { if (ev.button !== 0) return; ev.stopPropagation(); drag = { i, moved: false }; try { g.setPointerCapture(ev.pointerId); } catch (e) {} });
+      g.addEventListener('pointerdown', (ev) => {
+        if (ev.button !== 0) return; ev.stopPropagation();
+        if (ev.ctrlKey || ev.metaKey) { // Ctrl/Cmd + left-click toggles selection
+          if (sel[i]) { delete sel[i]; g.classList.remove('sel'); } else { sel[i] = 1; g.classList.add('sel'); } return;
+        }
+        drag = { i, moved: false }; try { g.setPointerCapture(ev.pointerId); } catch (e) {}
+      });
       g.addEventListener('pointermove', (ev) => { if (!drag || drag.i !== i) return; const p = toGraph(ev); if (!p) return; drag.moved = true; M.nodes[i].x = p.x; M.nodes[i].y = p.y; paint(); });
       g.addEventListener('pointerup', () => { if (!drag) return; const mv = drag.moved; drag = null; if (!mv && onopen) onopen(M.nodes[i].id); });
-      g.addEventListener('contextmenu', (ev) => { ev.preventDefault(); if (ev.ctrlKey || ev.metaKey) { if (sel[i]) { delete sel[i]; g.classList.remove('sel'); } else { sel[i] = 1; g.classList.add('sel'); } } });
+      g.addEventListener('pointercancel', () => { drag = null; setHi(null); });
+      g.addEventListener('contextmenu', (ev) => ev.preventDefault());
     });
     applyVP();
   }

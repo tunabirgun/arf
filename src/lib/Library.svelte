@@ -48,6 +48,8 @@
   function doFetch() {
     let v = addInput.trim().toLowerCase().replace(/^https?:\/\/(dx\.)?doi\.org\//, '').replace(/\s+/g, '');
     if (/^arxiv:/.test(v)) v = 'arxiv:' + v.replace(/^arxiv:/, '');
+    // strip separators from ISBN-shaped input ("978-0-262-03561-3") but leave DOIs/URLs alone
+    if (/^[0-9][0-9-]{8,16}[0-9x]$/.test(v) && !v.includes('/')) v = v.replace(/-/g, '');
     const hit = FETCH_DB[v];
     if (hit) { addResult = { ...hit, id: 'r_' + hit.citekey }; } else { addResult = false; }
   }
@@ -55,7 +57,8 @@
 
   // export generators
   function bibType(t) { return t === 'book' ? 'book' : t === 'preprint' ? 'misc' : (t === 'webpage' || t === 'article-magazine') ? 'online' : 'article'; }
-  function toBibTeX(r) { const f = ['  author = {' + r.authors.map((a) => a.f + ', ' + a.g).join(' and ') + '}', '  title = {' + r.title + '}', '  year = {' + r.year + '}']; if (r.container) f.push('  ' + (r.type === 'book' ? 'publisher' : 'journal') + ' = {' + r.container + '}'); if (r.publisher && !r.container) f.push('  publisher = {' + r.publisher + '}'); if (r.volume) f.push('  volume = {' + r.volume + '}'); if (r.pages) f.push('  pages = {' + r.pages.replace('–', '--') + '}'); if (r.doi) f.push('  doi = {' + r.doi + '}'); if (r.isbn) f.push('  isbn = {' + r.isbn + '}'); if (r.url) f.push('  url = {' + (r.archived || r.url) + '}'); return '@' + bibType(r.type) + '{' + r.citekey + ',\n' + f.join(',\n') + '\n}'; }
+  function escBib(s) { return String(s == null ? '' : s).replace(/([%&#_${}])/g, '\\$1').replace(/\^/g, '\\^{}').replace(/~/g, '\\~{}'); }
+  function toBibTeX(r) { const f = ['  author = {' + r.authors.map((a) => escBib(a.f) + ', ' + escBib(a.g)).join(' and ') + '}', '  title = {' + escBib(r.title) + '}', '  year = {' + r.year + '}']; if (r.container) f.push('  ' + (r.type === 'book' ? 'publisher' : 'journal') + ' = {' + escBib(r.container) + '}'); if (r.publisher && !r.container) f.push('  publisher = {' + escBib(r.publisher) + '}'); if (r.volume) f.push('  volume = {' + r.volume + '}'); if (r.pages) f.push('  pages = {' + r.pages.replace('–', '--') + '}'); if (r.doi) f.push('  doi = {' + r.doi + '}'); if (r.isbn) f.push('  isbn = {' + r.isbn + '}'); if (r.url) f.push('  url = {' + (r.archived || r.url) + '}'); return '@' + bibType(r.type) + '{' + r.citekey + ',\n' + f.join(',\n') + '\n}'; }
   function risType(t) { return t === 'book' ? 'BOOK' : t === 'webpage' ? 'ELEC' : t === 'article-magazine' ? 'MGZN' : t === 'preprint' ? 'GEN' : 'JOUR'; }
   function toRIS(r) { const L = ['TY  - ' + risType(r.type)]; r.authors.forEach((a) => L.push('AU  - ' + a.f + ', ' + a.g)); L.push('TI  - ' + r.title); L.push('PY  - ' + r.year); if (r.container) L.push((r.type === 'book' ? 'PB  - ' : 'JO  - ') + r.container); if (r.publisher && r.type === 'book') L.push('PB  - ' + r.publisher); if (r.volume) L.push('VL  - ' + r.volume); if (r.pages) { const p = r.pages.split(/[–-]/); L.push('SP  - ' + p[0]); if (p[1]) L.push('EP  - ' + p[1]); } if (r.doi) L.push('DO  - ' + r.doi); if (r.isbn) L.push('SN  - ' + r.isbn); if (r.url) L.push('UR  - ' + (r.archived || r.url)); if (r.accessed) L.push('Y2  - ' + r.accessed); L.push('ER  - '); return L.join('\n'); }
   function toCSL(r) { const o = { id: r.citekey, type: r.type, title: r.title, author: r.authors.map((a) => ({ family: a.f, given: a.g })), issued: { 'date-parts': [[r.year]] } }; if (r.container) o['container-title'] = r.container; if (r.publisher) o.publisher = r.publisher; if (r.volume) o.volume = r.volume; if (r.pages) o.page = r.pages; if (r.doi) o.DOI = r.doi; if (r.isbn) o.ISBN = r.isbn; if (r.url) o.URL = r.archived || r.url; return '  ' + JSON.stringify(o); }
@@ -80,7 +83,7 @@
     <button class="libbtn" onclick={() => { exportScope = 'all'; }}>⇩ Export library</button>
   </div>
 
-  <div class="libcol list">
+  <div class="libcol refs">
     {#each filtered as r (r.id)}
       <button class="refrow" class:on={r.id === selId} onclick={() => (selId = r.id)}>
         <div class="rtitle"><span class="rtype">{TYPELABEL[r.type] || r.type}</span>{r.title}</div>

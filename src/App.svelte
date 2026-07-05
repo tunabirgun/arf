@@ -1,5 +1,5 @@
 <script>
-  import { loadNotes, saveNotes, newNote, toMarkdown, loadFolders, saveFolders } from './lib/vault.js';
+  import { loadNotes, saveNotes, newNote, toMarkdown, loadFolders, saveFolders, corruptBackupKey } from './lib/vault.js';
   import { buildFolderRows, folderList } from './lib/folders.js';
   import { buildIndex, buildVectors, related, hasLinks, digestPairs } from './lib/graphindex.js';
   import { renderMarkdown, setLinkResolver } from './lib/markdown.js';
@@ -11,6 +11,7 @@
 
   const IS_MAC = /Mac|iPhone|iPad|iPod/.test((navigator.platform || '') + ' ' + (navigator.userAgent || ''));
   const MOD = IS_MAC ? '⌘' : 'Ctrl';
+  const APP_VERSION = '0.1.2';
 
   let notes = $state(loadNotes());
   let currentId = $state(notes[0]?.id ?? null);
@@ -18,7 +19,7 @@
   let theme = $state(document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light');
   let view = $state('notes');           // 'notes' | 'library'
   let tagFilter = $state(null);
-  let vecs = $state({});          // TF-IDF fallback vectors (instant)
+  let vecs = $state(buildVectors(notes));  // TF-IDF fallback vectors (seeded, then debounced-recomputed)
   let mlEnabled = $state((() => { try { return localStorage.getItem('arf-ml') === '1'; } catch (e) { return false; } })());
   let mlStatus = $state('off');   // off | loading | ready | error
   let mlPct = $state(0);
@@ -28,6 +29,11 @@
   let vaultErr = $state(false);
   let dirty = new Set();           // note ids changed since the last file flush
   let reconnected = false;
+  let leftW = $state(loadNum('arf-leftw', 220));   // resizable sidebar widths
+  let rightW = $state(loadNum('arf-rightw', 268));
+  let dragging = null;             // 'l' | 'r' while resizing
+  let settingsOpen = $state(false);
+  let zoom = $state(loadNum('arf-zoom', 108)); // UI scale (%), a touch above 100 by default
   let saved = $state(false);
   let paletteOpen = $state(false);
   let digestOpen = $state(false);
@@ -53,8 +59,12 @@
   // track viewport so we render the mobile app vs the desktop panes
   $effect(() => {
     const mq = matchMedia('(max-width: 760px)');
-    const u = () => (isMobile = mq.matches);
-    u(); mq.addEventListener('change', u);
+    const u = () => {
+      const was = isMobile; isMobile = mq.matches;
+      if (isMobile && !was) { mtab = view === 'library' ? 'library' : 'notes'; paletteOpen = false; graphFull = false; }
+      else if (!isMobile && was) { view = mtab === 'library' ? 'library' : 'notes'; }
+    };
+    mq.addEventListener('change', u);
     return () => mq.removeEventListener('change', u);
   });
 
@@ -118,6 +128,7 @@
   });
 
   let saveError = $state(false);
+  let vaultCorrupt = $state(!!corruptBackupKey()); // saved notes couldn't be parsed on load
   let flashTimer, saveTimer;
   function writeNow() {
     const ok = saveNotes(notes);       // localStorage stays as an always-on local cache
@@ -138,32 +149,39 @@
     try {
       const b = await connectVault();
       if (b) {
+        flushSave();
         const existing = await b.loadAll();
-        if (existing.length) {                 // the folder already holds notes → open them
-          flushSave(); notes = existing; currentId = existing[0].id;
-          folders = [...new Set(existing.map((n) => n.folder).filter(Boolean))]; saveFolders(folders);
-        } else {                               // empty folder → write the current vault into it
-          for (const n of notes) { try { await b.saveNote(n); } catch (e) {} }
-        }
+        // union so neither the folder's notes nor the current ones are lost
+        const merged = existing.length ? mergeByUpdated(existing, notes) : notes.slice();
+        for (const n of merged) { try { await b.saveNote(n); } catch (e) { vaultErr = true; } } // folder becomes the full vault
+        adopt(merged);
+        folders = [...new Set(merged.map((n) => n.folder).filter(Boolean))]; saveFolders(folders);
         vaultBackend = b;
       }
     } catch (e) {} finally { vaultBusy = false; }
   }
-  function disconnectFolder() { vaultBackend = null; dirty.clear(); }
+  // union by id, keeping the newer copy of each note — never blindly replace the array
+  function mergeByUpdated(base, incoming) {
+    const m = new Map(); for (const n of base) m.set(n.id, n);
+    for (const n of incoming) { const ex = m.get(n.id); if (!ex || (n.updated || '') > (ex.updated || '')) m.set(n.id, n); }
+    return [...m.values()];
+  }
+  function adopt(list) { notes = list; if (!list.some((n) => n.id === currentId)) currentId = list[0]?.id ?? null; }
+  async function disconnectFolder() { await flushVault(); vaultBackend = null; dirty.clear(); }
   $effect(() => {
     if (reconnected) return; reconnected = true;
     (async () => {
       try {
         const b = await reconnectVault(); if (!b) return;
         const ex = await b.loadAll();
-        if (ex.length) { notes = ex; currentId = (ex.find((n) => n.id === currentId) || ex[0]).id; folders = [...new Set(ex.map((n) => n.folder).filter(Boolean))]; }
+        if (ex.length) { adopt(mergeByUpdated(ex, notes)); folders = [...new Set(notes.map((n) => n.folder).filter(Boolean))]; }
         vaultBackend = b;
       } catch (e) {}
     })();
   });
   // converge across tabs: pick up another tab's writes instead of clobbering them
   $effect(() => {
-    const h = (e) => { if (e.key === 'arf-vault-v0' && e.newValue) { try { notes = JSON.parse(e.newValue); } catch (x) {} } };
+    const h = (e) => { if (e.key === 'arf-vault-v0' && e.newValue) { try { adopt(mergeByUpdated(notes, JSON.parse(e.newValue))); } catch (x) {} } };
     window.addEventListener('storage', h);
     window.addEventListener('beforeunload', flushSave);
     return () => { window.removeEventListener('storage', h); window.removeEventListener('beforeunload', flushSave); };
@@ -213,6 +231,25 @@
   function dotTitle(id) { return hasLinks(id, idx) ? 'Linked to other notes' : 'Orphan — not linked to any note yet'; }
 
   function toggleTheme() { theme = theme === 'dark' ? 'light' : 'dark'; document.documentElement.setAttribute('data-theme', theme); try { localStorage.setItem('arf-theme', theme); } catch (e) {} }
+
+  function loadNum(k, d) { try { const v = +localStorage.getItem(k); return v && v > 0 ? v : d; } catch (e) { return d; } }
+  function startResize(which, e) { dragging = which; try { e.currentTarget.setPointerCapture(e.pointerId); } catch (x) {} e.preventDefault(); }
+  function onResizeMove(e) {
+    if (!dragging) return;
+    const zf = (zoom || 100) / 100; // getBoundingClientRect/clientX are in zoomed px; store widths in layout px
+    const ws = e.currentTarget.parentElement.getBoundingClientRect();
+    if (dragging === 'l') leftW = Math.max(170, Math.min(460, Math.round((e.clientX - ws.left) / zf)));
+    else rightW = Math.max(200, Math.min(480, Math.round((ws.right - e.clientX) / zf)));
+  }
+  function endResize() { if (!dragging) return; dragging = null; try { localStorage.setItem('arf-leftw', leftW); localStorage.setItem('arf-rightw', rightW); } catch (e) {} }
+  function nudgeResize(which, e) {
+    const step = e.key === 'ArrowLeft' ? -16 : e.key === 'ArrowRight' ? 16 : 0; if (!step) return; e.preventDefault();
+    if (which === 'l') leftW = Math.max(170, Math.min(460, leftW + step)); else rightW = Math.max(200, Math.min(480, rightW - step));
+    try { localStorage.setItem('arf-leftw', leftW); localStorage.setItem('arf-rightw', rightW); } catch (e2) {}
+  }
+  function setZoom(z) { zoom = Math.max(70, Math.min(160, z)); }
+  function setTheme(tv) { theme = tv; document.documentElement.setAttribute('data-theme', tv); try { localStorage.setItem('arf-theme', tv); } catch (e) {} }
+  $effect(() => { try { document.documentElement.style.zoom = String(zoom / 100); localStorage.setItem('arf-zoom', zoom); } catch (e) {} });
   function linkPair(aId, bId) {
     const a = idx.byId[aId], b = idx.byId[bId]; if (!a || !b) return;
     const s = window.prompt('Write the sentence that connects “' + a.title + '” and “' + b.title + '”:', '');
@@ -262,9 +299,9 @@
 
   function onKey(e) {
     const mod = e.metaKey || e.ctrlKey;
-    if (mod && e.key.toLowerCase() === 'k') { e.preventDefault(); paletteOpen = true; query = ''; }
+    if (mod && e.key.toLowerCase() === 'k') { if (isMobile) return; e.preventDefault(); paletteOpen = true; query = ''; }
     else if (mod && e.key.toLowerCase() === 'e') { e.preventDefault(); if (view === 'notes') mode = mode === 'read' ? 'write' : 'read'; }
-    else if (mod && e.key.toLowerCase() === 'g') { e.preventDefault(); graphFull = !graphFull; }
+    else if (mod && e.key.toLowerCase() === 'g') { if (isMobile) return; e.preventDefault(); graphFull = !graphFull; }
     else if (e.key === 'Escape') { paletteOpen = false; digestOpen = false; graphFull = false; focus = false; }
   }
 </script>
@@ -292,10 +329,12 @@
         <span class="msp"></span>
         {#if mtab === 'notes'}<button class="micon" aria-label="Weekly synthesis" onclick={() => (digestOpen = true)}>◇</button>{/if}
         <button class="micon" aria-label="Light / dark" onclick={toggleTheme}>◑</button>
+        <button class="micon" aria-label="Settings" onclick={() => (settingsOpen = true)}>⚙</button>
       {/if}
     </header>
 
     {#if saveError}<div class="savebanner">⚠ Couldn’t save — storage may be full. Export this note now.</div>{/if}
+    {#if vaultCorrupt}<div class="savebanner">⚠ Saved notes couldn’t be read; a backup was kept. <button class="bnrbtn" onclick={() => (vaultCorrupt = false)}>Dismiss</button></div>{/if}
 
     <main class="mbody" class:nopad={mtab === 'graph'}>
       {#if mtab === 'notes' && mNoteOpen && current}
@@ -398,11 +437,12 @@
     <button class="searchpill" onclick={() => { paletteOpen = true; query = ''; }}>
       <span class="mag">⌕</span><span class="lbl">Search</span><kbd>{MOD} K</kbd>
     </button>
-    <div class="iconbar">
-      <button class="ic" title="Weekly synthesis" aria-label="Synthesis" onclick={() => (digestOpen = true)}>◇</button>
-      <button class="ic" title="Knowledge graph" aria-label="Graph" onclick={() => (graphFull = true)}>✧</button>
-      <button class="ic" class:on={focus} title="Focus mode" aria-label="Focus" onclick={() => (focus = !focus)}>◎</button>
-      <button class="ic" title="Light / dark" aria-label="Theme" onclick={toggleTheme}>◑</button>
+    <div class="topacts">
+      <button class="tbtn" onclick={() => (digestOpen = true)}>Synthesis</button>
+      <button class="tbtn" onclick={() => (graphFull = true)}>Graph</button>
+      <button class="tbtn" class:on={focus} onclick={() => (focus = !focus)}>Focus</button>
+      <button class="tbtn" onclick={toggleTheme}>Theme</button>
+      <button class="tbtn" onclick={() => (settingsOpen = true)}>Settings</button>
     </div>
     <button class="newbtn" onclick={create}>＋&nbsp;New</button>
   </header>
@@ -410,13 +450,20 @@
   {#if saveError}
     <div class="savebanner">⚠ Couldn’t save — your browser storage may be full or blocked. Export this note now to avoid losing it.</div>
   {/if}
+  {#if vaultCorrupt}
+    <div class="savebanner">⚠ Your saved notes couldn’t be read and were backed up (<span class="mono">{corruptBackupKey()}</span>). Starting with an empty vault. <button class="bnrbtn" onclick={() => (vaultCorrupt = false)}>Dismiss</button></div>
+  {/if}
 
   <button class="drawerback" aria-label="Close menu" onclick={() => (drawer = false)}></button>
 
   {#if view === 'library'}
     <Library {notes} {idx} onopen={open} />
   {:else}
-    <div class="ws">
+    <div class="ws" style="--leftw:{leftW}px; --rightw:{rightW}px">
+      <button type="button" class="resizer rz-l" aria-label="Resize left sidebar"
+        style="left:{leftW - 5}px" onpointerdown={(e) => startResize('l', e)} onpointermove={onResizeMove} onpointerup={endResize} onpointercancel={endResize} onkeydown={(e) => nudgeResize('l', e)}></button>
+      <button type="button" class="resizer rz-r" aria-label="Resize right sidebar"
+        style="right:{rightW - 5}px" onpointerdown={(e) => startResize('r', e)} onpointermove={onResizeMove} onpointerup={endResize} onpointercancel={endResize} onkeydown={(e) => nudgeResize('r', e)}></button>
       <aside class="list">
         <div class="vaultbar">
           {#if vaultBackend}
@@ -538,7 +585,15 @@
 
 {#if graphFull && !isMobile}
   <div class="overlay">
-    <div class="ovhead"><h3>Knowledge graph</h3><span class="hint">scroll = zoom · drag background = pan · drag node = move · click = open · {MOD}+right-click = select</span><span class="sp"></span><button class="ovclose" onclick={() => (graphFull = false)}>✕ Close</button></div>
+    <div class="ovhead"><h3>Knowledge graph</h3>
+      <div class="ghint">
+        <span class="gh"><kbd>scroll</kbd> zoom</span>
+        <span class="gh"><kbd>drag bg</kbd> pan</span>
+        <span class="gh"><kbd>drag node</kbd> move</span>
+        <span class="gh"><kbd>click</kbd> open</span>
+        <span class="gh"><kbd>{MOD}-click</kbd> select</span>
+      </div>
+      <span class="sp"></span><button class="ovclose" onclick={() => (graphFull = false)}>✕ Close</button></div>
     <GraphView {notes} {idx} centerId={currentId} mode="full" onopen={open} />
   </div>
 {/if}
@@ -586,10 +641,46 @@
       <button class="mclose" onclick={() => (digestOpen = false)}>✕</button>
       <h3>This week's synthesis</h3>
       <p class="msub">Pairs of notes that resemble each other but you've never linked. Write the sentence that connects them.</p>
-      <div class="mbody">
+      <div class="dgbody">
         {#each digest as p}
           <div class="pair"><span class="txt"><button class="a" onclick={() => open(p.a)}>{idx.byId[p.a].title}</button> <span class="mid">might connect to</span> <button class="a" onclick={() => open(p.b)}>{idx.byId[p.b].title}</button></span><span class="psim">{p.s.toFixed(2)}</span><button class="link" onclick={() => linkPair(p.a, p.b)}>Link</button></div>
         {:else}<div class="rempty" style="padding:1rem 0">Everything similar is already linked. Good week.</div>{/each}
+      </div>
+    </div>
+  </div>
+{/if}
+
+{#if settingsOpen}
+  <div class="scrim" onclick={(e) => { if (e.target === e.currentTarget) settingsOpen = false; }}>
+    <div class="modal settings">
+      <button class="mclose" onclick={() => (settingsOpen = false)}>✕</button>
+      <h3>Settings</h3>
+
+      <div class="setlabel">Appearance</div>
+      <div class="setrow"><span class="sk">Theme</span>
+        <div class="seg"><button class:on={theme === 'light'} onclick={() => setTheme('light')}>Light</button><button class:on={theme === 'dark'} onclick={() => setTheme('dark')}>Dark</button></div>
+      </div>
+      <div class="setrow"><span class="sk">View zoom</span>
+        <div class="zoomctl"><button onclick={() => setZoom(zoom - 8)} aria-label="Smaller">−</button><span class="zval">{zoom}%</span><button onclick={() => setZoom(zoom + 8)} aria-label="Larger">+</button><button class="zreset" onclick={() => setZoom(100)}>reset</button></div>
+      </div>
+
+      <div class="setlabel">On-device machine</div>
+      <div class="setrow"><span class="sk">Connection suggestions <span class="sh">MiniLM — runs on your device, ~23 MB once</span></span>
+        {#if mlStatus === 'off'}<button class="setbtn" onclick={enableML}>Enable</button>
+        {:else if mlStatus === 'loading'}<span class="setstat">downloading {mlPct}%…</span>
+        {:else if mlStatus === 'ready'}<span class="setstat ok">✓ on</span>
+        {:else}<span class="setstat">unavailable — using the light method</span>{/if}
+      </div>
+
+      <div class="setlabel">Your data</div>
+      <div class="setrow"><span class="sk">Storage <span class="sh">{vaultBackend ? 'a folder of Markdown files on your disk' : 'this browser (still yours — connect a folder any time)'}</span></span>
+        {#if vaultBackend}<button class="setbtn" onclick={disconnectFolder}>Use browser</button>
+        {:else if folderVaultSupported()}<button class="setbtn" onclick={connectFolder}>{vaultBusy ? 'Opening…' : (isTauri ? 'Open folder…' : 'Choose a folder…')}</button>{/if}
+      </div>
+
+      <div class="setlabel">About</div>
+      <div class="setrow"><span class="sk">Arf {APP_VERSION}</span>
+        <span class="setstat"><a href="https://tunabirgun.github.io/arf-docs/" target="_blank" rel="noopener">Docs</a> · <a href="https://github.com/tunabirgun/arf" target="_blank" rel="noopener">Source</a></span>
       </div>
     </div>
   </div>

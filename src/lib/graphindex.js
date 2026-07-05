@@ -9,18 +9,23 @@ export function parseWikilinks(body) {
   while ((m = re.exec(body || ''))) out.push(m[1].trim());
   return out;
 }
+// strip fenced (``` and ~~~) and inline code so their contents don't leak into tags/tokens
+function stripCode(body) {
+  return (body || '').replace(/(^|\n)(```|~~~)[\s\S]*?(\n\2|$)/g, ' ').replace(/`[^`]*`/g, ' ');
+}
 export function parseInlineTags(body) {
-  // strip code so `# comment` lines and shell/R comments don't become fake tags
-  const text = (body || '').replace(/```[\s\S]*?```/g, ' ').replace(/`[^`]*`/g, ' ');
+  const text = stripCode(body);
   const out = new Set(); const re = /(^|\s)#([a-z0-9][a-z0-9/-]*)/gi; let m;
   while ((m = re.exec(text))) out.add(m[2].toLowerCase());
   return [...out];
 }
 
 export function buildIndex(notes) {
-  const byId = {}, byTitle = {};
+  // Object.create(null): a note titled/tagged "__proto__" or "constructor" must
+  // behave as an ordinary key, not crash index-building for the whole vault.
+  const byId = Object.create(null), byTitle = Object.create(null);
   notes.forEach((n) => { byId[n.id] = n; byTitle[(n.title || '').trim().toLowerCase()] = n; });
-  const fwd = {}, back = {};
+  const fwd = Object.create(null), back = Object.create(null);
   notes.forEach((n) => {
     const links = new Set();
     parseWikilinks(n.body).forEach((title) => {
@@ -29,8 +34,8 @@ export function buildIndex(notes) {
     });
     fwd[n.id] = [...links];
   });
-  const backArr = {}; Object.keys(back).forEach((k) => (backArr[k] = [...back[k]]));
-  const tagIndex = {}, noteTags = {};
+  const backArr = Object.create(null); Object.keys(back).forEach((k) => (backArr[k] = [...back[k]]));
+  const tagIndex = Object.create(null), noteTags = Object.create(null);
   notes.forEach((n) => {
     const tags = new Set([...(n.tags || []), ...parseInlineTags(n.body)].map((t) => t.toLowerCase()));
     noteTags[n.id] = [...tags];
@@ -49,7 +54,7 @@ const STOP = new Set(('the a an and or of to in is are was were on for with as b
   .split(/\s+/));
 
 function tokenize(text) {
-  return (text.toLowerCase().replace(/```[\s\S]*?```/g, ' ').replace(/`[^`]*`/g, ' ').match(/[a-z][a-z0-9']{2,}/g) || [])
+  return (stripCode(text).toLowerCase().match(/[a-z][a-z0-9']{2,}/g) || [])
     .filter((w) => !STOP.has(w));
 }
 

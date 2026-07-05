@@ -1,7 +1,8 @@
 <script>
   import { onMount, onDestroy } from 'svelte';
   import { EditorView, keymap } from '@codemirror/view';
-  import { EditorState } from '@codemirror/state';
+  import { EditorState, Annotation } from '@codemirror/state';
+  const syncAnno = Annotation.define(); // marks a programmatic external-value resync
   import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
   import { markdown } from '@codemirror/lang-markdown';
   import { syntaxHighlighting, HighlightStyle } from '@codemirror/language';
@@ -46,7 +47,7 @@
           syntaxHighlighting(inkHL),
           theme,
           EditorView.lineWrapping,
-          EditorView.updateListener.of((u) => { if (u.docChanged && onchange) onchange(u.state.doc.toString()); }),
+          EditorView.updateListener.of((u) => { if (u.docChanged && onchange && !u.transactions.some((tr) => tr.annotation(syncAnno))) onchange(u.state.doc.toString()); }),
         ],
       }),
     });
@@ -59,7 +60,7 @@
   $effect(() => {
     const v = value;
     if (view && v !== view.state.doc.toString()) {
-      view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: v } });
+      view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: v }, annotations: syncAnno.of(true) });
     }
   });
 </script>

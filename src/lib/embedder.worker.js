@@ -24,7 +24,7 @@ async function getExtractor() {
       try { extractor = await loadWith('webgpu'); }
       catch (e) { extractor = await loadWith('wasm'); }  // WebGPU unavailable → WASM
       return extractor;
-    })();
+    })().catch((err) => { loading = null; extractor = null; throw err; });  // allow a retry instead of caching the rejection forever
   }
   return loading;
 }

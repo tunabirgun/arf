@@ -22,7 +22,9 @@ const mathBlock = {
 const mathInline = {
   name: 'mathInline', level: 'inline',
   start(src) { const i = src.indexOf('$'); return i < 0 ? undefined : i; },
-  tokenizer(src) { const m = /^\$([^$\n]+?)\$/.exec(src); if (m) return { type: 'mathInline', raw: m[0], text: m[1] }; },
+  // require non-space right after the opening $ and no digit right after the closing $,
+  // so prose like "it costs $5 and $10 total" is not mistaken for math
+  tokenizer(src) { const m = /^\$(?!\s)([^$\n]*?[^\s$])\$(?!\d)/.exec(src); if (m) return { type: 'mathInline', raw: m[0], text: m[1] }; },
   renderer(t) { return math(t.text, false); },
 };
 const wikilink = {
@@ -48,6 +50,6 @@ export function renderMarkdown(md) {
   try {
     // sanitize: a note may come from an external .md file in the vault, so strip
     // scripts/handlers while keeping wikilink data-attrs and KaTeX's spans/styles
-    return DOMPurify.sanitize(marked.parse(md || ''), { ADD_ATTR: ['data-nav', 'data-tag'], ADD_TAGS: ['use'] });
+    return DOMPurify.sanitize(marked.parse(md || ''), { ADD_ATTR: ['data-nav', 'data-tag'] });
   } catch (e) { return '<p>' + esc(md || '') + '</p>'; }
 }

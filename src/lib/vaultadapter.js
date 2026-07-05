@@ -53,7 +53,13 @@ export function parse(text, opts = {}) {
 }
 
 function hash(s) { let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0; return h; }
-function relPath(note) { const dir = (note.folder || '').replace(/^\/+|\/+$/g, ''); return (dir ? dir + '/' : '') + slug(note.title) + '.md'; }
+function relPath(note, suffix) { const dir = (note.folder || '').replace(/^\/+|\/+$/g, ''); return (dir ? dir + '/' : '') + slug(note.title) + (suffix ? '-' + suffix : '') + '.md'; }
+// dedupe loaded notes by id (a stale duplicate file must not shadow the real note)
+function dedupeById(notes) {
+  const m = new Map();
+  for (const n of notes) { const ex = m.get(n.id); if (!ex || (n.updated || '') > (ex.updated || '')) m.set(n.id, n); }
+  return [...m.values()];
+}
 
 // ---------- environment ----------
 
@@ -108,13 +114,18 @@ export class FsaBackend {
     for await (const f of this.walk(this.dir, '')) {
       const file = await f.entry.getFile(); const text = await file.text();
       const dir = f.rel.includes('/') ? f.rel.slice(0, f.rel.lastIndexOf('/')) : '';
-      const note = parse(text, { folder: dir, fallbackTitle: f.rel.split('/').pop().replace(/\.md$/, '') });
+      const note = parse(text, { folder: dir, fallbackId: f.rel, fallbackTitle: f.rel.split('/').pop().replace(/\.md$/, '') });
       note._path = f.rel; notes.push(note);
     }
-    return notes;
+    return dedupeById(notes);
+  }
+  async pathExists(path) {
+    try { const parts = path.split('/'); const fname = parts.pop(); const dir = await this.dirFor(parts, false); await dir.getFileHandle(fname, { create: false }); return true; } catch (e) { return false; }
   }
   async saveNote(note) {
-    const path = relPath(note);
+    let path = relPath(note);
+    // never overwrite a different note that already occupies this filename
+    if (note._path !== path && (await this.pathExists(path))) path = relPath(note, note.id.slice(-5).toLowerCase());
     if (note._path && note._path !== path) await this.removeByPath(note._path);
     const parts = path.split('/'); const fname = parts.pop();
     const dir = await this.dirFor(parts, true);
@@ -159,16 +170,18 @@ export class TauriBackend {
         else if (e.name.endsWith('.md')) {
           const text = await this.fs.readTextFile(this.join(dir, e.name));
           const folder = rel.includes('/') ? rel.slice(0, rel.lastIndexOf('/')) : '';
-          const note = parse(text, { folder, fallbackTitle: e.name.replace(/\.md$/, '') });
+          const note = parse(text, { folder, fallbackId: rel, fallbackTitle: e.name.replace(/\.md$/, '') });
           note._path = rel; notes.push(note);
         }
       }
     };
     await walk(this.root, '');
-    return notes;
+    return dedupeById(notes);
   }
+  async pathExists(path) { try { return await this.fs.exists(this.join(this.root, path)); } catch (e) { return false; } }
   async saveNote(note) {
-    const path = relPath(note);
+    let path = relPath(note);
+    if (note._path !== path && (await this.pathExists(path))) path = relPath(note, note.id.slice(-5).toLowerCase());
     if (note._path && note._path !== path) await this.removeByPath(note._path);
     const abs = this.join(this.root, path);
     const dir = abs.slice(0, abs.lastIndexOf('/'));
