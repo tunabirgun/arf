@@ -2,7 +2,8 @@
   import { loadNotes, saveNotes, newNote, toMarkdown, loadFolders, saveFolders, corruptBackupKey } from './lib/vault.js';
   import { buildFolderRows, folderList } from './lib/folders.js';
   import { buildIndex, buildVectors, related, hasLinks, digestPairs } from './lib/graphindex.js';
-  import { renderMarkdown, setLinkResolver } from './lib/markdown.js';
+  import { renderMarkdown, setLinkResolver, setCiteResolver } from './lib/markdown.js';
+  import { loadRefs, saveRefs } from './lib/references.js';
   import { initEmbedder, embedNotes, cosine as mlCosine } from './lib/ml.js';
   import { connectVault, reconnectVault, folderVaultSupported, isTauri } from './lib/vaultadapter.js';
   import Editor from './lib/Editor.svelte';
@@ -14,6 +15,8 @@
   const APP_VERSION = '0.1.2';
 
   let notes = $state(loadNotes());
+  let refs = $state(loadRefs());        // shared reference library (also used by [@citekey] citations)
+  let refJump = $state(null);           // { key } → Library selects that reference
   let currentId = $state(notes[0]?.id ?? null);
   let mode = $state('read');            // 'read' | 'write'
   let theme = $state(document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light');
@@ -74,11 +77,14 @@
   const readHTML = $derived.by(() => {
     const byTitle = idx.byTitle;                 // depend on the title index
     setLinkResolver((t) => byTitle[t] || null);  // resolve wikilinks before parsing
+    const rmap = refs;                           // depend on refs so citations re-render
+    setCiteResolver((k) => rmap.find((r) => r.citekey === k) || null);
     return current ? renderMarkdown(current.body) : '';
   });
   const allTags = $derived(Object.keys(idx.tagIndex).sort());
   const listNotes = $derived(tagFilter ? notes.filter((n) => (idx.noteTags[n.id] || []).includes(tagFilter)) : notes);
   const folderRows = $derived(buildFolderRows(folders, notes, collapsed));
+  $effect(() => { saveRefs(refs); }); // persist the reference library
   const allFolders = $derived(folderList(folders, notes));
 
   const resonance = $derived.by(() => {
@@ -168,6 +174,33 @@
   }
   function adopt(list) { notes = list; if (!list.some((n) => n.id === currentId)) currentId = list[0]?.id ?? null; }
   async function disconnectFolder() { await flushVault(); vaultBackend = null; dirty.clear(); }
+
+  // --- whole-workspace backup: one portable .arf file (notes + folders + references) ---
+  let fileInput;
+  let importMsg = $state('');
+  function exportWorkspace() {
+    const data = { arf: 1, app: 'Arf', version: APP_VERSION, exported: new Date().toISOString(), notes, folders, refs };
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'arf-workspace-' + new Date().toISOString().slice(0, 10) + '.arf';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1500);
+  }
+  async function importWorkspace(e) {
+    const file = e.currentTarget.files && e.currentTarget.files[0];
+    e.currentTarget.value = '';
+    if (!file) return;
+    try {
+      const data = JSON.parse(await file.text());
+      if (!data || !Array.isArray(data.notes)) throw new Error('Not an Arf workspace (.arf) file');
+      adopt(mergeByUpdated(notes, data.notes)); // merge so nothing already here is lost
+      if (Array.isArray(data.folders)) { folders = [...new Set([...folders, ...data.folders])]; saveFolders(folders); }
+      if (Array.isArray(data.refs)) { const m = new Map(refs.map((r) => [r.id, r])); for (const r of data.refs) m.set(r.id, r); refs = [...m.values()]; }
+      flushSave();
+      importMsg = '✓ Imported ' + data.notes.length + ' notes.';
+    } catch (err) { importMsg = '⚠ ' + (err.message || 'Could not read that file'); }
+  }
   $effect(() => {
     if (reconnected) return; reconnected = true;
     (async () => {
@@ -262,6 +295,12 @@
   function readClick(e) {
     const nav = e.target.closest('[data-nav]'); if (nav) { e.preventDefault(); open(nav.getAttribute('data-nav')); return; }
     const tg = e.target.closest('[data-tag]'); if (tg) { e.preventDefault(); tagFilter = tg.getAttribute('data-tag'); return; }
+    const ck = e.target.closest('[data-cite]'); if (ck) { e.preventDefault(); openReference(ck.getAttribute('data-cite')); return; }
+  }
+  // a [@citekey] citation opens the Library on that reference's detail
+  function openReference(key) {
+    refJump = { key };
+    if (isMobile) mtab = 'library'; else view = 'library';
   }
 
   // command palette
@@ -341,7 +380,7 @@
         <div class="mnote">
           <div class="mcrumbs">
             <select class="fmove" value={current.folder || ''} onchange={(e) => moveNote(current.id, e.currentTarget.value)}>
-              <option value="">(root)</option>{#each allFolders as f}<option value={f}>{f}</option>{/each}
+              <option value="">No folder</option>{#each allFolders as f}<option value={f}>{f}</option>{/each}
             </select>
             {#if (current.tags || []).length}<span class="ctags"> · #{current.tags.join('  #')}</span>{/if}
             {#if saved}<span class="saved">saved</span>{/if}
@@ -413,7 +452,7 @@
       {:else if mtab === 'graph'}
         <div class="mgraphwrap"><GraphView {notes} {idx} centerId={currentId} mode="full" onopen={open} /></div>
       {:else if mtab === 'library'}
-        <Library {notes} {idx} onopen={open} />
+        <Library {notes} {idx} onopen={open} bind:refs jumpTo={refJump} />
       {/if}
     </main>
 
@@ -457,7 +496,7 @@
   <button class="drawerback" aria-label="Close menu" onclick={() => (drawer = false)}></button>
 
   {#if view === 'library'}
-    <Library {notes} {idx} onopen={open} />
+    <Library {notes} {idx} onopen={open} bind:refs jumpTo={refJump} />
   {:else}
     <div class="ws" style="--leftw:{leftW}px; --rightw:{rightW}px">
       <button type="button" class="resizer rz-l" aria-label="Resize left sidebar"
@@ -529,7 +568,7 @@
         {#if current}
           <div class="crumbs">
             <select class="fmove" value={current.folder || ''} onchange={(e) => moveNote(current.id, e.currentTarget.value)} title="Move to folder">
-              <option value="">(root)</option>
+              <option value="">No folder</option>
               {#each allFolders as f}<option value={f}>{f}</option>{/each}
             </select>
             {#if (current.tags || []).length}<span class="ctags"> · #{current.tags.join('  #')}</span>{/if}
@@ -541,11 +580,13 @@
             {:else}
               <h1 class="title ro">{current.title}<span class="inv" class:orphan={invDot(current.id) === '○'} title={dotTitle(current.id)}>{invDot(current.id)}</span></h1>
             {/if}
-            <div class="seg">
-              <button class:on={mode === 'read'} onclick={() => (mode = 'read')}>Read</button>
-              <button class:on={mode === 'write'} onclick={() => (mode = 'write')}>Write</button>
+            <div class="titlectl">
+              <div class="seg">
+                <button class:on={mode === 'read'} onclick={() => (mode = 'read')}>Read</button>
+                <button class:on={mode === 'write'} onclick={() => (mode = 'write')}>Write</button>
+              </div>
+              <button class="expbtn" title="Export this note" aria-label="Export" onclick={() => (docExport = true)}>⇩</button>
             </div>
-            <button class="expbtn" title="Export this note" aria-label="Export" onclick={() => (docExport = true)}>⇩</button>
           </div>
           {#if mode === 'write'}
             {#key currentId}<div class="editor"><Editor value={current.body} onchange={editBody} /></div>{/key}
@@ -677,6 +718,10 @@
         {#if vaultBackend}<button class="setbtn" onclick={disconnectFolder}>Use browser</button>
         {:else if folderVaultSupported()}<button class="setbtn" onclick={connectFolder}>{vaultBusy ? 'Opening…' : (isTauri ? 'Open folder…' : 'Choose a folder…')}</button>{/if}
       </div>
+      <div class="setrow"><span class="sk">Workspace backup <span class="sh">{importMsg || 'one .arf file with every note, folder, and reference'}</span></span>
+        <span class="setbtnrow"><button class="setbtn" onclick={exportWorkspace}>Export .arf</button><button class="setbtn" onclick={() => fileInput.click()}>Import…</button></span>
+      </div>
+      <input type="file" accept=".arf,application/json" bind:this={fileInput} onchange={importWorkspace} style="display:none" />
 
       <div class="setlabel">About</div>
       <div class="setrow"><span class="sk">Arf {APP_VERSION}</span>

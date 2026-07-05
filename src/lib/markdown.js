@@ -6,6 +6,8 @@ import DOMPurify from 'dompurify';
 
 let resolveTitle = () => null; // (lowercaseTitle) -> note | null
 export function setLinkResolver(fn) { resolveTitle = fn; }
+let resolveCite = () => null; // (citekey) -> reference | null
+export function setCiteResolver(fn) { resolveCite = fn; }
 
 function esc(s) { return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
 function math(tex, display) {
@@ -43,13 +45,27 @@ const tag = {
   tokenizer(src) { const m = /^#([a-z0-9][a-z0-9/-]*)/i.exec(src); if (m) return { type: 'tag', raw: m[0], tag: m[1] }; },
   renderer(t) { return '<a class="ht" data-tag="' + t.tag.toLowerCase() + '" href="#">#' + esc(t.tag) + '</a>'; },
 };
+const cite = {
+  name: 'cite', level: 'inline',
+  start(src) { const i = src.indexOf('[@'); return i < 0 ? undefined : i; },
+  tokenizer(src) { const m = /^\[@([A-Za-z0-9_:.-]+)\]/.exec(src); if (m) return { type: 'cite', raw: m[0], key: m[1] }; },
+  renderer(t) {
+    const r = resolveCite(t.key);
+    if (r) {
+      const who = r.authors && r.authors[0] ? r.authors[0].f : t.key;
+      const label = who + (r.year ? ' ' + r.year : '');
+      return '<a class="cite" data-cite="' + t.key + '" href="#" title="' + esc(r.title || '') + '">' + esc(label) + '</a>';
+    }
+    return '<span class="cite dangling" title="unknown reference — add it in the Library">@' + esc(t.key) + '</span>';
+  },
+};
 
-marked.use({ gfm: true, breaks: false, extensions: [mathBlock, mathInline, wikilink, tag] });
+marked.use({ gfm: true, breaks: false, extensions: [mathBlock, mathInline, wikilink, tag, cite] });
 
 export function renderMarkdown(md) {
   try {
     // sanitize: a note may come from an external .md file in the vault, so strip
     // scripts/handlers while keeping wikilink data-attrs and KaTeX's spans/styles
-    return DOMPurify.sanitize(marked.parse(md || ''), { ADD_ATTR: ['data-nav', 'data-tag'] });
+    return DOMPurify.sanitize(marked.parse(md || ''), { ADD_ATTR: ['data-nav', 'data-tag', 'data-cite'] });
   } catch (e) { return '<p>' + esc(md || '') + '</p>'; }
 }

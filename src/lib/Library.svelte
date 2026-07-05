@@ -1,5 +1,5 @@
 <script>
-  let { notes, idx, onopen } = $props();
+  let { notes, idx, onopen, refs = $bindable([]), jumpTo = null } = $props();
 
   const TYPELABEL = { 'article-journal': 'Article', 'article-magazine': 'Magazine', book: 'Book', preprint: 'Preprint', dataset: 'Dataset', webpage: 'Web' };
   const FILTERS = [
@@ -7,17 +7,12 @@
     { k: 'article-magazine', l: 'Magazines' }, { k: 'webpage', l: 'Webpages' }, { k: 'preprint', l: 'Preprints' },
   ];
 
-  let refs = $state([
-    { id: 'r_zurek2003', type: 'article-journal', citekey: 'zurek2003', title: 'Decoherence, einselection, and the quantum origins of the classical', authors: [{ f: 'Zurek', g: 'Wojciech H.' }], year: 2003, container: 'Reviews of Modern Physics', volume: '75', pages: '715–775', doi: '10.1103/RevModPhys.75.715', abstract: 'Decoherence, einselection, and the existential interpretation are described.', sources: ['Crossref', 'OpenAlex'] },
-    { id: 'r_arf1941', type: 'article-journal', citekey: 'arf1941', title: 'Untersuchungen über quadratische Formen in Körpern der Charakteristik 2', authors: [{ f: 'Arf', g: 'Cahit' }], year: 1941, container: 'Journal für die reine und angewandte Mathematik', volume: '183', pages: '148–167', doi: '10.1515/crll.1941.183.148', sources: ['Crossref'] },
-    { id: 'r_efron1979', type: 'article-journal', citekey: 'efron1979', title: 'Bootstrap Methods: Another Look at the Jackknife', authors: [{ f: 'Efron', g: 'Bradley' }], year: 1979, container: 'The Annals of Statistics', volume: '7', pages: '1–26', doi: '10.1214/aos/1176344552', sources: ['Crossref', 'OpenAlex'] },
-    { id: 'r_deutsch2011', type: 'book', citekey: 'deutsch2011', title: 'The Beginning of Infinity', authors: [{ f: 'Deutsch', g: 'David' }], year: 2011, publisher: 'Viking', isbn: '9780670022755', sources: ['Open Library', 'Google Books'] },
-    { id: 'r_ahrens2017', type: 'book', citekey: 'ahrens2017', title: 'How to Take Smart Notes', authors: [{ f: 'Ahrens', g: 'Sönke' }], year: 2017, publisher: 'CreateSpace', isbn: '9781542866507', sources: ['Open Library'] },
-    { id: 'r_sep_dec', type: 'webpage', citekey: 'sep2020decoherence', title: 'The Role of Decoherence in Quantum Mechanics', authors: [{ f: 'Bacciagaluppi', g: 'Guido' }], year: 2020, container: 'Stanford Encyclopedia of Philosophy', url: 'https://plato.stanford.edu/entries/qm-decoherence/', accessed: '2026-06-28', archived: 'https://web.archive.org/web/20260601120000/https://plato.stanford.edu/entries/qm-decoherence/', archivedDate: '2026-06-01', sources: ['Wayback Machine', 'Manual'] },
-    { id: 'r_quanta', type: 'article-magazine', citekey: 'wolchover2019', title: 'Quantum Darwinism, an Idea to Explain Objective Reality, Passes First Tests', authors: [{ f: 'Wolchover', g: 'Natalie' }], year: 2019, container: 'Quanta Magazine', url: 'https://www.quantamagazine.org/', accessed: '2026-06-20', archived: 'https://web.archive.org/web/20260520090000/https://www.quantamagazine.org/', archivedDate: '2026-05-20', sources: ['Wayback Machine'] },
-  ]);
   let filter = $state('all');
-  let selId = $state(refs[0].id);
+  let selId = $state(refs[0]?.id ?? null);
+  // jump to a specific reference when a [@citekey] citation is clicked in a note
+  $effect(() => {
+    if (jumpTo && jumpTo.key) { const r = refs.find((x) => x.citekey === jumpTo.key); if (r) { selId = r.id; filter = 'all'; } }
+  });
   let exportScope = $state(null); // refId | 'all' | null
   let expFmt = $state('BibTeX');
   let adding = $state(false);
