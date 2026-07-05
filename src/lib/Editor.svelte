@@ -42,7 +42,11 @@
         doc: value,
         extensions: [
           history(),
-          keymap.of([...defaultKeymap, ...historyKeymap]),
+          keymap.of([
+            { key: 'Mod-b', run: () => { wrap('**'); return true; } },
+            { key: 'Mod-i', run: () => { wrap('*'); return true; } },
+            ...defaultKeymap, ...historyKeymap,
+          ]),
           markdown(),
           syntaxHighlighting(inkHL),
           theme,
@@ -63,11 +67,74 @@
       view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: v }, annotations: syncAnno.of(true) });
     }
   });
+
+  // --- formatting commands: insert Markdown around the selection or the current lines ---
+  function wrap(before, after = before) {
+    if (!view) return;
+    const sel = view.state.selection.main;
+    const text = view.state.sliceDoc(sel.from, sel.to);
+    view.dispatch({
+      changes: { from: sel.from, to: sel.to, insert: before + text + after },
+      selection: text ? { anchor: sel.from + before.length, head: sel.from + before.length + text.length } : { anchor: sel.from + before.length },
+    });
+    view.focus();
+  }
+  function eachLine(fn) {
+    if (!view) return;
+    const sel = view.state.selection.main;
+    const a = view.state.doc.lineAt(sel.from).number, b = view.state.doc.lineAt(sel.to).number;
+    const changes = [];
+    for (let n = a; n <= b; n++) { const line = view.state.doc.line(n); const c = fn(line); if (c) changes.push(c); }
+    view.dispatch({ changes });
+    view.focus();
+  }
+  function heading(hashes) {
+    eachLine((line) => {
+      const stripped = line.text.replace(/^#{1,6}\s+/, '');
+      const cur = line.text.match(/^(#{1,6})\s/);
+      const insert = cur && cur[1].length === hashes.length ? stripped : hashes + ' ' + stripped; // toggle same level off
+      return { from: line.from, to: line.to, insert };
+    });
+  }
+  function prefix(p) {
+    eachLine((line) => (line.text.startsWith(p) ? { from: line.from, to: line.from + p.length, insert: '' } : { from: line.from, insert: p }));
+  }
+  function link() {
+    if (!view) return;
+    const sel = view.state.selection.main;
+    const text = view.state.sliceDoc(sel.from, sel.to) || 'text';
+    const urlAt = sel.from + text.length + 3;
+    view.dispatch({ changes: { from: sel.from, to: sel.to, insert: '[' + text + '](url)' }, selection: { anchor: urlAt, head: urlAt + 3 } });
+    view.focus();
+  }
 </script>
 
-<div class="cm-host" bind:this={el}></div>
+<div class="editorwrap">
+  <div class="fmtbar">
+    <button type="button" title="Heading 1" onclick={() => heading('#')}>H1</button>
+    <button type="button" title="Heading 2" onclick={() => heading('##')}>H2</button>
+    <button type="button" title="Heading 3" onclick={() => heading('###')}>H3</button>
+    <span class="fsep"></span>
+    <button type="button" class="fb" title="Bold ({navigator.platform.includes('Mac') ? '⌘' : 'Ctrl'}+B)" onclick={() => wrap('**')}>B</button>
+    <button type="button" class="fi" title="Italic ({navigator.platform.includes('Mac') ? '⌘' : 'Ctrl'}+I)" onclick={() => wrap('*')}>I</button>
+    <button type="button" class="fm" title="Inline code" onclick={() => wrap('`')}>{'</>'}</button>
+    <span class="fsep"></span>
+    <button type="button" title="Link" onclick={link}>Link</button>
+    <button type="button" title="Bullet list" onclick={() => prefix('- ')}>List</button>
+    <button type="button" title="Quote" onclick={() => prefix('> ')}>Quote</button>
+  </div>
+  <div class="cm-host" bind:this={el}></div>
+</div>
 
 <style>
-  .cm-host { height: 100%; }
+  .editorwrap { height: 100%; display: flex; flex-direction: column; }
+  .fmtbar { flex: none; display: flex; align-items: center; gap: 1px; flex-wrap: wrap; padding: 0 0 .5rem 0; margin-bottom: .5rem; border-bottom: 1px solid var(--line); }
+  .fmtbar button { font-family: var(--sans); font-size: 12px; color: var(--fg-muted); background: none; border: 0; border-radius: 5px; padding: .28rem .5rem; cursor: pointer; line-height: 1; }
+  .fmtbar button:hover { background: var(--accent-soft); color: var(--fg-bright); }
+  .fmtbar button.fb { font-weight: 700; }
+  .fmtbar button.fi { font-style: italic; }
+  .fmtbar button.fm { font-family: var(--mono); font-size: 11px; }
+  .fsep { width: 1px; height: 15px; background: var(--line); margin: 0 .35rem; }
+  .cm-host { flex: 1; min-height: 0; }
   .cm-host :global(.cm-editor) { height: 100%; }
 </style>
