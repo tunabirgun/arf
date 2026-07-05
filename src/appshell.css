@@ -74,7 +74,7 @@
 .fmove:hover { border-color: var(--accent); }
 .ctags { font-family: var(--mono); color: var(--fg-faint); }
 
-.center > .crumbs, .center > .titlebar, .center > .read, .center > .editor { max-width: 38em; margin-left: auto; margin-right: auto; }
+.center > .crumbs, .center > .titlebar, .center > .read, .center > .editor { max-width: 34em; margin-left: auto; margin-right: auto; }
 .savebanner { flex: none; background: color-mix(in srgb, var(--accent) 14%, var(--surface)); border-bottom: 1px solid var(--accent); color: var(--fg-bright); font-family: var(--sans); font-size: 13px; padding: .5rem clamp(.7rem, 2vw, 1.2rem); }
 .savebanner .bnrbtn { font-family: var(--sans); font-size: 11px; color: var(--fg-bright); background: none; border: 1px solid currentColor; border-radius: 3px; padding: .05rem .45rem; margin-left: .4rem; cursor: pointer; }
 .savebanner .mono { font-family: var(--mono); font-size: 11px; }
@@ -196,12 +196,12 @@
 .ovclose:hover { border-color: var(--accent); color: var(--fg-bright); }
 
 /* focus mode */
-.shell.focus .list, .shell.focus .rail { display: none; }
+.shell.focus .list, .shell.focus .rail, .shell.focus .resizer { display: none; }
 .shell.focus .ws { grid-template-columns: 1fr; }
-.shell.focus .center { padding-top: 3rem; }
-.shell.focus .read > *, .shell.focus .editor { opacity: .32; transition: opacity .35s; }
-.shell.focus .read > *:hover { opacity: 1; }
-.shell.focus .editor { opacity: 1; }
+.shell.focus .center { padding-top: 3rem; grid-column: 1; }
+/* focus keeps the note itself at full contrast; only the surrounding chrome recedes */
+.shell.focus .top { opacity: .4; transition: opacity .3s; }
+.shell.focus .top:hover { opacity: 1; }
 
 /* graph elements (created via innerHTML, so global) */
 .eg-edge { stroke: var(--line-strong); stroke-width: 1.2; }
@@ -343,7 +343,8 @@
 
 .mnav { flex: none; display: flex; border-top: 1px solid var(--line); background: var(--canvas); padding-bottom: env(safe-area-inset-bottom, 0px); }
 .mnavt { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 2px; padding: .5rem 0 .55rem; background: none; border: 0; color: var(--fg-faint); font-family: var(--sans); font-size: 10px; cursor: pointer; }
-.mnavt .ic { font-size: 18px; line-height: 1; }
+.mnavt .ic { font-size: 18px; line-height: 1; color: inherit; }
+.mnavt.on .ic { color: var(--accent); }
 .mnavt.on { color: var(--accent); }
 .mnavt:active { background: var(--accent-soft); }
 

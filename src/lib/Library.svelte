@@ -1,4 +1,5 @@
 <script>
+  import { t } from './i18n.svelte.js';
   let { notes, idx, onopen, refs = $bindable([]), jumpTo = null } = $props();
 
   const TYPELABEL = { 'article-journal': 'Article', 'article-magazine': 'Magazine', book: 'Book', preprint: 'Preprint', dataset: 'Dataset', webpage: 'Web' };
@@ -114,13 +115,13 @@
   // export generators
   function bibType(t) { return t === 'book' ? 'book' : t === 'preprint' ? 'misc' : (t === 'webpage' || t === 'article-magazine') ? 'online' : 'article'; }
   function escBib(s) { return String(s == null ? '' : s).replace(/([%&#_${}])/g, '\\$1').replace(/\^/g, '\\^{}').replace(/~/g, '\\~{}'); }
-  function toBibTeX(r) { const f = ['  author = {' + r.authors.map((a) => escBib(a.f) + ', ' + escBib(a.g)).join(' and ') + '}', '  title = {' + escBib(r.title) + '}', '  year = {' + r.year + '}']; if (r.container) f.push('  ' + (r.type === 'book' ? 'publisher' : 'journal') + ' = {' + escBib(r.container) + '}'); if (r.publisher && !r.container) f.push('  publisher = {' + escBib(r.publisher) + '}'); if (r.volume) f.push('  volume = {' + r.volume + '}'); if (r.pages) f.push('  pages = {' + r.pages.replace('–', '--') + '}'); if (r.doi) f.push('  doi = {' + r.doi + '}'); if (r.isbn) f.push('  isbn = {' + r.isbn + '}'); if (r.url) f.push('  url = {' + (r.archived || r.url) + '}'); return '@' + bibType(r.type) + '{' + r.citekey + ',\n' + f.join(',\n') + '\n}'; }
+  function toBibTeX(r) { const f = []; if (r.authors && r.authors.length) f.push('  author = {' + r.authors.map((a) => escBib(a.f) + ', ' + escBib(a.g)).join(' and ') + '}'); f.push('  title = {' + escBib(r.title) + '}'); f.push('  year = {' + r.year + '}'); if (r.container) f.push('  ' + (r.type === 'book' ? 'publisher' : 'journal') + ' = {' + escBib(r.container) + '}'); if (r.publisher && !r.container) f.push('  publisher = {' + escBib(r.publisher) + '}'); if (r.volume) f.push('  volume = {' + r.volume + '}'); if (r.pages) f.push('  pages = {' + r.pages.replace('–', '--') + '}'); if (r.doi) f.push('  doi = {' + escBib(r.doi) + '}'); if (r.isbn) f.push('  isbn = {' + escBib(r.isbn) + '}'); if (r.url) f.push('  url = {' + escBib(r.archived || r.url) + '}'); return '@' + bibType(r.type) + '{' + r.citekey + ',\n' + f.join(',\n') + '\n}'; }
   function risType(t) { return t === 'book' ? 'BOOK' : t === 'webpage' ? 'ELEC' : t === 'article-magazine' ? 'MGZN' : t === 'preprint' ? 'GEN' : 'JOUR'; }
   function toRIS(r) { const L = ['TY  - ' + risType(r.type)]; r.authors.forEach((a) => L.push('AU  - ' + a.f + ', ' + a.g)); L.push('TI  - ' + r.title); L.push('PY  - ' + r.year); if (r.container) L.push((r.type === 'book' ? 'PB  - ' : 'JO  - ') + r.container); if (r.publisher && r.type === 'book') L.push('PB  - ' + r.publisher); if (r.volume) L.push('VL  - ' + r.volume); if (r.pages) { const p = r.pages.split(/[–-]/); L.push('SP  - ' + p[0]); if (p[1]) L.push('EP  - ' + p[1]); } if (r.doi) L.push('DO  - ' + r.doi); if (r.isbn) L.push('SN  - ' + r.isbn); if (r.url) L.push('UR  - ' + (r.archived || r.url)); if (r.accessed) L.push('Y2  - ' + r.accessed); L.push('ER  - '); return L.join('\n'); }
   function toCSL(r) { const o = { id: r.citekey, type: r.type, title: r.title, author: r.authors.map((a) => ({ family: a.f, given: a.g })), issued: { 'date-parts': [[r.year]] } }; if (r.container) o['container-title'] = r.container; if (r.publisher) o.publisher = r.publisher; if (r.volume) o.volume = r.volume; if (r.pages) o.page = r.pages; if (r.doi) o.DOI = r.doi; if (r.isbn) o.ISBN = r.isbn; if (r.url) o.URL = r.archived || r.url; return '  ' + JSON.stringify(o); }
   function apaAuth(as) { if (!as || !as.length) return ''; const s = as.map((a) => a.f + ', ' + initials(a.g)); return s.length > 1 ? s.slice(0, -1).join(', ') + ', & ' + s[s.length - 1] : s[0]; }
   function toAPA(r) { const au = apaAuth(r.authors); let s = (au ? au + ' ' : '') + '(' + r.year + '). ' + r.title + '.'; if (r.container) s += ' ' + r.container + (r.volume ? ', ' + r.volume : '') + (r.pages ? ', ' + r.pages : '') + '.'; else if (r.publisher) s += ' ' + r.publisher + '.'; if (r.doi) s += ' https://doi.org/' + r.doi; else if (r.url) s += ' Retrieved ' + (r.accessed || '') + ', from ' + (r.archived || r.url); return s; }
-  function toNature(r) { const a = r.authors.map((x) => x.f + ', ' + initials(x.g)).join(', '); let s = a + ' ' + r.title + '.'; if (r.container) s += ' ' + r.container + (r.volume ? ' ' + r.volume : '') + (r.pages ? ', ' + r.pages : '') + ' (' + r.year + ').'; else s += ' (' + (r.publisher || '') + ', ' + r.year + ').'; return s; }
+  function toNature(r) { const a = r.authors.map((x) => x.f + ', ' + initials(x.g)).join(', '); let s = (a ? a + ' ' : '') + r.title + '.'; if (r.container) s += ' ' + r.container + (r.volume ? ' ' + r.volume : '') + (r.pages ? ', ' + r.pages : '') + ' (' + r.year + ').'; else s += ' (' + (r.publisher || '') + ', ' + r.year + ').'; return s; }
   function zenType(t) { return t === 'book' ? 'book' : t === 'preprint' ? 'preprint' : (t === 'webpage' || t === 'article-magazine') ? 'other' : 'article'; }
   function toZenodo(r) { const m = { upload_type: 'publication', publication_type: zenType(r.type), title: r.title, creators: r.authors.map((a) => ({ name: a.f + ', ' + a.g })), publication_date: r.year + '-01-01', description: r.abstract || r.title }; if (r.doi) m.doi = r.doi; if (r.container && r.type !== 'book') m.journal_title = r.container; if (r.publisher || r.type === 'book') m.imprint_publisher = r.publisher || r.container; return '  ' + JSON.stringify(m); }
   function exportOne(r, f) { return ({ 'BibTeX': toBibTeX, 'RIS (EndNote)': toRIS, 'CSL-JSON': toCSL, 'APA': toAPA, 'Nature': toNature, 'Zenodo': toZenodo }[f] || (() => ''))(r); }
@@ -129,20 +130,20 @@
 
 <div class="libview">
   <div class="libcol filters">
-    <div class="libhead">Library · {refs.length} references</div>
+    <div class="libhead">{t('Library')} · {refs.length} {t('references')}</div>
     {#each FILTERS as f}
       {#if f.k === 'all' || count(f.k)}
-        <button class="libfilter" class:on={filter === f.k} onclick={() => (filter = f.k)}><span>{f.l}</span><span class="ct">{count(f.k)}</span></button>
+        <button class="libfilter" class:on={filter === f.k} onclick={() => (filter = f.k)}><span>{t(f.l)}</span><span class="ct">{count(f.k)}</span></button>
       {/if}
     {/each}
-    <button class="libbtn pri" onclick={() => { adding = true; addResult = undefined; addInput = ''; addError = ''; addBusy = false; fetchToken++; }}>＋ Add reference</button>
-    <button class="libbtn" onclick={() => { exportScope = 'all'; }}>⇩ Export library</button>
+    <button class="libbtn pri" onclick={() => { adding = true; addResult = undefined; addInput = ''; addError = ''; addBusy = false; fetchToken++; }}>{t('＋ Add reference')}</button>
+    <button class="libbtn" onclick={() => { exportScope = 'all'; }}>{t('⇩ Export library')}</button>
   </div>
 
   <div class="libcol refs">
     {#each filtered as r (r.id)}
       <button class="refrow" class:on={r.id === selId} onclick={() => (selId = r.id)}>
-        <div class="rtitle"><span class="rtype">{TYPELABEL[r.type] || r.type}</span>{r.title}</div>
+        <div class="rtitle"><span class="rtype">{t(TYPELABEL[r.type] || r.type)}</span>{r.title}</div>
         <div class="rmeta">{shortAuth(r.authors)} · {r.year}{r.container ? ' · ' + r.container : r.publisher ? ' · ' + r.publisher : ''}</div>
         <div class="rsrc">{#each r.sources as s}<span class="sb">{s}</span>{/each}</div>
       </button>
@@ -151,33 +152,33 @@
 
   <div class="libcol detail">
     {#if adding}
-      <div class="libhead">Add a reference</div>
-      <p class="rmeta">Paste a DOI, ISBN, arXiv ID, or URL — Arf fetches from trusted open libraries.</p>
+      <div class="libhead">{t('Add reference')}</div>
+      <p class="rmeta">{t('Paste a DOI, ISBN, arXiv ID, or URL — Arf fetches from open libraries.')}</p>
       <input class="expsel" style="width:100%;margin:.4rem 0" placeholder="10.1103/… · 9780262035613 · arXiv:1706.03762" bind:value={addInput} />
-      <button class="libbtn pri" onclick={doFetch} disabled={addBusy}>{addBusy ? 'Looking up…' : 'Fetch from open libraries'}</button>
-      <p class="rmeta" style="margin-top:.4rem;opacity:.7">Queries Crossref (DOI · arXiv) and Open Library (ISBN).</p>
-      {#if addError}<p class="rmeta" style="margin-top:.6rem">{addError} You can still add it and fill the fields by hand.</p>{/if}
+      <button class="libbtn pri" onclick={doFetch} disabled={addBusy}>{addBusy ? t('Looking up…') : t('Fetch from open libraries')}</button>
+      <p class="rmeta" style="margin-top:.4rem;opacity:.7">{t('Queries Crossref (DOI · arXiv) and Open Library (ISBN).')}</p>
+      {#if addError}<p class="rmeta" style="margin-top:.6rem">{t(addError)} {t('You can still add it and fill the fields by hand.')}</p>{/if}
       {#if addResult}
         <div class="dfield" style="margin-top:.8rem"><div class="rsrc">{#each addResult.sources as s}<span class="sb">{s}</span>{/each}</div>
           <div style="font-size:16px;color:var(--fg-bright);margin-top:.3rem">{addResult.title}</div>
           <div class="rmeta">{addResult.authors.map((a) => a.g + ' ' + a.f).join(', ')} · {addResult.year}</div>
-          <button class="libbtn pri" onclick={addFetched}>Add to Library</button></div>
+          <button class="libbtn pri" onclick={addFetched}>{t('Add to Library')}</button></div>
       {/if}
-      <button class="libbtn" onclick={() => { adding = false; addBusy = false; addError = ''; fetchToken++; }}>Cancel</button>
+      <button class="libbtn" onclick={() => { adding = false; addBusy = false; addError = ''; fetchToken++; }}>{t('Cancel')}</button>
     {:else if sel}
-      <div class="libhead">Reference detail</div>
-      <div class="dfield"><div class="dl">Title</div><div class="dv" style="font-size:18px;color:var(--fg-bright)">{sel.title}</div></div>
-      <div class="dfield"><div class="dl">Authors</div><div class="dv">{sel.authors.map((a) => a.g + ' ' + a.f).join(', ')}</div></div>
-      <div class="dfield"><div class="dl">Type · Year</div><div class="dv">{TYPELABEL[sel.type] || sel.type} · {sel.year}</div></div>
-      {#if sel.container}<div class="dfield"><div class="dl">{sel.type === 'webpage' || sel.type === 'article-magazine' ? 'Site' : 'Published in'}</div><div class="dv">{sel.container}{sel.volume ? ' ' + sel.volume : ''}{sel.pages ? ', ' + sel.pages : ''}</div></div>{/if}
-      {#if sel.publisher}<div class="dfield"><div class="dl">Publisher</div><div class="dv">{sel.publisher}</div></div>{/if}
+      <div class="libhead">{t('Reference detail')}</div>
+      <div class="dfield"><div class="dl">{t('Title')}</div><div class="dv" style="font-size:18px;color:var(--fg-bright)">{sel.title}</div></div>
+      <div class="dfield"><div class="dl">{t('Authors')}</div><div class="dv">{sel.authors.map((a) => a.g + ' ' + a.f).join(', ')}</div></div>
+      <div class="dfield"><div class="dl">{t('Type · Year')}</div><div class="dv">{t(TYPELABEL[sel.type] || sel.type)} · {sel.year}</div></div>
+      {#if sel.container}<div class="dfield"><div class="dl">{sel.type === 'webpage' || sel.type === 'article-magazine' ? t('Site') : t('Published in')}</div><div class="dv">{sel.container}{sel.volume ? ' ' + sel.volume : ''}{sel.pages ? ', ' + sel.pages : ''}</div></div>{/if}
+      {#if sel.publisher}<div class="dfield"><div class="dl">{t('Publisher')}</div><div class="dv">{sel.publisher}</div></div>{/if}
       {#if sel.doi}<div class="dfield"><div class="dl">DOI</div><div class="dv"><a href={'https://doi.org/' + sel.doi} target="_blank" rel="noopener">{sel.doi}</a></div></div>{/if}
       {#if sel.isbn}<div class="dfield"><div class="dl">ISBN</div><div class="dv">{sel.isbn}</div></div>{/if}
-      {#if sel.archived}<div class="dfield"><div class="dl">Archived snapshot · Wayback Machine</div><div class="dv"><a href={sel.archived} target="_blank" rel="noopener">web.archive.org/{sel.archivedDate}</a><br>captured {sel.archivedDate} · accessed {sel.accessed || '—'}</div></div>{/if}
-      {#if sel.abstract}<div class="dfield"><div class="dl">Abstract</div><div class="dv" style="font-size:14px;color:var(--fg-muted)">{sel.abstract}</div></div>{/if}
-      <div class="dfield"><div class="dl">Fetched from</div><div class="rsrc">{#each sel.sources as s}<span class="sb">{s}</span>{/each}</div></div>
-      <button class="libbtn pri" onclick={() => (exportScope = sel.id)}>⇩ Export this reference</button>
-    {:else}<div class="rempty">Select a reference.</div>{/if}
+      {#if sel.archived}<div class="dfield"><div class="dl">{t('Archived snapshot · Wayback Machine')}</div><div class="dv"><a href={sel.archived} target="_blank" rel="noopener">web.archive.org/{sel.archivedDate}</a><br>{t('captured')} {sel.archivedDate} · {t('accessed')} {sel.accessed || '—'}</div></div>{/if}
+      {#if sel.abstract}<div class="dfield"><div class="dl">{t('Abstract')}</div><div class="dv" style="font-size:14px;color:var(--fg-muted)">{sel.abstract}</div></div>{/if}
+      <div class="dfield"><div class="dl">{t('Fetched from')}</div><div class="rsrc">{#each sel.sources as s}<span class="sb">{s}</span>{/each}</div></div>
+      <button class="libbtn pri" onclick={() => (exportScope = sel.id)}>{t('⇩ Export this reference')}</button>
+    {:else}<div class="rempty">{t('Select a reference.')}</div>{/if}
   </div>
 </div>
 
@@ -185,12 +186,12 @@
   <div class="scrim" onclick={(e) => { if (e.target === e.currentTarget) exportScope = null; }}>
     <div class="modal">
       <button class="mclose" onclick={() => (exportScope = null)}>✕</button>
-      <h3>Export references</h3>
-      <p class="msub">Every format your tools need — BibTeX, RIS for EndNote, CSL-JSON, formatted styles, Zenodo.</p>
+      <h3>{t('Export references')}</h3>
+      <p class="msub">{t('Every format your tools need — BibTeX, RIS for EndNote, CSL-JSON, formatted styles, Zenodo.')}</p>
       <div style="display:flex;gap:.6rem;align-items:center">
         <select class="expsel" bind:value={expFmt}>{#each ['BibTeX', 'RIS (EndNote)', 'CSL-JSON', 'APA', 'Nature', 'Zenodo'] as f}<option>{f}</option>{/each}</select>
-        <span class="rmeta">{exportRefs.length} reference{exportRefs.length === 1 ? '' : 's'}</span>
-        <button class="libbtn" style="width:auto;margin:0 0 0 auto;padding:.35rem .8rem" onclick={copy}>Copy</button>
+        <span class="rmeta">{exportRefs.length} {exportRefs.length === 1 ? t('reference') : t('references')}</span>
+        <button class="libbtn" style="width:auto;margin:0 0 0 auto;padding:.35rem .8rem" onclick={copy}>{t('Copy')}</button>
       </div>
       <textarea class="exparea" readonly>{exportText}</textarea>
     </div>

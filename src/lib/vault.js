@@ -48,7 +48,7 @@ export function loadNotes() {
   try { raw = localStorage.getItem(KEY); } catch (e) {}
   if (raw != null) {
     // real vault present — never silently reseed over it
-    try { return JSON.parse(raw); }
+    try { const p = JSON.parse(raw); if (!Array.isArray(p)) throw new Error('vault is not an array'); return p; }
     catch (e) {
       // corrupt but recoverable: back it up, flag it, do not overwrite
       const key = KEY + '-corrupt-' + Date.now();

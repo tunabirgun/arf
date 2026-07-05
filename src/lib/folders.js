@@ -7,8 +7,10 @@ export function allFolderPaths(folders, notes) {
   const set = new Set();
   const add = (p) => {
     if (!p) return;
-    const parts = p.split('/'); let cur = '';
-    parts.forEach((seg) => { cur = cur ? cur + '/' + seg : seg; set.add(cur); });
+    let cur = '';
+    // skip empty segments — a leading/double slash must never insert '' and make a folder
+    // its own ancestor (which would make buildFolderRows recurse forever)
+    p.split('/').forEach((seg) => { if (!seg || seg === '.' || seg === '..') return; cur = cur ? cur + '/' + seg : seg; set.add(cur); });
   };
   (folders || []).forEach(add);
   (notes || []).forEach((n) => add(n.folder || ''));

@@ -53,7 +53,11 @@ export function parse(text, opts = {}) {
 }
 
 function hash(s) { let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0; return h; }
-function relPath(note, suffix) { const dir = (note.folder || '').replace(/^\/+|\/+$/g, ''); return (dir ? dir + '/' : '') + slug(note.title) + (suffix ? '-' + suffix : '') + '.md'; }
+function relPath(note, suffix) {
+  // drop empty / "." / ".." segments so a folder name can never escape the vault root
+  const dir = (note.folder || '').split('/').filter((seg) => seg && seg !== '.' && seg !== '..').join('/');
+  return (dir ? dir + '/' : '') + slug(note.title) + (suffix ? '-' + suffix : '') + '.md';
+}
 // dedupe loaded notes by id (a stale duplicate file must not shadow the real note)
 function dedupeById(notes) {
   const m = new Map();

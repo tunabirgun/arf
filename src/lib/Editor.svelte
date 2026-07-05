@@ -6,7 +6,8 @@
   import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
   import { markdown } from '@codemirror/lang-markdown';
   import { syntaxHighlighting, HighlightStyle } from '@codemirror/language';
-  import { tags as t } from '@lezer/highlight';
+  import { tags as hlTags } from '@lezer/highlight';
+  import { t } from './i18n.svelte.js';
 
   let { value = '', onchange, resemble = null } = $props();
   let el;      // the CodeMirror host
@@ -18,15 +19,15 @@
 
   // ink-only highlighting: weight and style, never hue
   const inkHL = HighlightStyle.define([
-    { tag: [t.heading, t.heading1, t.heading2, t.heading3], fontWeight: '600' },
-    { tag: t.strong, fontWeight: '700' },
-    { tag: t.emphasis, fontStyle: 'italic' },
-    { tag: t.link, textDecoration: 'underline' },
-    { tag: t.url, opacity: '0.6' },
-    { tag: [t.monospace], fontFamily: 'var(--mono)', fontSize: '0.9em' },
-    { tag: [t.comment], opacity: '0.55', fontStyle: 'italic' },
-    { tag: t.keyword, fontWeight: '600' },
-    { tag: [t.processingInstruction, t.meta], opacity: '0.5' },
+    { tag: [hlTags.heading, hlTags.heading1, hlTags.heading2, hlTags.heading3], fontWeight: '600' },
+    { tag: hlTags.strong, fontWeight: '700' },
+    { tag: hlTags.emphasis, fontStyle: 'italic' },
+    { tag: hlTags.link, textDecoration: 'underline' },
+    { tag: hlTags.url, opacity: '0.6' },
+    { tag: [hlTags.monospace], fontFamily: 'var(--mono)', fontSize: '0.9em' },
+    { tag: [hlTags.comment], opacity: '0.55', fontStyle: 'italic' },
+    { tag: hlTags.keyword, fontWeight: '600' },
+    { tag: [hlTags.processingInstruction, hlTags.meta], opacity: '0.5' },
   ]);
 
   const theme = EditorView.theme({
@@ -145,17 +146,17 @@
 
 <div class="editorwrap" bind:this={wrapEl}>
   <div class="fmtbar">
-    <button type="button" title="Heading 1" onclick={() => heading('#')}>H1</button>
-    <button type="button" title="Heading 2" onclick={() => heading('##')}>H2</button>
-    <button type="button" title="Heading 3" onclick={() => heading('###')}>H3</button>
+    <button type="button" title={t('Heading 1')} onclick={() => heading('#')}>H1</button>
+    <button type="button" title={t('Heading 2')} onclick={() => heading('##')}>H2</button>
+    <button type="button" title={t('Heading 3')} onclick={() => heading('###')}>H3</button>
     <span class="fsep"></span>
-    <button type="button" class="fb" title="Bold ({navigator.platform.includes('Mac') ? '⌘' : 'Ctrl'}+B)" onclick={() => wrap('**')}>B</button>
-    <button type="button" class="fi" title="Italic ({navigator.platform.includes('Mac') ? '⌘' : 'Ctrl'}+I)" onclick={() => wrap('*')}>I</button>
-    <button type="button" class="fm" title="Inline code" onclick={() => wrap('`')}>{'</>'}</button>
+    <button type="button" class="fb" title="{t('Bold')} ({navigator.platform.includes('Mac') ? '⌘' : 'Ctrl'}+B)" onclick={() => wrap('**')}>B</button>
+    <button type="button" class="fi" title="{t('Italic')} ({navigator.platform.includes('Mac') ? '⌘' : 'Ctrl'}+I)" onclick={() => wrap('*')}>I</button>
+    <button type="button" class="fm" title={t('Inline code')} onclick={() => wrap('`')}>{'</>'}</button>
     <span class="fsep"></span>
-    <button type="button" title="Link" onclick={link}>Link</button>
-    <button type="button" title="Bullet list" onclick={() => prefix('- ')}>List</button>
-    <button type="button" title="Quote" onclick={() => prefix('> ')}>Quote</button>
+    <button type="button" title={t('Link')} onclick={link}>{t('Link')}</button>
+    <button type="button" title={t('Bullet list')} onclick={() => prefix('- ')}>{t('List')}</button>
+    <button type="button" title={t('Quote')} onclick={() => prefix('> ')}>{t('Quote')}</button>
   </div>
   <div class="cm-host" bind:this={el}></div>
   {#if hint}

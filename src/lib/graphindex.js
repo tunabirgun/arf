@@ -6,7 +6,8 @@
 
 export function parseWikilinks(body) {
   const out = []; const re = /\[\[([^\]]+?)\]\]/g; let m;
-  while ((m = re.exec(body || ''))) out.push(m[1].trim());
+  const text = stripCode(body); // ignore [[links]] inside code fences, matching the rendered view
+  while ((m = re.exec(text))) out.push(m[1].trim());
   return out;
 }
 // strip fenced (``` and ~~~) and inline code so their contents don't leak into tags/tokens

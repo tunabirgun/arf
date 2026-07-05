@@ -13,7 +13,7 @@ export const SEED_REFS = [
 ];
 
 export function loadRefs() {
-  try { const raw = localStorage.getItem(KEY); if (raw) return JSON.parse(raw); } catch (e) {}
+  try { const raw = localStorage.getItem(KEY); if (raw) { const p = JSON.parse(raw); if (Array.isArray(p)) return p; } } catch (e) {}
   return SEED_REFS.map((r) => ({ ...r }));
 }
 export function saveRefs(refs) {

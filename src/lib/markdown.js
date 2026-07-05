@@ -9,7 +9,7 @@ export function setLinkResolver(fn) { resolveTitle = fn; }
 let resolveCite = () => null; // (citekey) -> reference | null
 export function setCiteResolver(fn) { resolveCite = fn; }
 
-function esc(s) { return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+function esc(s) { return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
 function math(tex, display) {
   try { return katex.renderToString(tex, { displayMode: display, throwOnError: false, output: 'html' }); }
   catch (e) { return '<code>' + esc(tex) + '</code>'; }
