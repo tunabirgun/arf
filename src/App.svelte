@@ -4,7 +4,7 @@
   import { buildIndex, buildVectorizer, related, hasLinks, digestPairs, cosine } from './lib/graphindex.js';
   import { renderMarkdown, setLinkResolver, setCiteResolver } from './lib/markdown.js';
   import { loadRefs, saveRefs } from './lib/references.js';
-  import { t, getLang, setLang } from './lib/i18n.svelte.js';
+  import { t } from './lib/i18n.svelte.js';
   import { initEmbedder, embedNotes, cosine as mlCosine } from './lib/ml.js';
   import { connectVault, reconnectVault, folderVaultSupported, isTauri } from './lib/vaultadapter.js';
   import Editor from './lib/Editor.svelte';
@@ -818,9 +818,6 @@
       <h3>{t('Settings')}</h3>
 
       <div class="setlabel">{t('Appearance')}</div>
-      <div class="setrow"><span class="sk">{t('Language')}</span>
-        <div class="seg"><button class:on={getLang() === 'en'} onclick={() => setLang('en')}>English</button><button class:on={getLang() === 'tr'} onclick={() => setLang('tr')}>Türkçe</button></div>
-      </div>
       <div class="setrow"><span class="sk">{t('Theme')}</span>
         <div class="seg"><button class:on={theme === 'light'} onclick={() => setTheme('light')}>{t('Light')}</button><button class:on={theme === 'dark'} onclick={() => setTheme('dark')}>{t('Dark')}</button></div>
       </div>

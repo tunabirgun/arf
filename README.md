@@ -14,7 +14,6 @@ A local-first second brain for scientists and coders. Write notes on papers, boo
 - **Discover** with the on-device machine: **Resonance** surfaces notes similar to the one you're reading, and a weekly **Synthesis** digest points out pairs that belong together but were never linked. It runs entirely on your device — your notes never leave it.
 - **Cite** from the **Library**: references fetched live from Crossref and Open Library by DOI, ISBN, or arXiv ID, cited in notes with `[@citekey]`, and exported to BibTeX, RIS, CSL-JSON, formatted styles, and Zenodo.
 - **Own your data**: your notes are plain Markdown files in a folder you choose. Keep that folder in Dropbox, iCloud, OneDrive, or Syncthing and Arf syncs it **continuously across your devices** — desktop and web, both ways. Back up the whole workspace as one `.arf` file, and export any note to Markdown, HTML, or PDF.
-- **Read in your language**: the interface is available in **English and Turkish** — switch any time in Settings (the documentation has an EN/TR toggle too).
 
 ## Run it
 
