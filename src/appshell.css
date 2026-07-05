@@ -152,7 +152,10 @@
 .pair:first-child { border-top: 0; }
 .pair .txt { flex: 1; }
 .pair .a { color: var(--fg-bright); background: none; border: 0; cursor: pointer; text-decoration: underline; text-decoration-color: var(--accent); text-underline-offset: 2px; font-family: var(--serif); font-size: 16px; padding: 0; }
-.pair .mid { color: var(--fg-faint); font-style: italic; font-size: 14px; }
+.pair .mid { color: var(--accent); font-size: 15px; }
+.pair .pairtitles { display: block; }
+.pair .shared { display: block; margin-top: .3rem; font-family: var(--sans); font-size: 11px; color: var(--fg-faint); }
+.pair .shtag { display: inline-block; color: var(--accent); background: var(--accent-soft); border-radius: 4px; padding: .05rem .35rem; margin: 0 .25rem .15rem 0; }
 .pair .psim { font-family: var(--mono); font-size: 11px; color: var(--accent); }
 .pair .link { font-family: var(--sans); font-size: 11px; border: 1px solid var(--line-strong); border-radius: 3px; padding: .3rem .6rem; background: none; color: var(--fg-muted); cursor: pointer; }
 .pair .link:hover { border-color: var(--accent); color: var(--fg-bright); }

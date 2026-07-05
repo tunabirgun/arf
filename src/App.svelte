@@ -1,7 +1,7 @@
 <script>
   import { loadNotes, saveNotes, newNote, toMarkdown, loadFolders, saveFolders, corruptBackupKey } from './lib/vault.js';
   import { buildFolderRows, folderList } from './lib/folders.js';
-  import { buildIndex, buildVectorizer, related, hasLinks, digestPairs, cosine } from './lib/graphindex.js';
+  import { buildIndex, buildVectorizer, related, hasLinks, digestPairs, cosine, sharedTerms } from './lib/graphindex.js';
   import { renderMarkdown, setLinkResolver, setCiteResolver } from './lib/markdown.js';
   import { loadRefs, saveRefs } from './lib/references.js';
   import { initEmbedder, embedNotes, cosine as mlCosine, resetEmbedder } from './lib/ml.js';
@@ -13,7 +13,7 @@
 
   const IS_MAC = /Mac|iPhone|iPad|iPod/.test((navigator.platform || '') + ' ' + (navigator.userAgent || ''));
   const MOD = IS_MAC ? '⌘' : 'Ctrl';
-  const APP_VERSION = '0.3.0';
+  const APP_VERSION = '0.3.1';
 
   let notes = $state(loadNotes());
   let refs = $state(loadRefs());        // shared reference library (also used by [@citekey] citations)
@@ -449,8 +449,9 @@
     return { lex, sem };
   });
   const digest = $derived.by(() => {
+    let pairs;
     if (mlStatus === 'ready' && Object.keys(mlVecs).length) {
-      const pairs = [];
+      pairs = [];
       for (let i = 0; i < notes.length; i++) for (let j = i + 1; j < notes.length; j++) {
         const a = notes[i], b = notes[j];
         if (!mlVecs[a.id] || !mlVecs[b.id]) continue;
@@ -458,9 +459,10 @@
         const s = mlCosine(mlVecs[a.id], mlVecs[b.id]);
         if (s >= 0.45) pairs.push({ a: a.id, b: b.id, s });
       }
-      return pairs.sort((x, y) => y.s - x.s).slice(0, 6);
-    }
-    return digestPairs(notes, vecs, idx, { max: 6 });
+      pairs = pairs.sort((x, y) => y.s - x.s).slice(0, 6);
+    } else pairs = digestPairs(notes, vecs, idx, { max: 6 });
+    // attach the words each pair shares, so the digest shows *why* they connect
+    return pairs.map((p) => ({ ...p, terms: sharedTerms(idx.byId[p.a], idx.byId[p.b], 5) }));
   });
 
   function onKey(e) {
@@ -808,10 +810,16 @@
     <div class="modal">
       <button class="mclose" onclick={() => (digestOpen = false)}>✕</button>
       <h3>This week's synthesis</h3>
-      <p class="msub">Pairs of notes that resemble each other but you've never linked. Write the sentence that connects them.</p>
+      <p class="msub">Notes the machine finds alike but you've never linked — with the concepts they share, so you can see the connection at a glance and link what belongs.</p>
       <div class="dgbody">
         {#each digest as p}
-          <div class="pair"><span class="txt"><button class="a" onclick={() => open(p.a)}>{idx.byId[p.a].title}</button> <span class="mid">might connect to</span> <button class="a" onclick={() => open(p.b)}>{idx.byId[p.b].title}</button></span><span class="psim">{p.s.toFixed(2)}</span><button class="link" onclick={() => linkPair(p.a, p.b)}>Link</button></div>
+          <div class="pair">
+            <span class="txt">
+              <span class="pairtitles"><button class="a" onclick={() => open(p.a)}>{idx.byId[p.a].title}</button> <span class="mid">↔</span> <button class="a" onclick={() => open(p.b)}>{idx.byId[p.b].title}</button></span>
+              {#if p.terms.length}<span class="shared">shared: {#each p.terms as tm}<span class="shtag">{tm}</span>{/each}</span>{/if}
+            </span>
+            <span class="psim">{p.s.toFixed(2)}</span><button class="link" onclick={() => linkPair(p.a, p.b)}>Link</button>
+          </div>
         {:else}<div class="rempty" style="padding:1rem 0">Everything similar is already linked. Good week.</div>{/each}
       </div>
     </div>

@@ -49,6 +49,7 @@
           keymap.of([
             { key: 'Mod-b', run: () => { wrap('**'); return true; } },
             { key: 'Mod-i', run: () => { wrap('*'); return true; } },
+            { key: 'Enter', run: continueList },
             ...defaultKeymap, ...historyKeymap,
           ]),
           markdown(),
@@ -102,60 +103,111 @@
     }
   });
 
-  // --- formatting commands: insert Markdown around the selection or the current lines ---
+  // --- formatting commands: markdown around the selection, with the cursor left where you'd type ---
+  // wrap the selection in markers (or, with no selection, drop the markers and put the cursor between them);
+  // if the selection is already wrapped, toggle the markers off.
   function wrap(before, after = before) {
     if (!view) return;
     const sel = view.state.selection.main;
     const text = view.state.sliceDoc(sel.from, sel.to);
-    view.dispatch({
-      changes: { from: sel.from, to: sel.to, insert: before + text + after },
-      selection: text ? { anchor: sel.from + before.length, head: sel.from + before.length + text.length } : { anchor: sel.from + before.length },
-    });
+    const outer = view.state.sliceDoc(Math.max(0, sel.from - before.length), Math.min(view.state.doc.length, sel.to + after.length));
+    if (text && outer === before + text + after) {
+      view.dispatch({ changes: { from: sel.from - before.length, to: sel.to + after.length, insert: text }, selection: { anchor: sel.from - before.length, head: sel.to - before.length } });
+    } else {
+      view.dispatch({
+        changes: { from: sel.from, to: sel.to, insert: before + text + after },
+        selection: text ? { anchor: sel.from + before.length, head: sel.from + before.length + text.length } : { anchor: sel.from + before.length },
+      });
+    }
     view.focus();
   }
-  function eachLine(fn) {
+  // set the current line's heading level (toggle off if it is already that level); cursor lands at the end, ready to type
+  function setHeading(hashes) {
     if (!view) return;
-    const sel = view.state.selection.main;
-    const a = view.state.doc.lineAt(sel.from).number, b = view.state.doc.lineAt(sel.to).number;
-    const changes = [];
-    for (let n = a; n <= b; n++) { const line = view.state.doc.line(n); const c = fn(line); if (c) changes.push(c); }
-    view.dispatch({ changes });
+    const line = view.state.doc.lineAt(view.state.selection.main.head);
+    const stripped = line.text.replace(/^#{1,6}\s+/, '');
+    const cur = line.text.match(/^(#{1,6})\s/);
+    const out = cur && cur[1].length === hashes.length ? stripped : hashes + ' ' + stripped;
+    view.dispatch({ changes: { from: line.from, to: line.to, insert: out }, selection: { anchor: line.from + out.length } });
     view.focus();
   }
-  function heading(hashes) {
-    eachLine((line) => {
-      const stripped = line.text.replace(/^#{1,6}\s+/, '');
-      const cur = line.text.match(/^(#{1,6})\s/);
-      const insert = cur && cur[1].length === hashes.length ? stripped : hashes + ' ' + stripped; // toggle same level off
-      return { from: line.from, to: line.to, insert };
-    });
+  // toggle a line prefix (bullet, quote, task) on every selected line; leave the cursor at the line end
+  function togglePrefix(p) {
+    if (!view) return;
+    const doc = view.state.doc, sel = view.state.selection.main;
+    const lines = []; for (let n = doc.lineAt(sel.from).number; n <= doc.lineAt(sel.to).number; n++) lines.push(doc.line(n));
+    const allHave = lines.every((l) => l.text.startsWith(p));
+    view.dispatch({ changes: lines.map((l) => allHave ? { from: l.from, to: l.from + p.length, insert: '' } : { from: l.from, insert: p }) });
+    view.dispatch({ selection: { anchor: view.state.doc.lineAt(view.state.selection.main.head).to } });
+    view.focus();
   }
-  function prefix(p) {
-    eachLine((line) => (line.text.startsWith(p) ? { from: line.from, to: line.from + p.length, insert: '' } : { from: line.from, insert: p }));
+  function orderedList() {
+    if (!view) return;
+    const doc = view.state.doc, sel = view.state.selection.main;
+    const a = doc.lineAt(sel.from).number, b = doc.lineAt(sel.to).number;
+    let i = 1; const changes = [];
+    for (let n = a; n <= b; n++) { const l = doc.line(n); const m = l.text.match(/^\d+\.\s/); changes.push(m ? { from: l.from, to: l.from + m[0].length, insert: '' } : { from: l.from, insert: (i++) + '. ' }); }
+    view.dispatch({ changes });
+    view.dispatch({ selection: { anchor: view.state.doc.lineAt(view.state.selection.main.head).to } });
+    view.focus();
   }
   function link() {
     if (!view) return;
     const sel = view.state.selection.main;
-    const text = view.state.sliceDoc(sel.from, sel.to) || 'text';
-    const urlAt = sel.from + text.length + 3;
-    view.dispatch({ changes: { from: sel.from, to: sel.to, insert: '[' + text + '](url)' }, selection: { anchor: urlAt, head: urlAt + 3 } });
+    const text = view.state.sliceDoc(sel.from, sel.to);
+    if (text) { const at = sel.from + text.length + 3; view.dispatch({ changes: { from: sel.from, to: sel.to, insert: '[' + text + '](url)' }, selection: { anchor: at, head: at + 3 } }); }
+    else view.dispatch({ changes: { from: sel.from, insert: '[](url)' }, selection: { anchor: sel.from + 1 } }); // cursor in the label slot
     view.focus();
+  }
+  function codeBlock() {
+    if (!view) return;
+    const sel = view.state.selection.main;
+    const text = view.state.sliceDoc(sel.from, sel.to);
+    view.dispatch({ changes: { from: sel.from, to: sel.to, insert: '```\n' + text + '\n```' }, selection: { anchor: sel.from + 4 + text.length } });
+    view.focus();
+  }
+  function insertRule() {
+    if (!view) return;
+    const line = view.state.doc.lineAt(view.state.selection.main.head);
+    const ins = (line.text.trim() ? '\n\n' : '') + '---\n';
+    view.dispatch({ changes: { from: line.to, insert: ins }, selection: { anchor: line.to + ins.length } });
+    view.focus();
+  }
+  // pressing Enter inside a list/quote continues it (empty item exits); makes lists feel like a word processor
+  function continueList(v) {
+    const sel = v.state.selection.main; if (!sel.empty) return false;
+    const line = v.state.doc.lineAt(sel.head);
+    const m = line.text.match(/^(\s*)(- \[[ xX]\] |[-*+] |\d+\. |> )(.*)$/);
+    if (!m) return false;
+    if (!m[3].trim()) { v.dispatch({ changes: { from: line.from, to: line.to, insert: m[1] }, selection: { anchor: line.from + m[1].length } }); return true; } // empty item → exit
+    let marker = m[2].replace(/\[[xX]\]/, '[ ]'); // new task starts unchecked
+    const num = m[2].match(/^(\d+)\. /); if (num) marker = (parseInt(num[1], 10) + 1) + '. ';
+    const ins = '\n' + m[1] + marker;
+    v.dispatch({ changes: { from: sel.head, insert: ins }, selection: { anchor: sel.head + ins.length } });
+    return true;
   }
 </script>
 
 <div class="editorwrap" bind:this={wrapEl}>
   <div class="fmtbar">
-    <button type="button" title="Heading 1" onclick={() => heading('#')}>H1</button>
-    <button type="button" title="Heading 2" onclick={() => heading('##')}>H2</button>
-    <button type="button" title="Heading 3" onclick={() => heading('###')}>H3</button>
+    <button type="button" title="Heading 1" onclick={() => setHeading('#')}>H1</button>
+    <button type="button" title="Heading 2" onclick={() => setHeading('##')}>H2</button>
+    <button type="button" title="Heading 3" onclick={() => setHeading('###')}>H3</button>
     <span class="fsep"></span>
-    <button type="button" class="fb" title="Bold ({navigator.platform.includes('Mac') ? '⌘' : 'Ctrl'}+B)" onclick={() => wrap('**')}>B</button>
-    <button type="button" class="fi" title="Italic ({navigator.platform.includes('Mac') ? '⌘' : 'Ctrl'}+I)" onclick={() => wrap('*')}>I</button>
+    <button type="button" class="fb" title="Bold  ·  {navigator.platform.includes('Mac') ? '⌘' : 'Ctrl'}+B" onclick={() => wrap('**')}>B</button>
+    <button type="button" class="fi" title="Italic  ·  {navigator.platform.includes('Mac') ? '⌘' : 'Ctrl'}+I" onclick={() => wrap('*')}>I</button>
+    <button type="button" class="fst" title="Strikethrough" onclick={() => wrap('~~')}>S</button>
     <button type="button" class="fm" title="Inline code" onclick={() => wrap('`')}>{'</>'}</button>
     <span class="fsep"></span>
     <button type="button" title="Link" onclick={link}>Link</button>
-    <button type="button" title="Bullet list" onclick={() => prefix('- ')}>List</button>
-    <button type="button" title="Quote" onclick={() => prefix('> ')}>Quote</button>
+    <span class="fsep"></span>
+    <button type="button" class="fsym" title="Bullet list" onclick={() => togglePrefix('- ')}>•</button>
+    <button type="button" class="fsym" title="Numbered list" onclick={orderedList}>1.</button>
+    <button type="button" class="fsym" title="Task list" onclick={() => togglePrefix('- [ ] ')}>☐</button>
+    <button type="button" class="fsym" title="Quote" onclick={() => togglePrefix('> ')}>❝</button>
+    <span class="fsep"></span>
+    <button type="button" class="fm" title="Code block" onclick={codeBlock}>{'{ }'}</button>
+    <button type="button" class="fsym" title="Divider" onclick={insertRule}>―</button>
   </div>
   <div class="cm-host" bind:this={el}></div>
   {#if hint}
@@ -181,7 +233,9 @@
   .fmtbar button:hover { background: var(--accent-soft); color: var(--fg-bright); }
   .fmtbar button.fb { font-weight: 700; }
   .fmtbar button.fi { font-style: italic; }
+  .fmtbar button.fst { text-decoration: line-through; }
   .fmtbar button.fm { font-family: var(--mono); font-size: 11px; }
+  .fmtbar button.fsym { font-size: 13px; min-width: 1.6em; }
   .fsep { width: 1px; height: 15px; background: var(--line); margin: 0 .35rem; }
   .cm-host { flex: 1; min-height: 0; }
   .cm-host :global(.cm-editor) { height: 100%; }

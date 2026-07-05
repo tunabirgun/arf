@@ -51,7 +51,7 @@ export function hasLinks(id, idx) {
 
 const STOP = new Set(('the a an and or of to in is are was were on for with as by at it its this that be from we you your our '
   + 'their they them not but if then than so into over under out up down about can may will would could should have has had do does '
-  + 'his her he she which who whom what when where why how all any each more most other some such no nor only own same too very s t just')
+  + 'his her he she which who whom what when where why how all any each more most other some such no nor only own same too very s t just untitled note')
   .split(/\s+/));
 
 function tokenize(text) {
@@ -114,4 +114,16 @@ export function digestPairs(notes, vecs, idx, { min = 0.14, max = 6 } = {}) {
   }
   pairs.sort((x, y) => y.s - x.s);
   return pairs.slice(0, max);
+}
+
+// The distinctive content words two notes share — the "why" behind a suggested connection,
+// so the digest can point at the overlap instead of asking you to find it yourself.
+export function sharedTerms(a, b, max = 5) {
+  if (!a || !b) return [];
+  const fa = new Map();
+  tokenize((a.title || '') + ' ' + (a.body || '')).forEach((t) => fa.set(t, (fa.get(t) || 0) + 1));
+  const sb = new Set(tokenize((b.title || '') + ' ' + (b.body || '')));
+  const shared = [...fa.keys()].filter((t) => t.length > 3 && sb.has(t));
+  shared.sort((x, y) => (fa.get(y) - fa.get(x)) || (y.length - x.length));
+  return shared.slice(0, max);
 }

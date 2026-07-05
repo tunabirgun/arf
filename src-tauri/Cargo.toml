@@ -1,6 +1,6 @@
 [package]
 name = "arf"
-version = "0.3.0"
+version = "0.3.1"
 description = "Arf — a second brain for scientists"
 authors = ["Tuna Birgün"]
 edition = "2021"
