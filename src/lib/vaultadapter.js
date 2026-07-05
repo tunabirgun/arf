@@ -89,6 +89,7 @@ function idbSet(key, val) {
 
 export class FsaBackend {
   constructor(dir) { this.dir = dir; }
+  get name() { return (this.dir && this.dir.name) || 'your folder'; }
   static async pick() { const dir = await window.showDirectoryPicker({ mode: 'readwrite' }); await idbSet('dir', dir); return new FsaBackend(dir); }
   static async reconnect() {
     const dir = await idbGet('dir'); if (!dir) return null;
@@ -143,6 +144,7 @@ export class FsaBackend {
 
 export class TauriBackend {
   constructor(root, fs) { this.root = root; this.fs = fs; }
+  get name() { return (this.root && this.root.split(/[\\/]/).filter(Boolean).pop()) || 'your folder'; }
   static async pick() {
     const { open } = await import('@tauri-apps/plugin-dialog');
     const root = await open({ directory: true, multiple: false, title: 'Choose an Arf vault folder' });

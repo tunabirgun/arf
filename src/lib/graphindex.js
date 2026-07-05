@@ -58,23 +58,27 @@ function tokenize(text) {
     .filter((w) => !STOP.has(w));
 }
 
-export function buildVectors(notes) {
+// Build the note vectors AND a vectorize() that projects arbitrary text (e.g. the
+// paragraph being typed) into the same IDF space, so it can be compared live.
+export function buildVectorizer(notes) {
   const docs = notes.map((n) => ({ id: n.id, terms: tokenize((n.title || '') + ' ' + (n.body || '')) }));
-  const df = {}; docs.forEach((d) => new Set(d.terms).forEach((t) => (df[t] = (df[t] || 0) + 1)));
+  const df = Object.create(null); docs.forEach((d) => new Set(d.terms).forEach((t) => (df[t] = (df[t] || 0) + 1)));
   const N = docs.length || 1;
-  const vecs = {};
-  docs.forEach((d) => {
-    const tf = {}; d.terms.forEach((t) => (tf[t] = (tf[t] || 0) + 1));
+  // smoothed IDF (+1) so terms shared across all notes still carry weight —
+  // otherwise a small vault scores cosine 0 and Resonance/Synthesis read empty
+  const vecOf = (terms) => {
+    const tf = {}; terms.forEach((t) => (tf[t] = (tf[t] || 0) + 1));
     const v = {}; let norm = 0;
-    // smoothed IDF (+1) so terms shared across all notes still carry weight —
-    // otherwise a small vault scores cosine 0 and Resonance/Synthesis read empty
     for (const t in tf) { const w = tf[t] * (Math.log((N + 1) / ((df[t] || 0) + 1)) + 1); v[t] = w; norm += w * w; }
     norm = Math.sqrt(norm) || 1;
     for (const t in v) v[t] /= norm;
-    vecs[d.id] = v;
-  });
-  return vecs;
+    return v;
+  };
+  const vecs = {};
+  docs.forEach((d) => (vecs[d.id] = vecOf(d.terms)));
+  return { vecs, vectorize: (text) => vecOf(tokenize(text)) };
 }
+export function buildVectors(notes) { return buildVectorizer(notes).vecs; }
 
 export function cosine(a, b) {
   if (!a || !b) return 0;

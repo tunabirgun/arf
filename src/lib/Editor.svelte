@@ -8,9 +8,13 @@
   import { syntaxHighlighting, HighlightStyle } from '@codemirror/language';
   import { tags as t } from '@lezer/highlight';
 
-  let { value = '', onchange } = $props();
-  let el;
+  let { value = '', onchange, resemble = null } = $props();
+  let el;      // the CodeMirror host
+  let wrapEl;  // the positioning context for the margin mark
   let view;
+  let hint = $state(null); // { id, title } — the note the current paragraph resembles
+  let hintTop = $state(0); // vertical position of the mark, aligned to the cursor line
+  let hintTimer;
 
   // ink-only highlighting: weight and style, never hue
   const inkHL = HighlightStyle.define([
@@ -51,13 +55,43 @@
           syntaxHighlighting(inkHL),
           theme,
           EditorView.lineWrapping,
-          EditorView.updateListener.of((u) => { if (u.docChanged && onchange && !u.transactions.some((tr) => tr.annotation(syncAnno))) onchange(u.state.doc.toString()); }),
+          EditorView.updateListener.of((u) => {
+            if (u.docChanged && onchange && !u.transactions.some((tr) => tr.annotation(syncAnno))) onchange(u.state.doc.toString());
+            if (resemble && (u.docChanged || u.selectionSet)) { clearTimeout(hintTimer); hintTimer = setTimeout(checkResemble, 500); }
+          }),
+          EditorView.domEventHandlers({ scroll() { if (hint) hint = null; return false; } }), // don't let the mark drift from its paragraph
         ],
       }),
     });
     view.focus();
   });
-  onDestroy(() => view && view.destroy());
+  onDestroy(() => { clearTimeout(hintTimer); if (view) view.destroy(); });
+
+  // the "faint mark": if the current paragraph resembles another note, show a margin mark
+  function checkResemble() {
+    if (!view || !resemble) { hint = null; return; }
+    const doc = view.state.doc;
+    const head = view.state.selection.main.head;
+    let a = doc.lineAt(head).number, b = a;
+    while (a > 1 && doc.line(a - 1).text.trim()) a--;
+    while (b < doc.lines && doc.line(b + 1).text.trim()) b++;
+    let para = ''; for (let n = a; n <= b; n++) para += doc.line(n).text + '\n';
+    const m = resemble(para);
+    if (m) {
+      const coords = view.coordsAtPos(head);
+      if (!coords) { hint = null; return; }   // can't align the mark this cycle — don't show it stale
+      const host = (wrapEl || el).getBoundingClientRect();
+      hintTop = Math.max(2, coords.top - host.top);
+      hint = m;
+    } else hint = null;
+  }
+  function placeLink() {
+    if (!view || !hint || !hint.title || hint.title.includes(']')) { hint = null; return; } // unlinkable title
+    const at = view.state.selection.main.to;  // append at the caret — never delete a live selection
+    const ins = '[[' + hint.title + ']]';
+    view.dispatch({ changes: { from: at, insert: ins }, selection: { anchor: at + ins.length } });
+    view.focus(); hint = null;
+  }
 
   // resync when the note body changes externally (e.g. an auto-added link),
   // guarded so the editor's own edits don't loop
@@ -109,7 +143,7 @@
   }
 </script>
 
-<div class="editorwrap">
+<div class="editorwrap" bind:this={wrapEl}>
   <div class="fmtbar">
     <button type="button" title="Heading 1" onclick={() => heading('#')}>H1</button>
     <button type="button" title="Heading 2" onclick={() => heading('##')}>H2</button>
@@ -124,10 +158,24 @@
     <button type="button" title="Quote" onclick={() => prefix('> ')}>Quote</button>
   </div>
   <div class="cm-host" bind:this={el}></div>
+  {#if hint}
+    {#key hint.id}
+      <button class="resemble" style="top:{hintTop}px" title="This paragraph resembles “{hint.title}”. Click to link it." onclick={placeLink} onanimationend={() => (hint = null)}>
+        <span class="rdot"></span><span class="rlabel">≈ {hint.title}</span>
+      </button>
+    {/key}
+  {/if}
 </div>
 
 <style>
-  .editorwrap { height: 100%; display: flex; flex-direction: column; }
+  .editorwrap { height: 100%; display: flex; flex-direction: column; position: relative; }
+  .resemble { position: absolute; right: 0; z-index: 3; display: flex; align-items: center; gap: .35rem; background: none; border: 0; padding: .1rem; cursor: pointer; animation: resfade 5.5s ease-out forwards; }
+  .resemble:hover { animation-play-state: paused; }
+  .resemble .rdot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); flex: none; }
+  .resemble .rlabel { font-family: var(--sans); font-size: 11px; color: var(--fg-faint); opacity: 0; transition: opacity .15s; white-space: nowrap; max-width: 12em; overflow: hidden; text-overflow: ellipsis; }
+  .resemble:hover .rlabel { opacity: 1; }
+  @keyframes resfade { 0% { opacity: 0; } 8% { opacity: .9; } 65% { opacity: .8; } 100% { opacity: 0; } }
+  @media (prefers-reduced-motion: reduce) { .resemble { animation: none; opacity: .7; } }
   .fmtbar { flex: none; display: flex; align-items: center; gap: 1px; flex-wrap: wrap; padding: 0 0 .5rem 0; margin-bottom: .5rem; border-bottom: 1px solid var(--line); }
   .fmtbar button { font-family: var(--sans); font-size: 12px; color: var(--fg-muted); background: none; border: 0; border-radius: 5px; padding: .28rem .5rem; cursor: pointer; line-height: 1; }
   .fmtbar button:hover { background: var(--accent-soft); color: var(--fg-bright); }

@@ -54,8 +54,11 @@
 .mini { font-family: var(--sans); font-size: 10.5px; color: var(--fg-faint); background: none; border: 1px solid var(--line); border-radius: 4px; padding: .12rem .4rem; cursor: pointer; }
 .mini:hover { border-color: var(--accent); color: var(--fg-bright); }
 .vaultbar { display: flex; align-items: center; gap: .4rem; padding: .2rem .3rem .55rem; margin-bottom: .35rem; border-bottom: 1px solid var(--line); font-family: var(--sans); }
-.vlabel { font-size: 11px; color: var(--fg-faint); }
+.vlabel { font-size: 11px; color: var(--fg-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 15em; }
 .vlabel.on { color: var(--accent); }
+.vlabel .syncdot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); margin-right: .4rem; vertical-align: middle; animation: syncpulse 2.4s ease-in-out infinite; }
+@keyframes syncpulse { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }
+@media (prefers-reduced-motion: reduce) { .vlabel .syncdot { animation: none; } }
 .vbtn { font-size: 10.5px; color: var(--accent); background: none; border: 0; cursor: pointer; margin-left: auto; padding: 0; }
 .vbtn:hover { text-decoration: underline; }
 .verr { color: #b04a4a; font-size: 12px; }

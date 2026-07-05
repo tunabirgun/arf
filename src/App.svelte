@@ -1,7 +1,7 @@
 <script>
   import { loadNotes, saveNotes, newNote, toMarkdown, loadFolders, saveFolders, corruptBackupKey } from './lib/vault.js';
   import { buildFolderRows, folderList } from './lib/folders.js';
-  import { buildIndex, buildVectors, related, hasLinks, digestPairs } from './lib/graphindex.js';
+  import { buildIndex, buildVectorizer, related, hasLinks, digestPairs, cosine } from './lib/graphindex.js';
   import { renderMarkdown, setLinkResolver, setCiteResolver } from './lib/markdown.js';
   import { loadRefs, saveRefs } from './lib/references.js';
   import { initEmbedder, embedNotes, cosine as mlCosine } from './lib/ml.js';
@@ -12,7 +12,7 @@
 
   const IS_MAC = /Mac|iPhone|iPad|iPod/.test((navigator.platform || '') + ' ' + (navigator.userAgent || ''));
   const MOD = IS_MAC ? '⌘' : 'Ctrl';
-  const APP_VERSION = '0.1.2';
+  const APP_VERSION = '0.2.0';
 
   let notes = $state(loadNotes());
   let refs = $state(loadRefs());        // shared reference library (also used by [@citekey] citations)
@@ -22,7 +22,8 @@
   let theme = $state(document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light');
   let view = $state('notes');           // 'notes' | 'library'
   let tagFilter = $state(null);
-  let vecs = $state(buildVectors(notes));  // TF-IDF fallback vectors (seeded, then debounced-recomputed)
+  let vectorizer = buildVectorizer(notes);  // { vecs, vectorize } — TF-IDF, refreshed on the debounce
+  let vecs = $state(vectorizer.vecs);       // seeded so Resonance is never blank on load
   let mlEnabled = $state((() => { try { return localStorage.getItem('arf-ml') === '1'; } catch (e) { return false; } })());
   let mlStatus = $state('off');   // off | loading | ready | error
   let mlPct = $state(0);
@@ -30,6 +31,8 @@
   let vaultBackend = $state(null); // when set, notes are real Markdown files on disk
   let vaultBusy = $state(false);
   let vaultErr = $state(false);
+  let lastSync = $state(0);         // timestamp of the last successful folder sync
+  let syncing = false;              // guard so polls don't overlap
   let dirty = new Set();           // note ids changed since the last file flush
   let reconnected = false;
   let leftW = $state(loadNum('arf-leftw', 220));   // resizable sidebar widths
@@ -106,7 +109,7 @@
   $effect(() => {
     sig;
     clearTimeout(vecTimer);
-    vecTimer = setTimeout(() => { vecs = buildVectors(notes); }, 350);
+    vecTimer = setTimeout(() => { vectorizer = buildVectorizer(notes); vecs = vectorizer.vecs; }, 350);
     return () => clearTimeout(vecTimer);
   });
 
@@ -147,8 +150,15 @@
   function markDirty(id) { if (vaultBackend && id) dirty.add(id); }
   async function flushVault() {
     if (!vaultBackend || !dirty.size) return;
-    const ids = [...dirty]; dirty.clear();
-    for (const id of ids) { const n = notes.find((x) => x.id === id); if (n) { try { await vaultBackend.saveNote(n); vaultErr = false; } catch (e) { vaultErr = true; } } }
+    const ids = [...dirty];
+    let failed = false;
+    for (const id of ids) {
+      const n = notes.find((x) => x.id === id);
+      if (!n) { dirty.delete(id); continue; }
+      // only drop from the retry queue on a confirmed write; a failed write stays dirty for the next tick
+      try { await vaultBackend.saveNote(n); dirty.delete(id); } catch (e) { failed = true; }
+    }
+    vaultErr = failed;
   }
   async function connectFolder() {
     if (vaultBusy || vaultBackend) return; vaultBusy = true;
@@ -166,17 +176,77 @@
       }
     } catch (e) {} finally { vaultBusy = false; }
   }
-  // union by id, keeping the newer copy of each note — never blindly replace the array
+  // union by id, keeping the newer copy of each note — never blindly replace the array.
+  // On an equal timestamp with a different body, prefer the incoming copy: local edits always
+  // bump `updated`, so a same-timestamp difference means an external hand-edit we must not miss.
   function mergeByUpdated(base, incoming) {
     const m = new Map(); for (const n of base) m.set(n.id, n);
-    for (const n of incoming) { const ex = m.get(n.id); if (!ex || (n.updated || '') > (ex.updated || '')) m.set(n.id, n); }
+    for (const n of incoming) {
+      const ex = m.get(n.id);
+      const newer = !ex || (n.updated || '') > (ex.updated || '');
+      const sameTimeDiffBody = ex && (n.updated || '') === (ex.updated || '') && (n.body || '') !== (ex.body || '');
+      if (newer || sameTimeDiffBody) m.set(n.id, n);
+    }
     return [...m.values()];
   }
   function adopt(list) { notes = list; if (!list.some((n) => n.id === currentId)) currentId = list[0]?.id ?? null; }
-  async function disconnectFolder() { await flushVault(); vaultBackend = null; dirty.clear(); }
+  async function disconnectFolder() { await flushVault(); vaultBackend = null; dirty.clear(); lastSync = 0; }
+
+  // continuous two-way sync: push local edits out, pull external ones in, honour deletions.
+  // Runs on a short interval and whenever the app regains focus, so a folder kept in
+  // Dropbox / iCloud / Syncthing / Git stays in step across devices with no user action.
+  let _conflicts = new Set(); // remote versions already stashed, so we don't re-copy every tick
+  async function syncFromFolder() {
+    if (!vaultBackend || syncing || vaultBusy) return;
+    syncing = true;
+    try {
+      await flushVault();                                   // 1) push local edits to the folder
+      const disk = await vaultBackend.loadAll();            // 2) read the folder's current state
+      const diskIds = new Set(disk.map((n) => n.id));
+      const protectedId = mode === 'write' && current ? currentId : null;
+      // 3) honour deletions from another device: a note that had a file, is gone from a non-empty
+      //    folder, has no unsaved edit, and isn't the note open for editing → drop it.
+      const kept = disk.length ? notes.filter((n) => !n._path || diskIds.has(n.id) || dirty.has(n.id) || n.id === protectedId) : notes;
+      // 4) if the note being edited also changed on another device, keep that remote version as a
+      //    conflict copy instead of silently losing it under the local edit (once per remote version).
+      const extra = [];
+      if (protectedId) {
+        const remote = disk.find((n) => n.id === protectedId);
+        const localCur = notes.find((n) => n.id === protectedId);
+        const key = remote && protectedId + '@' + (remote.updated || '');
+        if (remote && localCur && (remote.body || '') !== (localCur.body || '') && (remote.updated || '') >= (localCur.updated || '') && !_conflicts.has(key)) {
+          _conflicts.add(key);
+          const cid = 'conflict_' + Date.now().toString(36);
+          extra.push({ ...remote, id: cid, title: (remote.title || 'Note') + ' (conflict copy)', _path: undefined });
+          dirty.add(cid);
+        }
+      }
+      const merged = mergeByUpdated(kept, protectedId ? disk.filter((n) => n.id !== protectedId) : disk).concat(extra);
+      if (syncChanged(notes, merged)) {
+        const prevId = currentId;
+        adopt(merged);
+        if (currentId !== prevId && mode === 'write') mode = 'read';   // never leave the cursor on a note that was swapped out
+        folders = [...new Set([...folders, ...merged.map((n) => n.folder).filter(Boolean)])];
+      }
+      lastSync = Date.now();
+    } catch (e) { /* transient (permission prompt, mid-sync file swap) — next tick retries */ } finally { syncing = false; }
+  }
+  function syncChanged(a, b) {
+    if (a.length !== b.length) return true;
+    const sig = (arr) => arr.map((n) => n.id + ':' + (n.updated || '')).sort().join('|');
+    return sig(a) !== sig(b);
+  }
+  $effect(() => {
+    if (!vaultBackend) return;
+    const iv = setInterval(syncFromFolder, 4000);
+    const pull = () => { if (!document.hidden) syncFromFolder(); };
+    window.addEventListener('focus', pull);
+    document.addEventListener('visibilitychange', pull);
+    return () => { clearInterval(iv); window.removeEventListener('focus', pull); document.removeEventListener('visibilitychange', pull); };
+  });
 
   // --- whole-workspace backup: one portable .arf file (notes + folders + references) ---
-  let fileInput;
+  let fileInput = $state();
   let importMsg = $state('');
   function exportWorkspace() {
     const data = { arf: 1, app: 'Arf', version: APP_VERSION, exported: new Date().toISOString(), notes, folders, refs };
@@ -208,6 +278,7 @@
         const b = await reconnectVault(); if (!b) return;
         const ex = await b.loadAll();
         if (ex.length) { adopt(mergeByUpdated(ex, notes)); folders = [...new Set(notes.map((n) => n.folder).filter(Boolean))]; }
+        else { for (const n of notes) { try { await b.saveNote(n); } catch (e) {} } } // reconnected to an emptied folder → re-seed it
         vaultBackend = b;
       } catch (e) {}
     })();
@@ -301,6 +372,27 @@
   function openReference(key) {
     refJump = { key };
     if (isMobile) mtab = 'library'; else view = 'library';
+  }
+  // faint-mark: while writing, does this paragraph resemble another, not-yet-linked note?
+  // Judge against the OTHER notes only — including the note being written would let its own
+  // text inflate its terms' document-frequency and collapse the similarity. Cache the
+  // per-other-notes vectorizer so this stays cheap while typing (the others don't change).
+  let _resVz = null, _resVzKey = '';
+  function resembleParagraph(text) {
+    if (!text || text.replace(/\s+/g, ' ').trim().length < 40) return null;
+    const linked = new Set([...(idx.fwd[currentId] || []), ...(idx.back[currentId] || [])]);
+    const others = notes.filter((n) => n.id !== currentId);
+    if (!others.length) return null;
+    const key = currentId + '#' + others.map((n) => n.id + n.updated).join(',');
+    if (_resVzKey !== key) { _resVz = buildVectorizer(others); _resVzKey = key; }
+    const pv = _resVz.vectorize(text);
+    let best = null;
+    for (const n of others) {
+      if (linked.has(n.id) || !_resVz.vecs[n.id] || !n.title || n.title.includes(']')) continue; // must be linkable
+      const s = cosine(pv, _resVz.vecs[n.id]);
+      if (s >= 0.13 && (!best || s > best.s)) best = { id: n.id, title: n.title, s };
+    }
+    return best;
   }
 
   // command palette
@@ -407,7 +499,7 @@
       {:else if mtab === 'notes'}
         <div class="mlist">
           <div class="vaultbar">
-            {#if vaultBackend}<span class="vlabel on">◆ Folder vault</span><button class="vbtn" onclick={disconnectFolder}>browser</button>
+            {#if vaultBackend}<span class="vlabel on" title="Auto-syncing to “{vaultBackend.name}”"><span class="syncdot"></span>Synced</span><button class="vbtn" onclick={disconnectFolder}>browser</button>
             {:else}<span class="vlabel">◆ Browser storage</span>{#if folderVaultSupported()}<button class="vbtn" onclick={connectFolder}>{vaultBusy ? '…' : (isTauri ? 'open folder…' : 'use a folder…')}</button>{/if}{/if}
           </div>
           <div class="lhrow"><span class="lh">Vault · {notes.length}</span>
@@ -506,7 +598,7 @@
       <aside class="list">
         <div class="vaultbar">
           {#if vaultBackend}
-            <span class="vlabel on" title="Your notes are Markdown files in the folder you chose">◆ Folder vault</span>
+            <span class="vlabel on" title="Auto-syncing to “{vaultBackend.name}”. Keep this folder in Dropbox, iCloud, OneDrive, or Syncthing to sync across your devices."><span class="syncdot"></span>Synced · {vaultBackend.name}</span>
             <button class="vbtn" onclick={disconnectFolder}>use browser</button>
           {:else}
             <span class="vlabel" title="Your notes are stored in this browser (still yours; export or connect a folder any time)">◆ Browser storage</span>
@@ -589,7 +681,7 @@
             </div>
           </div>
           {#if mode === 'write'}
-            {#key currentId}<div class="editor"><Editor value={current.body} onchange={editBody} /></div>{/key}
+            {#key currentId}<div class="editor"><Editor value={current.body} onchange={editBody} resemble={resembleParagraph} /></div>{/key}
           {:else}
             <div class="read" onclick={readClick}>{@html readHTML}</div>
           {/if}
@@ -714,10 +806,11 @@
       </div>
 
       <div class="setlabel">Your data</div>
-      <div class="setrow"><span class="sk">Storage <span class="sh">{vaultBackend ? 'a folder of Markdown files on your disk' : 'this browser (still yours — connect a folder any time)'}</span></span>
+      <div class="setrow"><span class="sk">Storage <span class="sh">{vaultBackend ? 'Auto-syncing to “' + vaultBackend.name + '” — Markdown files on your disk' : 'This browser (still yours — connect a folder any time)'}</span></span>
         {#if vaultBackend}<button class="setbtn" onclick={disconnectFolder}>Use browser</button>
         {:else if folderVaultSupported()}<button class="setbtn" onclick={connectFolder}>{vaultBusy ? 'Opening…' : (isTauri ? 'Open folder…' : 'Choose a folder…')}</button>{/if}
       </div>
+      <div class="setrow"><span class="sk">Sync across devices <span class="sh">Put the folder in Dropbox, iCloud Drive, OneDrive, or Syncthing, then open the same folder on your other devices. Arf keeps it in step automatically — desktop and web, both ways.</span></span></div>
       <div class="setrow"><span class="sk">Workspace backup <span class="sh">{importMsg || 'one .arf file with every note, folder, and reference'}</span></span>
         <span class="setbtnrow"><button class="setbtn" onclick={exportWorkspace}>Export .arf</button><button class="setbtn" onclick={() => fileInput.click()}>Import…</button></span>
       </div>
