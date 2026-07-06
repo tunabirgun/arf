@@ -5,8 +5,12 @@
   "windows": ["main"],
   "permissions": [
     "core:default",
+    "core:window:allow-set-title",
     "opener:default",
     "dialog:default",
+    "window-state:default",
+    "fs:allow-appconfig-read",
+    "fs:allow-appconfig-write",
     "fs:allow-read-text-file",
     "fs:allow-write-text-file",
     "fs:allow-read-dir",

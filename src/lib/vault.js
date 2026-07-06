@@ -1,11 +1,8 @@
-// Phase 0 vault — an in-browser stand-in for the real plain-file vault.
-//
-// In the shipping app this module is the `core-vault` package behind a
-// VaultAdapter: notes are Markdown files with YAML frontmatter on the real
-// filesystem (Tauri) or the File System Access API / OPFS (web). Here it is
-// backed by localStorage so the Phase 0 shell runs with no toolchain beyond
-// Node. The note SHAPE — a stable ULID id, title, tags, timestamps, body — is
-// the real one, so the UI built on top ports unchanged.
+// The local cache layer. The vault itself is the folder of Markdown files on
+// disk (see vaultadapter.js); this localStorage copy keeps the last known notes
+// available instantly at launch and survives a hard quit that beat the file
+// flush. It also seeds the first-run sample notes, which migrate into the
+// user's chosen folder on connect.
 
 const KEY = 'arf-vault-v0';
 

@@ -62,8 +62,6 @@ jobs:
             - **Windows**: SmartScreen may warn — click **More info → Run anyway**.
             - **macOS**: right-click the app → **Open** the first time (Gatekeeper).
             - **Linux**: the `.AppImage` is portable; `chmod +x` and run.
-
-            The web version (no install) lives at https://tunabirgun.github.io/arf-app/
           releaseDraft: false
           prerelease: false
           args: ${{ matrix.args }}

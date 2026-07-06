@@ -7,8 +7,7 @@ A local-first second brain for scientists and coders. Write notes on papers, boo
 ![Desktop: Windows · macOS · Linux](https://img.shields.io/badge/desktop-Windows%20%C2%B7%20macOS%20%C2%B7%20Linux-555)
 ![On-device ML](https://img.shields.io/badge/ML-on--device-555)
 
-- **Use it now (web):** <https://tunabirgun.github.io/arf-app/> — no install, no account
-- **Download for desktop:** <https://github.com/tunabirgun/arf/releases/latest> — Windows, macOS, Linux
+- **Download:** <https://github.com/tunabirgun/arf/releases/latest> — Windows, macOS, Linux
 - **Documentation:** <https://tunabirgun.github.io/arf-docs/>
 
 ![Arf — a note with rendered math, wikilinks, a citation, backlinks, resonance, and the local graph](screenshot.png)
@@ -27,33 +26,24 @@ It is named after the mathematician Cahit Arf, whose Arf invariant reduces a com
 - **Discover** with the on-device model. **Resonance** surfaces notes similar to the one you are reading; the weekly **Synthesis** digest points out pairs that belong together but were never linked, and shows the concepts they share so you can see the connection at a glance. A **faint mark** appears in the margin while you write when a paragraph resembles an older note.
 - **Read your language.** The default embedding model reads English; Settings offers a multilingual model (~120 MB) that understands 50+ languages, including Turkish, so suggestions work whatever language you think in.
 - **Cite** from the **Library**. References are fetched live from Crossref and Open Library by DOI, ISBN, or arXiv ID, cited in notes with `[@citekey]` that jump to the reference, and exported to BibTeX, RIS, CSL-JSON, formatted styles (APA, Nature), and Zenodo.
-- **Own your data.** Your notes are plain Markdown files in a folder you choose. Keep that folder in Dropbox, iCloud, OneDrive, or Syncthing and Arf syncs it continuously across your devices — desktop and web, both ways. Back up the whole workspace as one `.arf` file, and export any note to Markdown, HTML, or PDF.
+- **Own your data.** Your notes are plain Markdown files in a folder you choose at first launch. Keep that folder in Dropbox, iCloud, OneDrive, Syncthing, or a Git repo and Arf keeps it in step continuously, both ways. Back up the whole workspace as one `.arf` file, and export any note to Markdown, HTML, or PDF.
 - **Make it yours.** Light and dark themes on a warm ink-on-paper palette, an adjustable view zoom, a distraction-free Focus mode, resizable sidebars, and a `Ctrl/⌘+K` command palette.
 
 ## Private by construction
 
 The model runs on your device — through the GPU where there is one, the CPU otherwise. Your notes are never uploaded, there is no account, and there is no server that could read them. Only the public model file (~23 MB, or ~120 MB for the multilingual option) is fetched once and cached. Privacy here is not a policy you have to trust; it is the architecture.
 
-## Run from source
+## Build from source
 
-Requires [Node.js](https://nodejs.org) 18+.
+Arf is a [Tauri 2](https://tauri.app) desktop app. You need [Node.js](https://nodejs.org) 18+, the [Rust toolchain](https://rustup.rs), and, on Windows, the MSVC C++ build tools.
 
 ```bash
 npm install
-npm run dev        # dev server at http://localhost:5175
-npm run build      # production web build → dist/
-npm run preview
+npm run tauri dev      # run the desktop app against the Vite dev server
+npm run tauri build    # installers → src-tauri/target/release/bundle/
 ```
 
-### Build the desktop app
-
-The desktop app is built with [Tauri](https://tauri.app). You need the [Rust toolchain](https://rustup.rs) and, on Windows, the MSVC C++ build tools.
-
-```bash
-npm run tauri build
-```
-
-Installers are written to `src-tauri/target/release/bundle/`. Pushing a `v*` tag builds Windows, macOS, and Linux installers automatically and attaches them to a GitHub Release.
+Pushing a `v*` tag builds Windows, macOS, and Linux installers automatically and attaches them to a GitHub Release.
 
 ## Built with
 

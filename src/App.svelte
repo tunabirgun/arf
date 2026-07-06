@@ -6,14 +6,14 @@
   import { loadRefs, saveRefs } from './lib/references.js';
   import { initEmbedder, embedNotes, cosine as mlCosine, resetEmbedder } from './lib/ml.js';
   const ML_MODELS = { en: 'Xenova/all-MiniLM-L6-v2', multi: 'Xenova/paraphrase-multilingual-MiniLM-L12-v2' };
-  import { connectVault, reconnectVault, folderVaultSupported, isTauri } from './lib/vaultadapter.js';
+  import { connectVault, reconnectVault, lastKnownVaultPath, isTauri } from './lib/vaultadapter.js';
   import Editor from './lib/Editor.svelte';
   import GraphView from './lib/GraphView.svelte';
   import Library from './lib/Library.svelte';
 
   const IS_MAC = /Mac|iPhone|iPad|iPod/.test((navigator.platform || '') + ' ' + (navigator.userAgent || ''));
   const MOD = IS_MAC ? '⌘' : 'Ctrl';
-  const APP_VERSION = '0.3.1';
+  const APP_VERSION = '0.5.0';
 
   let notes = $state(loadNotes());
   let refs = $state(loadRefs());        // shared reference library (also used by [@citekey] citations)
@@ -30,9 +30,11 @@
   let mlStatus = $state('off');   // off | loading | ready | error
   let mlPct = $state(0);
   let mlVecs = $state({});         // MiniLM embeddings (id -> 384-dim), when ready
-  let vaultBackend = $state(null); // when set, notes are real Markdown files on disk
+  let vaultBackend = $state(null); // the folder of Markdown files backing this vault
   let vaultBusy = $state(false);
   let vaultErr = $state(false);
+  let needVault = $state(false);   // Tauri: no vault chosen yet (first run) — show the welcome gate
+  let vaultMissing = $state(null); // Tauri: a stored vault path that couldn't be found on launch
   let lastSync = $state(0);         // timestamp of the last successful folder sync
   let syncing = false;              // guard so polls don't overlap
   let dirty = new Set();           // note ids changed since the last file flush
@@ -47,10 +49,6 @@
   let digestOpen = $state(false);
   let graphFull = $state(false);
   let focus = $state(false);
-  let drawer = $state(false); // (legacy, unused on mobile now)
-  let isMobile = $state(typeof matchMedia !== 'undefined' && matchMedia('(max-width: 760px)').matches);
-  let mtab = $state('notes');     // mobile bottom tab: notes | search | graph | library
-  let mNoteOpen = $state(false);  // mobile: viewing a note vs the list
   let query = $state('');
   let folders = $state(loadFolders());
   let collapsed = $state({});
@@ -63,18 +61,6 @@
   let deOpts = $state({ title: true, numberHeadings: false, keepHeadings: true, fitImages: true });
   const PAGE_SIZES = ['A4', 'Letter', 'Legal', 'Tabloid', 'A3', 'A5', 'A6', 'B5', 'Executive'];
   const PAGE_CSS = { A4: 'A4', A3: 'A3', A5: 'A5', A6: 'A6', B5: 'B5', Letter: 'letter', Legal: 'legal', Tabloid: 'ledger', Executive: '7.25in 10.5in' };
-
-  // track viewport so we render the mobile app vs the desktop panes
-  $effect(() => {
-    const mq = matchMedia('(max-width: 760px)');
-    const u = () => {
-      const was = isMobile; isMobile = mq.matches;
-      if (isMobile && !was) { mtab = view === 'library' ? 'library' : 'notes'; paletteOpen = false; graphFull = false; }
-      else if (!isMobile && was) { view = mtab === 'library' ? 'library' : 'notes'; }
-    };
-    mq.addEventListener('change', u);
-    return () => mq.removeEventListener('change', u);
-  });
 
   const idx = $derived(buildIndex(notes));
   const current = $derived(notes.find((n) => n.id === currentId) ?? null);
@@ -89,7 +75,20 @@
   const allTags = $derived(Object.keys(idx.tagIndex).sort());
   const listNotes = $derived(tagFilter ? notes.filter((n) => (idx.noteTags[n.id] || []).includes(tagFilter)) : notes);
   const folderRows = $derived(buildFolderRows(folders, notes, collapsed));
-  $effect(() => { saveRefs(refs); }); // persist the reference library
+  // the reference library lives at the vault root as references.json and travels with the folder;
+  // localStorage stays as the cache. Reads happen at connect, writes on every change (debounced).
+  let refsTimer;
+  $effect(() => { saveRefs(refs); clearTimeout(refsTimer); refsTimer = setTimeout(refsToVault, 500); return () => clearTimeout(refsTimer); });
+  async function refsToVault() { if (vaultBackend) try { await vaultBackend.writeAux('references.json', JSON.stringify(refs, null, 2)); } catch (e) {} }
+  async function refsFromVault(b) {
+    try {
+      const raw = await b.readAux('references.json');
+      if (raw) {
+        const disk = JSON.parse(raw);
+        if (Array.isArray(disk)) { const m = new Map(refs.map((r) => [r.id, r])); for (const r of disk) m.set(r.id, r); refs = [...m.values()]; }
+      }
+    } catch (e) {}
+  }
   const allFolders = $derived(folderList(folders, notes));
 
   const resonance = $derived.by(() => {
@@ -170,21 +169,40 @@
     }
     vaultErr = failed;
   }
+  // choose a vault folder — the first run's connect and the later "switch vault…" are the
+  // same flow: current notes merge into the picked folder, so nothing is ever left behind
   async function connectFolder() {
-    if (vaultBusy || vaultBackend) return; vaultBusy = true;
+    if (vaultBusy) return; vaultBusy = true;
     try {
+      if (vaultBackend) await flushVault(); // switching: finish pending writes to the old folder first
       const b = await connectVault();
       if (b) {
         flushSave();
         const existing = await b.loadAll();
         // union so neither the folder's notes nor the current ones are lost
         const merged = existing.length ? mergeByUpdated(existing, notes) : notes.slice();
-        for (const n of merged) { try { await b.saveNote(n); } catch (e) { vaultErr = true; } } // folder becomes the full vault
+        // a note's _path is only meaningful if THIS folder has that file for that id;
+        // anything else (old vault, stale cache) must be cleared or saves could misfire
+        const diskPathById = new Map(existing.map((n) => [n.id, n._path]));
+        for (const n of merged) {
+          if (n._path && diskPathById.get(n.id) !== n._path) n._path = undefined;
+          try { await b.saveNote(n); } catch (e) { vaultErr = true; dirty.add(n.id); } // a failed write stays dirty and retries on the next sync tick
+        }
         adopt(merged);
-        folders = [...new Set(merged.map((n) => n.folder).filter(Boolean))]; saveFolders(folders);
+        folders = [...new Set([...folders, ...merged.map((n) => n.folder).filter(Boolean)])]; saveFolders(folders);
         vaultBackend = b;
+        needVault = false; vaultMissing = null;
+        setWinTitle(b.name);
+        refsFromVault(b);
       }
     } catch (e) {} finally { vaultBusy = false; }
+  }
+  async function setWinTitle(name) {
+    if (!isTauri) return;
+    try {
+      const { getCurrentWindow } = await import('@tauri-apps/api/window');
+      await getCurrentWindow().setTitle(name ? 'Arf — ' + name : 'Arf');
+    } catch (e) {}
   }
   // union by id, keeping the newer copy of each note — never blindly replace the array.
   // On an equal timestamp with a different body, prefer the incoming copy: local edits always
@@ -200,7 +218,6 @@
     return [...m.values()];
   }
   function adopt(list) { notes = list; if (!list.some((n) => n.id === currentId)) currentId = list[0]?.id ?? null; }
-  async function disconnectFolder() { await flushVault(); vaultBackend = null; lastSync = 0; } // keep any failed ids in dirty; don't discard unsaved edits
 
   // continuous two-way sync: push local edits out, pull external ones in, honour deletions.
   // Runs on a short interval and whenever the app regains focus, so a folder kept in
@@ -258,14 +275,9 @@
   // --- whole-workspace backup: one portable .arf file (notes + folders + references) ---
   let fileInput = $state();
   let importMsg = $state('');
-  function exportWorkspace() {
+  async function exportWorkspace() {
     const data = { arf: 1, app: 'Arf', version: APP_VERSION, exported: new Date().toISOString(), notes, folders, refs };
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url; a.download = 'arf-workspace-' + new Date().toISOString().slice(0, 10) + '.arf';
-    document.body.appendChild(a); a.click(); a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 1500);
+    await saveText('arf-workspace-' + new Date().toISOString().slice(0, 10) + '.arf', 'application/json', JSON.stringify(data, null, 2));
   }
   async function importWorkspace(e) {
     const file = e.currentTarget.files && e.currentTarget.files[0];
@@ -281,33 +293,40 @@
       importMsg = '✓ Imported ' + data.notes.length + ' notes.';
     } catch (err) { importMsg = '⚠ ' + (err.message || 'Could not read that file'); }
   }
+  // launch: reopen the vault folder this app is bound to. First run (no stored path) or a
+  // path that can't be found → the welcome gate. The localStorage cache keeps the last
+  // known notes visible instantly either way, and everything merges once a folder is open.
   $effect(() => {
     if (reconnected) return; reconnected = true;
     (async () => {
       try {
-        const b = await reconnectVault(); if (!b) return;
+        const b = await reconnectVault();
+        if (!b) {
+          if (isTauri) { vaultMissing = await lastKnownVaultPath(); needVault = true; }
+          return;
+        }
         const ex = await b.loadAll();
         vaultBackend = b;
+        setWinTitle(b.name);
         if (ex.length) {
-          const diskIds = new Set(ex.map((n) => n.id));
+          const diskUpdated = new Map(ex.map((n) => [n.id, n.updated || '']));
           adopt(mergeByUpdated(ex, notes));
-          for (const n of notes) if (!diskIds.has(n.id)) dirty.add(n.id); // browser-only notes must reach the folder
+          // notes only in the cache, or newer there (e.g. a hard quit beat the file flush), must reach the folder
+          for (const n of notes) { const d = diskUpdated.get(n.id); if (d === undefined || (n.updated || '') > d) dirty.add(n.id); }
           folders = [...new Set(notes.map((n) => n.folder).filter(Boolean))];
           flushVault();
         } else { for (const n of notes) { try { await b.saveNote(n); } catch (e) {} } } // reconnected to an emptied folder → re-seed it
+        refsFromVault(b);
       } catch (e) {}
     })();
   });
-  // converge across tabs: pick up another tab's writes instead of clobbering them
   $effect(() => {
-    const h = (e) => { if (e.key === 'arf-vault-v0' && e.newValue) { try { adopt(mergeByUpdated(notes, JSON.parse(e.newValue))); } catch (x) {} } };
-    window.addEventListener('storage', h);
     window.addEventListener('beforeunload', flushSave);
-    return () => { window.removeEventListener('storage', h); window.removeEventListener('beforeunload', flushSave); };
+    return () => window.removeEventListener('beforeunload', flushSave);
   });
   function editBody(v) { const n = notes.find((x) => x.id === currentId); if (!n) return; n.body = v; n.updated = new Date().toISOString(); markDirty(currentId); persist(); }
   function editTitle(v) { const n = notes.find((x) => x.id === currentId); if (!n) return; n.title = v; n.updated = new Date().toISOString(); markDirty(currentId); persist(); }
-  function create() { const n = newNote(activeFolder); notes.unshift(n); currentId = n.id; mode = 'write'; view = 'notes'; markDirty(n.id); persist(); if (isMobile) { mtab = 'notes'; mNoteOpen = true; } }
+  function create() { const n = newNote(activeFolder); notes.unshift(n); currentId = n.id; mode = 'write'; view = 'notes'; markDirty(n.id); persist(); }
   function addFolder() {
     const raw = (newFolderName || '').trim(); newFolderName = null;
     if (!raw) return;
@@ -364,7 +383,7 @@
     else printHTML(exportHTML(n));
     docExport = false;
   }
-  function open(id) { if (!idx.byId[id]) return; flushSave(); currentId = id; mode = 'read'; view = 'notes'; paletteOpen = false; graphFull = false; drawer = false; if (isMobile) { mtab = 'notes'; mNoteOpen = true; } }
+  function open(id) { if (!idx.byId[id]) return; flushSave(); currentId = id; mode = 'read'; view = 'notes'; paletteOpen = false; graphFull = false; }
   function firstLine(b) { const l = (b || '').split('\n').find((x) => x.trim()); return l ? l.replace(/[#>*`\[\]]/g, '').slice(0, 52) : 'Empty note'; }
   function invDot(id) { return hasLinks(id, idx) ? '●' : '○'; }
   function dotTitle(id) { return hasLinks(id, idx) ? 'Linked to other notes' : 'Orphan — not linked to any note yet'; }
@@ -406,7 +425,7 @@
   // a [@citekey] citation opens the Library on that reference's detail
   function openReference(key) {
     refJump = { key };
-    if (isMobile) mtab = 'library'; else view = 'library';
+    view = 'library';
   }
   // faint-mark: while writing, does this paragraph resemble another, not-yet-linked note?
   // Judge against the OTHER notes only — including the note being written would let its own
@@ -467,135 +486,33 @@
 
   function onKey(e) {
     const mod = e.metaKey || e.ctrlKey;
-    if (mod && e.key.toLowerCase() === 'k') { if (isMobile) return; e.preventDefault(); paletteOpen = true; query = ''; }
+    if (mod && e.key.toLowerCase() === 'k') { e.preventDefault(); paletteOpen = true; query = ''; }
     else if (mod && e.key.toLowerCase() === 'e') { e.preventDefault(); if (view === 'notes') mode = mode === 'read' ? 'write' : 'read'; }
-    else if (mod && e.key.toLowerCase() === 'g') { if (isMobile) return; e.preventDefault(); graphFull = !graphFull; }
+    else if (mod && e.key.toLowerCase() === 'g') { e.preventDefault(); graphFull = !graphFull; }
     else if (e.key === 'Escape') { paletteOpen = false; digestOpen = false; graphFull = false; docExport = false; settingsOpen = false; focus = false; }
   }
 </script>
 
 <svelte:window onkeydown={onKey} />
 
-{#if isMobile}
-  <div class="mapp">
-    <header class="mtop">
-      {#if mtab === 'notes' && mNoteOpen && current}
-        <button class="micon back" aria-label="Back to notes" onclick={() => (mNoteOpen = false)}>‹</button>
-        <div class="mseg">
-          <button class:on={mode === 'read'} onclick={() => (mode = 'read')}>Read</button>
-          <button class:on={mode === 'write'} onclick={() => (mode = 'write')}>Write</button>
-        </div>
-        <span class="msp"></span>
-        <button class="micon" aria-label="Export note" onclick={() => (docExport = true)}>⇩</button>
-      {:else if mtab === 'search'}
-        <span class="mmag">⌕</span>
-        <!-- svelte-ignore a11y_autofocus -->
-        <input class="msearchin" autofocus placeholder="Search notes, tags, ideas…" bind:value={query} />
-        {#if query}<button class="micon" aria-label="Clear" onclick={() => (query = '')}>✕</button>{/if}
+{#if needVault}
+  <div class="welcome">
+    <div class="wcard">
+      <div class="wwm">Arf<span class="dot">.</span></div>
+      {#if vaultMissing}
+        <p class="wp">Your vault couldn’t be found at <span class="wpath">{vaultMissing}</span>. The folder may have been moved, renamed, or be on a drive that isn’t connected right now.</p>
+        <button class="wbtn" onclick={connectFolder}>{vaultBusy ? 'Opening…' : 'Locate the vault folder…'}</button>
+        <p class="wsub">Or reconnect the drive and restart Arf. Your latest notes are kept in a local cache and will merge into whichever folder you choose.</p>
       {:else}
-        <span class="mwm">{mtab === 'graph' ? 'Graph' : mtab === 'library' ? 'Library' : 'Arf'}{#if mtab === 'notes'}<span class="dot">.</span>{/if}</span>
-        <span class="msp"></span>
-        {#if mtab === 'notes'}<button class="micon" aria-label="Weekly synthesis" onclick={() => (digestOpen = true)}>◇</button>{/if}
-        <button class="micon" aria-label="Light / dark" onclick={toggleTheme}>◑</button>
-        <button class="micon" aria-label="Settings" onclick={() => (settingsOpen = true)}>⚙</button>
+        <p class="wp">Your notes live in a folder of plain Markdown files on your disk — yours to read, move, back up, and keep. Choose an empty folder to start a new vault, or point Arf at an existing one.</p>
+        <button class="wbtn" onclick={connectFolder}>{vaultBusy ? 'Opening…' : 'Choose your vault folder…'}</button>
+        <p class="wsub">A new vault starts with a few sample notes that show links, math, and the graph. Everything stays on this machine.</p>
       {/if}
-    </header>
-
-    {#if saveError}<div class="savebanner">⚠ Couldn’t save — storage may be full. Export this note now.</div>{/if}
-    {#if vaultCorrupt}<div class="savebanner">⚠ Saved notes couldn’t be read; a backup was kept. <button class="bnrbtn" onclick={() => (vaultCorrupt = false)}>Dismiss</button></div>{/if}
-
-    <main class="mbody" class:nopad={mtab === 'graph'}>
-      {#if mtab === 'notes' && mNoteOpen && current}
-        <div class="mnote">
-          <div class="mcrumbs">
-            <select class="fmove" value={current.folder || ''} onchange={(e) => moveNote(current.id, e.currentTarget.value)}>
-              <option value="">No folder</option>{#each allFolders as f}<option value={f}>{f}</option>{/each}
-            </select>
-            {#if (current.tags || []).length}<span class="ctags"> · #{current.tags.join('  #')}</span>{/if}
-            {#if saved}<span class="saved">saved</span>{/if}
-          </div>
-          {#if mode === 'write'}
-            <input class="mtitle" value={current.title} oninput={(e) => editTitle(e.currentTarget.value)} aria-label="title" />
-            {#key currentId}<div class="meditor"><Editor value={current.body} onchange={editBody} resemble={resembleParagraph} /></div>{/key}
-          {:else}
-            <h1 class="mtitle ro">{current.title}<span class="inv" class:orphan={invDot(current.id) === '○'}>{invDot(current.id)}</span></h1>
-            <div class="read mread" onclick={readClick}>{@html readHTML}</div>
-            <div class="mconn">
-              <div class="rh">Referenced in <span>{backlinks.length}</span></div>
-              {#if backlinks.length}{#each backlinks as b}<button class="ref" onclick={() => open(b.id)}>{b.title}</button>{/each}{:else}<div class="rempty">No backlinks yet.</div>{/if}
-              <div class="rh" style="margin-top:1.1rem">Resonance · {mlStatus === 'ready' ? 'MiniLM' : 'on-device'}
-                {#if mlStatus === 'off'}<button class="mltoggle" onclick={enableML}>enable AI</button>
-                {:else if mlStatus === 'loading'}<span class="mlstat">↓ {mlPct}%</span>
-                {:else if mlStatus === 'ready'}<span class="mlstat ok">✓</span>{/if}
-              </div>
-              {#if resonance.length}{#each resonance as r}<button class="ref ml" onclick={() => open(r.note.id)}><span class="sim">{r.s.toFixed(2)}</span><span class="nm">{r.note.title}</span></button>{/each}{:else}<div class="rempty">Nothing close enough yet.</div>{/if}
-              <button class="mconnbtn" onclick={() => (mtab = 'graph')}>✧&nbsp; See this note in the graph</button>
-            </div>
-          {/if}
-        </div>
-      {:else if mtab === 'notes'}
-        <div class="mlist">
-          <div class="vaultbar">
-            {#if vaultBackend}<span class="vlabel on" title="Auto-syncing to “{vaultBackend.name}”"><span class="syncdot"></span>Synced</span><button class="vbtn" onclick={disconnectFolder}>browser</button>
-            {:else}<span class="vlabel">◆ Browser storage</span>{#if folderVaultSupported()}<button class="vbtn" onclick={connectFolder}>{vaultBusy ? '…' : (isTauri ? 'open folder…' : 'use a folder…')}</button>{/if}{/if}
-          </div>
-          <div class="lhrow"><span class="lh">Vault · {notes.length}</span>
-            <button class="mini" onclick={() => (newFolderName = '')}>+ Folder</button></div>
-          {#if newFolderName !== null}
-            <!-- svelte-ignore a11y_autofocus -->
-            <input class="nfinput" autofocus placeholder={activeFolder ? 'Subfolder of' + ' ' + activeFolder : 'Folder name'} bind:value={newFolderName}
-              onkeydown={(e) => { if (e.key === 'Enter') addFolder(); else if (e.key === 'Escape') newFolderName = null; }} onblur={addFolder} />
-          {/if}
-          {#if tagFilter}
-            <button class="clearfilter" onclick={() => (tagFilter = null)}>← clear #{tagFilter}</button>
-            {#each listNotes as n (n.id)}
-              <button class="mitem" onclick={() => open(n.id)}><span class="dot2" class:orphan={invDot(n.id) === '○'}>{invDot(n.id)}</span><span class="t">{n.title || 'Untitled'}</span></button>
-            {/each}
-          {:else}
-            {#each folderRows as r}
-              {#if r.type === 'folder'}
-                <button class="mfrow" style="padding-left:{8 + r.depth * 14}px" onclick={() => { toggleFolder(r.path); activeFolder = r.path; }}>
-                  <span class="caret">{r.hasChildren ? (r.collapsed ? '▸' : '▾') : '·'}</span><span class="fn">{r.name}</span>{#if r.count}<span class="fcount">{r.count}</span>{/if}
-                </button>
-              {:else}
-                <button class="mitem" style="padding-left:{8 + r.depth * 14}px" onclick={() => open(r.note.id)}><span class="dot2" class:orphan={invDot(r.note.id) === '○'}>{invDot(r.note.id)}</span><span class="t">{r.note.title || 'Untitled'}</span></button>
-              {/if}
-            {/each}
-          {/if}
-          {#if allTags.length}
-            <div class="lh" style="margin-top:1.1rem">Tags</div>
-            <div class="tags">{#each allTags as tg}<button class="tag" class:on={tagFilter === tg} onclick={() => (tagFilter = tagFilter === tg ? null : tg)}>#{tg}</button>{/each}</div>
-          {/if}
-        </div>
-        <button class="fab" aria-label="New note" onclick={create}>＋</button>
-      {:else if mtab === 'search'}
-        <div class="msearch">
-          {#each palItems.lex as l}
-            <button class="mitem" onclick={() => open(l.id)}><span class="dot2" class:orphan={invDot(l.id) === '○'}>{invDot(l.id)}</span><span class="txt"><span class="t">{idx.byId[l.id].title}</span>{#if l.why}<span class="s">{l.why}</span>{/if}</span></button>
-          {:else}<div class="rempty" style="padding:2.5rem 1rem;text-align:center">{query ? 'No matches.' : 'Search your vault by title, tag, or text.'}</div>{/each}
-          {#if palItems.sem.length}
-            <div class="lh" style="padding:.7rem 1rem .3rem">Related · on-device</div>
-            {#each palItems.sem as s}<button class="mitem" onclick={() => open(s.id)}><span class="dot2 sem">◈</span><span class="txt"><span class="t i">{idx.byId[s.id].title}</span><span class="s">{s.s.toFixed(2)}</span></span></button>{/each}
-          {/if}
-        </div>
-      {:else if mtab === 'graph'}
-        <div class="mgraphwrap"><GraphView {notes} {idx} centerId={currentId} mode="full" onopen={open} /></div>
-      {:else if mtab === 'library'}
-        <Library {notes} {idx} onopen={open} bind:refs jumpTo={refJump} />
-      {/if}
-    </main>
-
-    <nav class="mnav">
-      <button class="mnavt" class:on={mtab === 'notes'} onclick={() => { mtab = 'notes'; mNoteOpen = false; }}><span class="ic">☰</span>Notes</button>
-      <button class="mnavt" class:on={mtab === 'search'} onclick={() => { mtab = 'search'; query = ''; }}><span class="ic">⌕</span>Search</button>
-      <button class="mnavt" class:on={mtab === 'graph'} onclick={() => (mtab = 'graph')}><span class="ic">✧</span>Graph</button>
-      <button class="mnavt" class:on={mtab === 'library'} onclick={() => (mtab = 'library')}><span class="ic">▤</span>Library</button>
-    </nav>
+    </div>
   </div>
 {:else}
-<div class="shell" class:focus={focus} class:drawer={drawer}>
+<div class="shell" class:focus={focus}>
   <header class="top">
-    <button class="menubtn" aria-label="Menu" onclick={() => (drawer = !drawer)}>☰</button>
     <button class="wm" onclick={() => (view = 'notes')}>Arf<span class="dot">.</span></button>
     <div class="viewtoggle">
       <button class:on={view === 'notes'} onclick={() => (view = 'notes')}>Notes</button>
@@ -616,13 +533,14 @@
   </header>
 
   {#if saveError}
-    <div class="savebanner">⚠ Couldn’t save — your browser storage may be full or blocked. Export this note now to avoid losing it.</div>
+    <div class="savebanner">⚠ Couldn’t save — local storage may be full or blocked. Export this note now to avoid losing it.</div>
+  {/if}
+  {#if vaultErr}
+    <div class="savebanner">⚠ A file write to your vault folder failed. Arf keeps retrying; check that the folder exists and is writable.</div>
   {/if}
   {#if vaultCorrupt}
     <div class="savebanner">⚠ Your saved notes couldn’t be read and were backed up (<span class="mono">{corruptBackupKey()}</span>). Starting with an empty vault. <button class="bnrbtn" onclick={() => (vaultCorrupt = false)}>Dismiss</button></div>
   {/if}
-
-  <button class="drawerback" aria-label="Close menu" onclick={() => (drawer = false)}></button>
 
   {#if view === 'library'}
     <Library {notes} {idx} onopen={open} bind:refs jumpTo={refJump} />
@@ -635,22 +553,13 @@
       <aside class="list">
         <div class="vaultbar">
           {#if vaultBackend}
-            <span class="vlabel on" title="Auto-syncing to “{vaultBackend.name}”. Keep this folder in Dropbox, iCloud, OneDrive, or Syncthing to sync across your devices."><span class="syncdot"></span>Synced · {vaultBackend.name}</span>
-            <button class="vbtn" onclick={disconnectFolder}>use browser</button>
+            <span class="vlabel on" title="Writing Markdown files in “{vaultBackend.name}”. Keep this folder in Dropbox, iCloud, OneDrive, Syncthing, or a Git repo to sync it across machines."><span class="syncdot"></span>{vaultBackend.name}</span>
+          {:else if isTauri}
+            <span class="vlabel">◆ Opening vault…</span>
           {:else}
-            <span class="vlabel" title="Your notes are stored in this browser (still yours; export or connect a folder any time)">◆ Browser storage</span>
-            {#if folderVaultSupported()}<button class="vbtn" onclick={connectFolder}>{vaultBusy ? 'Opening…' : (isTauri ? 'open folder…' : 'use a folder…')}</button>{/if}
+            <span class="vlabel" title="Running outside the Tauri shell — notes stay in local storage. Use `npm run tauri dev` for the real app.">◆ Dev preview</span>
           {/if}
           {#if vaultErr}<span class="verr" title="A file write failed">⚠</span>{/if}
-        </div>
-        <div class="mobileacts">
-          <button class:on={view === 'notes'} onclick={() => { view = 'notes'; drawer = false; }}>Notes</button>
-          <button class:on={view === 'library'} onclick={() => { view = 'library'; drawer = false; }}>Library</button>
-          <span class="mspacer"></span>
-          <button aria-label="Synthesis" onclick={() => { digestOpen = true; drawer = false; }}>◇</button>
-          <button aria-label="Graph" onclick={() => { graphFull = true; drawer = false; }}>✧</button>
-          <button aria-label="Focus" class:on={focus} onclick={() => { focus = !focus; drawer = false; }}>◎</button>
-          <button aria-label="Theme" onclick={toggleTheme}>◑</button>
         </div>
         <div class="lhrow"><span class="lh">Vault · {notes.length}</span>
           <button class="mini" title="New folder" onclick={() => (newFolderName = '')}>+ Folder</button></div>
@@ -753,7 +662,7 @@
 </div>
 {/if}
 
-{#if graphFull && !isMobile}
+{#if graphFull}
   <div class="overlay">
     <div class="ovhead"><h3>Knowledge graph</h3>
       <div class="ghint">
@@ -768,7 +677,7 @@
   </div>
 {/if}
 
-{#if paletteOpen && !isMobile}
+{#if paletteOpen}
   <div class="scrim" onclick={(e) => { if (e.target === e.currentTarget) paletteOpen = false; }}>
     <div class="palette">
       <!-- svelte-ignore a11y_autofocus -->
@@ -852,11 +761,10 @@
       </div>
 
       <div class="setlabel">Your data</div>
-      <div class="setrow"><span class="sk">Storage <span class="sh">{vaultBackend ? 'Auto-syncing to' + ' “' + vaultBackend.name + '” — ' + 'Markdown files on your disk' : 'This browser (still yours — connect a folder any time)'}</span></span>
-        {#if vaultBackend}<button class="setbtn" onclick={disconnectFolder}>Use browser</button>
-        {:else if folderVaultSupported()}<button class="setbtn" onclick={connectFolder}>{vaultBusy ? 'Opening…' : (isTauri ? 'Open folder…' : 'Choose a folder…')}</button>{/if}
+      <div class="setrow"><span class="sk">Vault <span class="sh">{vaultBackend ? 'Markdown files in' + ' “' + vaultBackend.name + '” — ' + 'plain files on your disk, yours to keep' : 'No folder connected'}</span></span>
+        <button class="setbtn" onclick={connectFolder}>{vaultBusy ? 'Opening…' : (vaultBackend ? 'Switch folder…' : 'Choose folder…')}</button>
       </div>
-      <div class="setrow"><span class="sk">Sync across devices <span class="sh">Put the folder in Dropbox, iCloud Drive, OneDrive, or Syncthing, then open the same folder on your other devices. Arf keeps it in step automatically — desktop and web, both ways.</span></span></div>
+      <div class="setrow"><span class="sk">Sync across machines <span class="sh">Keep the vault folder in Dropbox, iCloud Drive, OneDrive, Syncthing, or a Git repo, then open the same folder in Arf on your other computers. Arf keeps it in step automatically — both ways.</span></span></div>
       <div class="setrow"><span class="sk">Workspace backup <span class="sh">{importMsg || 'one .arf file with every note, folder, and reference'}</span></span>
         <span class="setbtnrow"><button class="setbtn" onclick={exportWorkspace}>Export .arf</button><button class="setbtn" onclick={() => fileInput.click()}>Import…</button></span>
       </div>

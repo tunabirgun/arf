@@ -1,8 +1,8 @@
-// The real plain-file vault: each note is a Markdown file with YAML frontmatter
-// on disk, in a folder the user picks. One code path over two backends:
-//   - browser: the File System Access API (Chromium), handle persisted in IndexedDB
-//   - Tauri desktop: @tauri-apps/plugin-fs + plugin-dialog against a chosen folder
-// The note's stable id lives in frontmatter, so a rename/move never breaks a link.
+// The plain-file vault: each note is a Markdown file with YAML frontmatter on
+// disk, in a folder the user picks via the native dialog. Reads and writes go
+// through @tauri-apps/plugin-fs; the chosen path persists so the vault reopens
+// on every launch. The note's stable id lives in frontmatter, so a rename/move
+// never breaks a link.
 
 // ---------- note <-> markdown file ----------
 
@@ -68,100 +68,58 @@ function dedupeById(notes) {
 // ---------- environment ----------
 
 export const isTauri = typeof window !== 'undefined' && !!(window.__TAURI_INTERNALS__ || window.__TAURI__);
-export function fsaSupported() { return typeof window !== 'undefined' && 'showDirectoryPicker' in window; }
-export function folderVaultSupported() { return isTauri || fsaSupported(); }
 
-// ---------- File System Access backend (browser) ----------
-
-const IDB = 'arf-vault-handle';
-function idbGet(key) {
-  return new Promise((res) => {
-    const r = indexedDB.open(IDB, 1);
-    r.onupgradeneeded = () => r.result.createObjectStore('h');
-    r.onsuccess = () => { try { const q = r.result.transaction('h', 'readonly').objectStore('h').get(key); q.onsuccess = () => res(q.result || null); q.onerror = () => res(null); } catch (e) { res(null); } };
-    r.onerror = () => res(null);
-  });
+// The vault path lives in a real config file ($APPCONFIG/config.json) because webview
+// localStorage can be wiped independently of the app; localStorage is kept as a
+// fast fallback and for pre-0.5 installs.
+const PATH_KEY = 'arf-vault-path';
+function storedVaultPath() { try { return localStorage.getItem(PATH_KEY); } catch (e) { return null; } }
+export async function lastKnownVaultPath() {
+  const cfg = await readVaultConfig();
+  return (cfg && cfg.vaultPath) || storedVaultPath();
 }
-function idbSet(key, val) {
-  return new Promise((res) => {
-    const r = indexedDB.open(IDB, 1);
-    r.onupgradeneeded = () => r.result.createObjectStore('h');
-    r.onsuccess = () => { try { r.result.transaction('h', 'readwrite').objectStore('h').put(val, key); res(true); } catch (e) { res(false); } };
-    r.onerror = () => res(false);
-  });
+async function readVaultConfig() {
+  try {
+    const { readTextFile, BaseDirectory } = await import('@tauri-apps/plugin-fs');
+    return JSON.parse(await readTextFile('config.json', { baseDir: BaseDirectory.AppConfig }));
+  } catch (e) { return null; }
 }
-
-export class FsaBackend {
-  constructor(dir) { this.dir = dir; }
-  get name() { return (this.dir && this.dir.name) || 'your folder'; }
-  static async pick() { const dir = await window.showDirectoryPicker({ mode: 'readwrite' }); await idbSet('dir', dir); return new FsaBackend(dir); }
-  static async reconnect() {
-    const dir = await idbGet('dir'); if (!dir) return null;
-    const perm = await dir.queryPermission({ mode: 'readwrite' });
-    if (perm !== 'granted') { const req = await dir.requestPermission({ mode: 'readwrite' }); if (req !== 'granted') return null; }
-    return new FsaBackend(dir);
-  }
-  async dirFor(parts, create) {
-    let h = this.dir;
-    for (const p of parts) h = await h.getDirectoryHandle(p, { create });
-    return h;
-  }
-  async *walk(handle, prefix) {
-    for await (const [name, entry] of handle.entries()) {
-      if (name.startsWith('.')) continue;
-      const rel = prefix ? prefix + '/' + name : name;
-      if (entry.kind === 'directory') yield* this.walk(entry, rel);
-      else if (name.endsWith('.md')) yield { rel, entry };
-    }
-  }
-  async loadAll() {
-    const notes = [];
-    for await (const f of this.walk(this.dir, '')) {
-      const file = await f.entry.getFile(); const text = await file.text();
-      const dir = f.rel.includes('/') ? f.rel.slice(0, f.rel.lastIndexOf('/')) : '';
-      const note = parse(text, { folder: dir, fallbackId: f.rel, fallbackTitle: f.rel.split('/').pop().replace(/\.md$/, '') });
-      note._path = f.rel; notes.push(note);
-    }
-    return dedupeById(notes);
-  }
-  async pathExists(path) {
-    try { const parts = path.split('/'); const fname = parts.pop(); const dir = await this.dirFor(parts, false); await dir.getFileHandle(fname, { create: false }); return true; } catch (e) { return false; }
-  }
-  async saveNote(note) {
-    let path = relPath(note);
-    // never overwrite a different note that already occupies this filename
-    if (note._path !== path && (await this.pathExists(path))) path = relPath(note, note.id.slice(-5).toLowerCase());
-    if (note._path && note._path !== path) await this.removeByPath(note._path);
-    const parts = path.split('/'); const fname = parts.pop();
-    const dir = await this.dirFor(parts, true);
-    const fh = await dir.getFileHandle(fname, { create: true });
-    const w = await fh.createWritable(); await w.write(serialize(note)); await w.close();
-    note._path = path;
-  }
-  async removeByPath(path) {
-    try { const parts = path.split('/'); const fname = parts.pop(); const dir = await this.dirFor(parts, false); await dir.removeEntry(fname); } catch (e) {}
-  }
-  async removeNote(note) { if (note._path) await this.removeByPath(note._path); }
+async function writeVaultConfig(cfg) {
+  try {
+    const fs = await import('@tauri-apps/plugin-fs');
+    const { appConfigDir } = await import('@tauri-apps/api/path');
+    const dir = await appConfigDir();
+    if (!(await fs.exists(dir))) await fs.mkdir(dir, { recursive: true });
+    await fs.writeTextFile('config.json', JSON.stringify(cfg), { baseDir: fs.BaseDirectory.AppConfig });
+  } catch (e) {}
 }
 
-// ---------- Tauri filesystem backend (desktop) ----------
+// ---------- Tauri filesystem backend ----------
 
 export class TauriBackend {
   constructor(root, fs) { this.root = root; this.fs = fs; }
   get name() { return (this.root && this.root.split(/[\\/]/).filter(Boolean).pop()) || 'your folder'; }
   static async pick() {
     const { open } = await import('@tauri-apps/plugin-dialog');
-    const root = await open({ directory: true, multiple: false, title: 'Choose an Arf vault folder' });
+    // recursive so the runtime scope grant covers the vault's subfolders too
+    const root = await open({ directory: true, multiple: false, recursive: true, title: 'Choose an Arf vault folder' });
     if (!root) return null;
     const fs = await import('@tauri-apps/plugin-fs');
-    try { localStorage.setItem('arf-vault-path', root); } catch (e) {}
+    await writeVaultConfig({ vaultPath: root });
+    try { localStorage.setItem(PATH_KEY, root); } catch (e) {}
     return new TauriBackend(root, fs);
   }
   static async reconnect() {
-    let root = null; try { root = localStorage.getItem('arf-vault-path'); } catch (e) {}
+    const cfg = await readVaultConfig();
+    let root = (cfg && cfg.vaultPath) || null;
+    if (!root) {
+      root = storedVaultPath(); // pre-0.5 installs kept the path in localStorage only
+      if (root) await writeVaultConfig({ vaultPath: root });
+    }
     if (!root) return null;
     const fs = await import('@tauri-apps/plugin-fs');
     try { if (!(await fs.exists(root))) return null; } catch (e) { return null; }
+    try { localStorage.setItem(PATH_KEY, root); } catch (e) {}
     return new TauriBackend(root, fs);
   }
   join(...p) { return p.filter(Boolean).join('/'); }
@@ -197,11 +155,18 @@ export class TauriBackend {
   }
   async removeByPath(path) { try { await this.fs.remove(this.join(this.root, path)); } catch (e) {} }
   async removeNote(note) { if (note._path) await this.removeByPath(note._path); }
+  // non-note files at the vault root (references.json)
+  async readAux(name) {
+    try { const p = this.join(this.root, name); if (!(await this.fs.exists(p))) return null; return await this.fs.readTextFile(p); } catch (e) { return null; }
+  }
+  async writeAux(name, text) {
+    try { await this.fs.writeTextFile(this.join(this.root, name), text); return true; } catch (e) { return false; }
+  }
 }
 
-// ---------- unified entry ----------
+// ---------- entry ----------
 
-export async function connectVault() { return isTauri ? TauriBackend.pick() : FsaBackend.pick(); }
+export async function connectVault() { return isTauri ? TauriBackend.pick() : null; }
 export async function reconnectVault() {
-  try { return isTauri ? await TauriBackend.reconnect() : await FsaBackend.reconnect(); } catch (e) { return null; }
+  try { return isTauri ? await TauriBackend.reconnect() : null; } catch (e) { return null; }
 }
