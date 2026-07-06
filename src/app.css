@@ -29,3 +29,11 @@ body {
   -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility;
 }
 #app { height: 100vh; }
+
+/* Custom scrollbar — Arf aesthetic: thin, ink-on-paper, theme-aware */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--line-strong); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: var(--fg-faint); }
+::-webkit-scrollbar-corner { background: transparent; }
+@supports (scrollbar-width: thin) { * { scrollbar-width: thin; scrollbar-color: var(--line-strong) transparent; } }

@@ -13,7 +13,7 @@
 
   const IS_MAC = /Mac|iPhone|iPad|iPod/.test((navigator.platform || '') + ' ' + (navigator.userAgent || ''));
   const MOD = IS_MAC ? '⌘' : 'Ctrl';
-  const APP_VERSION = '1.0.0';
+  const APP_VERSION = '1.1.0';
 
   let notes = $state(loadNotes());
   let refs = $state(loadRefs());        // shared reference library (also used by [@citekey] citations)
@@ -171,8 +171,7 @@
     }
     vaultErr = failed;
   }
-  // choose a vault folder — the first run's connect and the later "switch vault…" are the
-  // same flow: current notes merge into the picked folder, so nothing is ever left behind
+  // choose a vault folder — first run merges migration-safe; switching clears to the new folder
   async function connectFolder() {
     if (vaultBusy) return; vaultBusy = true;
     try {
@@ -181,8 +180,10 @@
       if (b) {
         flushSave();
         const existing = await b.loadAll();
-        // union so neither the folder's notes nor the current ones are lost
-        const merged = existing.length ? mergeByUpdated(existing, notes) : notes.slice();
+        // switching vaults → adopt only the new vault's notes (no ghost carry-over)
+        // first connect → merge with localStorage in case seed notes haven't been flushed yet
+        const switching = !!vaultBackend;
+        const merged = switching ? existing.slice() : (existing.length ? mergeByUpdated(existing, notes) : notes.slice());
         // a note's _path is only meaningful if THIS folder has that file for that id;
         // anything else (old vault, stale cache) must be cleared or saves could misfire
         const diskPathById = new Map(existing.map((n) => [n.id, n._path]));
@@ -191,10 +192,11 @@
           try { await b.saveNote(n); } catch (e) { vaultErr = true; dirty.add(n.id); } // a failed write stays dirty and retries on the next sync tick
         }
         adopt(merged);
-        folders = [...new Set([...folders, ...merged.map((n) => n.folder).filter(Boolean)])]; saveFolders(folders);
+        folders = [...new Set(merged.map((n) => n.folder).filter(Boolean))]; saveFolders(folders);
         vaultBackend = b;
         needVault = false; vaultMissing = null;
         setWinTitle(b.name);
+        if (switching) { refs = []; activeFolder = ''; tagFilter = null; _conflicts.clear(); } // clean slate on switch
         refsFromVault(b);
       }
     } catch (e) {} finally { vaultBusy = false; }

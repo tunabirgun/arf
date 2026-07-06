@@ -1,3 +1,11 @@
+---
+id: Arf/app/README.md
+title: "README"
+tags: []
+created: 2026-07-06T09:32:49.307Z
+updated: 2026-07-06T09:32:49.307Z
+---
+
 # Arf
 
 A local-first second brain for scientists and coders. Write notes on papers, books, and concepts; link them; and let a private, on-device model surface the connections you didn't draw. Your notes are plain Markdown files you own, and nothing leaves your device.
