@@ -1,16 +1,28 @@
-# Arf
+<p align="center">
+  <img src="banner.png" alt="Arf" width="680">
+</p>
 
-A local-first second brain for scientists and coders. Write notes on papers, books, and concepts; link them; and let a private, on-device model surface the connections you didn't draw. Your notes are plain Markdown files you own, and nothing leaves your device.
+<p align="center">
+  A local-first second brain for scientists and coders.<br>
+  Write notes, link them, and let a private on-device model surface the connections you didn't draw.
+</p>
 
-[![Latest release](https://img.shields.io/github/v/release/tunabirgun/arf?label=release&color=2c4a6e)](https://github.com/tunabirgun/arf/releases/latest)
-[![License: MIT](https://img.shields.io/badge/license-MIT-2c4a6e.svg)](LICENSE)
-![Desktop: Windows · macOS · Linux](https://img.shields.io/badge/desktop-Windows%20%C2%B7%20macOS%20%C2%B7%20Linux-555)
-![On-device ML](https://img.shields.io/badge/ML-on--device-555)
+<p align="center">
+  <a href="https://github.com/tunabirgun/arf/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/tunabirgun/arf?label=release&color=2c4a6e"></a>
+  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-2c4a6e.svg"></a>
+  <img alt="Desktop: Windows, macOS, Linux" src="https://img.shields.io/badge/desktop-Windows%20%C2%B7%20macOS%20%C2%B7%20Linux-555">
+  <img alt="On-device ML" src="https://img.shields.io/badge/ML-on--device-555">
+</p>
 
-- **Download:** <https://github.com/tunabirgun/arf/releases/latest> — Windows, macOS, Linux
-- **Documentation:** <https://tunabirgun.github.io/arf/>
+<p align="center">
+  <a href="https://github.com/tunabirgun/arf/releases/latest"><b>Download</b></a>&nbsp;&nbsp;·&nbsp;&nbsp;<a href="https://tunabirgun.github.io/arf/"><b>Documentation</b></a>
+</p>
 
-![Arf — a note with rendered math, wikilinks, a citation, backlinks, resonance, and the local graph](screenshot.png)
+<p align="center">
+  <img src="screenshot.png" alt="Arf — a note with rendered math, wikilinks, a citation, backlinks, resonance, and the local graph" width="900">
+</p>
+
+Your notes are plain Markdown files you own, and nothing leaves your device.
 
 ## Why Arf
 
@@ -23,11 +35,15 @@ It is named after the mathematician Cahit Arf, whose Arf invariant reduces a com
 - **Write** in Markdown, with LaTeX math and syntax-highlighted code. The formatting toolbar inserts real Markdown — headings, bold, italic, strikethrough, inline code, links, bullet/numbered/task lists, quotes, code blocks, and dividers — and lists continue when you press Enter.
 - **Link** notes with `[[wikilinks]]`; backlinks and concept `#tags` build themselves. Links resolve by a stable id, so renaming a note never breaks them.
 - **See** your knowledge as a graph: a local view beside each note and a full-window view of the whole vault, with scroll-to-zoom, drag-to-pan, and Ctrl-click multi-select. It reads in ink — node size grows with links, filled circles have connections, hollow ones are orphans, dashed edges are the model's suggestions.
-- **Discover** with the on-device model. **Resonance** surfaces notes similar to the one you are reading; the weekly **Synthesis** digest points out pairs that belong together but were never linked, and shows the concepts they share so you can see the connection at a glance. A **faint mark** appears in the margin while you write when a paragraph resembles an older note.
+- **Discover** with the on-device model. **Resonance** surfaces notes similar to the one you are reading; the weekly **Synthesis** digest points out pairs that belong together but were never linked, and shows the concepts they share so you can see the connection at a glance.
 - **Read your language.** The default embedding model reads English; Settings offers a multilingual model (~120 MB) that understands 50+ languages, including Turkish, so suggestions work whatever language you think in.
 - **Cite** from the **Library**. References are fetched live from Crossref and Open Library by DOI, ISBN, or arXiv ID, cited in notes with `[@citekey]` that jump to the reference, and exported to BibTeX, RIS, CSL-JSON, formatted styles (APA, Nature), and Zenodo.
 - **Own your data.** Your notes are plain Markdown files in a folder you choose at first launch. Keep that folder in Dropbox, iCloud, OneDrive, Syncthing, or a Git repo and Arf keeps it in step continuously, both ways. Back up the whole workspace as one `.arf` file, and export any note to Markdown, HTML, or PDF.
 - **Make it yours.** Light and dark themes on a warm ink-on-paper palette, an adjustable view zoom, a distraction-free Focus mode, resizable sidebars, and a `Ctrl/⌘+K` command palette.
+
+## Open, by principle
+
+Arf is free and MIT-licensed, and its privacy is not a promise — it is something you can check. The model runs on your machine because the code that loads it is in this repository; your notes stay yours because there is no server in the tree to send them to. Nothing here phones home, and you can read every line that proves it. Fork it, audit it, file an issue, or build your own from it.
 
 ## Private by construction
 
