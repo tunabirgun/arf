@@ -1,7 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 280 110" width="280" height="110" role="img" aria-label="Arf">
-  <style>
-    .ink { fill: #2a2622; }
-    @media (prefers-color-scheme: dark) { .ink { fill: #e6e2da; } }
-  </style>
-  <text class="ink" x="0" y="84" font-family="'EB Garamond', 'Garamond', Georgia, 'Times New Roman', serif" font-size="86" font-weight="600" letter-spacing="0.5">Arf<tspan fill="#2c4a6e" dx="2">.</tspan></text>
-</svg>
