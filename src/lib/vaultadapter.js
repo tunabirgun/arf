@@ -55,7 +55,7 @@ export function parse(text, opts = {}) {
 function hash(s) { let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0; return h; }
 function relPath(note, suffix) {
   // drop empty / "." / ".." segments so a folder name can never escape the vault root
-  const dir = (note.folder || '').split('/').filter((seg) => seg && seg !== '.' && seg !== '..').join('/');
+  const dir = (note.folder || '').split(/[\\/]/).filter((seg) => seg && seg !== '.' && seg !== '..').join('/');
   return (dir ? dir + '/' : '') + slug(note.title) + (suffix ? '-' + suffix : '') + '.md';
 }
 // dedupe loaded notes by id (a stale duplicate file must not shadow the real note)
@@ -153,8 +153,9 @@ export class TauriBackend {
     await this.fs.writeTextFile(abs, serialize(note));
     note._path = path;
   }
-  async removeByPath(path) { try { await this.fs.remove(this.join(this.root, path)); } catch (e) {} }
-  async removeNote(note) { if (note._path) await this.removeByPath(note._path); }
+  // return whether the file is actually gone, so a failed delete (locked by a sync client) can be retried
+  async removeByPath(path) { try { await this.fs.remove(this.join(this.root, path)); return true; } catch (e) { return !(await this.pathExists(path)); } }
+  async removeNote(note) { return note._path ? await this.removeByPath(note._path) : true; }
   // non-note files at the vault root (references.json)
   async readAux(name) {
     try { const p = this.join(this.root, name); if (!(await this.fs.exists(p))) return null; return await this.fs.readTextFile(p); } catch (e) { return null; }

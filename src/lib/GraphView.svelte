@@ -87,7 +87,9 @@
     const svgEl = host.querySelector('svg'), vp = host.querySelector('.vp');
     const nodeEls = [...host.querySelectorAll('[data-i]')], edgeEls = [...host.querySelectorAll('[data-e]')];
     const view = { k: 1, tx: 0, ty: 0 };
-    const applyVP = () => vp.setAttribute('transform', 'translate(' + view.tx + ',' + view.ty + ') scale(' + view.k + ')');
+    let moveTimer;
+    const markMoving = () => { vp.classList.add('moving'); clearTimeout(moveTimer); moveTimer = setTimeout(() => vp.classList.remove('moving'), 200); };
+    const applyVP = () => { vp.setAttribute('transform', 'translate(' + view.tx + ',' + view.ty + ') scale(' + view.k + ')'); markMoving(); };
     const paint = () => {
       M.nodes.forEach((nd, i) => nodeEls[i].setAttribute('transform', 'translate(' + nd.x.toFixed(1) + ',' + nd.y.toFixed(1) + ')'));
       M.edges.forEach((e, i) => { const a = M.nodes[e.from], b = M.nodes[e.to], L = edgeEls[i]; L.setAttribute('x1', a.x.toFixed(1)); L.setAttribute('y1', a.y.toFixed(1)); L.setAttribute('x2', b.x.toFixed(1)); L.setAttribute('y2', b.y.toFixed(1)); });
@@ -130,5 +132,8 @@
   .ghost.full { flex: 1; height: 100%; margin: 0; }
   .ghost :global(svg.egograph) { width: 100%; height: auto; display: block; }
   .ghost.full :global(svg.fullgraph) { width: 100%; height: 100%; cursor: grab; touch-action: none; }
+  /* while actively panning/zooming, promote the group to its own compositor layer so the
+     transform is GPU-composited; dropped shortly after so no idle layer is kept allocated */
+  .ghost.full :global(svg.fullgraph .vp.moving) { will-change: transform; }
   .gempty { font-size: 13px; color: var(--fg-faint); font-style: italic; }
 </style>

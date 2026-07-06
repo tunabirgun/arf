@@ -173,6 +173,19 @@
     view.dispatch({ changes: { from: line.to, insert: ins }, selection: { anchor: line.to + ins.length } });
     view.focus();
   }
+  // --- imperative API for the right-click menu (operates directly on the CodeMirror view) ---
+  export function edHasSelection() { const s = view && view.state.selection.main; return !!s && s.from !== s.to; }
+  export function edCopy() { if (!view) return ''; const s = view.state.selection.main; return view.state.sliceDoc(s.from, s.to); }
+  export function edCut() { if (!view) return ''; const s = view.state.selection.main; const t = view.state.sliceDoc(s.from, s.to); if (s.from !== s.to) view.dispatch({ changes: { from: s.from, to: s.to, insert: '' }, selection: { anchor: s.from } }); view.focus(); return t; }
+  export function edPaste(txt) { if (!view || txt == null) return; const s = view.state.selection.main; view.dispatch({ changes: { from: s.from, to: s.to, insert: txt }, selection: { anchor: s.from + txt.length } }); view.focus(); }
+  export function edSelectAll() { if (!view) return; view.dispatch({ selection: { anchor: 0, head: view.state.doc.length } }); view.focus(); }
+  export function edFormat(kind) {
+    if (!view) return;
+    if (kind === 'bold') wrap('**'); else if (kind === 'italic') wrap('*'); else if (kind === 'strike') wrap('~~');
+    else if (kind === 'code') wrap('`'); else if (kind === 'link') link(); else if (kind === 'h1') setHeading('#');
+    else if (kind === 'h2') setHeading('##'); else if (kind === 'quote') togglePrefix('> '); else if (kind === 'bullet') togglePrefix('- ');
+  }
+
   // pressing Enter inside a list/quote continues it (empty item exits); makes lists feel like a word processor
   function continueList(v) {
     const sel = v.state.selection.main; if (!sel.empty) return false;

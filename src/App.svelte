@@ -13,7 +13,7 @@
 
   const IS_MAC = /Mac|iPhone|iPad|iPod/.test((navigator.platform || '') + ' ' + (navigator.userAgent || ''));
   const MOD = IS_MAC ? '⌘' : 'Ctrl';
-  const APP_VERSION = '1.1.0';
+  const APP_VERSION = '1.0.0';
 
   let notes = $state(loadNotes());
   let refs = $state(loadRefs());        // shared reference library (also used by [@citekey] citations)
@@ -38,6 +38,8 @@
   let lastSync = $state(0);         // timestamp of the last successful folder sync
   let syncing = false;              // guard so polls don't overlap
   let dirty = new Set();           // note ids changed since the last file flush
+  let pendingDelete = new Set();   // note ids deleted locally whose file removal isn't confirmed yet (tombstones)
+  let refsLoading = false;         // true while loading a vault's references.json — suppresses the debounced write-back
   let reconnected = false;
   let leftW = $state(loadNum('arf-leftw', 220));   // resizable sidebar widths
   let rightW = $state(loadNum('arf-rightw', 268));
@@ -49,8 +51,9 @@
   let digestOpen = $state(false);
   let graphFull = $state(false);
   let focus = $state(false);
-  let ctxMenu = $state(null);   // { x, y, noteId } — the right-click menu on a sidebar note
-  let ctxSub = $state(null);    // open submenu id, e.g., 'move'
+  let ctxMenu = $state(null);   // { x, y, items } — the context-aware right-click menu
+  let ctxSub = $state(null);    // reserved for future submenus
+  let editorRef = $state(null); // Editor.svelte instance, for clipboard/format from the ctx menu
   let query = $state('');
   let folders = $state(loadFolders());
   let collapsed = $state({});
@@ -81,15 +84,21 @@
   // localStorage stays as the cache. Reads happen at connect, writes on every change (debounced).
   let refsTimer;
   $effect(() => { saveRefs(refs); clearTimeout(refsTimer); refsTimer = setTimeout(refsToVault, 500); return () => clearTimeout(refsTimer); });
-  async function refsToVault() { if (vaultBackend) try { await vaultBackend.writeAux('references.json', JSON.stringify(refs, null, 2)); } catch (e) {} }
-  async function refsFromVault(b) {
+  async function refsToVault() { if (!vaultBackend || refsLoading) return; try { await vaultBackend.writeAux('references.json', JSON.stringify(refs, null, 2)); } catch (e) {} }
+  // replace=true on a vault switch: adopt only the new vault's references (no old-vault carry-over);
+  // guarded by refsLoading so the debounced write-back can't clobber references.json before this read finishes
+  async function refsFromVault(b, replace = false) {
+    refsLoading = true;
     try {
       const raw = await b.readAux('references.json');
       if (raw) {
         const disk = JSON.parse(raw);
-        if (Array.isArray(disk)) { const m = new Map(refs.map((r) => [r.id, r])); for (const r of disk) m.set(r.id, r); refs = [...m.values()]; }
-      }
-    } catch (e) {}
+        if (Array.isArray(disk)) {
+          if (replace) refs = disk;
+          else { const m = new Map(refs.map((r) => [r.id, r])); for (const r of disk) m.set(r.id, r); refs = [...m.values()]; }
+        } else if (replace) refs = [];
+      } else if (replace) refs = [];   // new vault has no references.json yet → start clean
+    } catch (e) { if (replace) refs = []; } finally { refsLoading = false; }
   }
   const allFolders = $derived(folderList(folders, notes));
 
@@ -166,8 +175,9 @@
     for (const id of ids) {
       const n = notes.find((x) => x.id === id);
       if (!n) { dirty.delete(id); continue; }
-      // only drop from the retry queue on a confirmed write; a failed write stays dirty for the next tick
-      try { await vaultBackend.saveNote(n); dirty.delete(id); } catch (e) { failed = true; }
+      const stamp = n.updated;   // a keystroke during the await bumps this — then keep it dirty so the newest edit is written next tick
+      // only drop from the retry queue on a confirmed write of the version we actually saved
+      try { await vaultBackend.saveNote(n); if (n.updated === stamp) dirty.delete(id); } catch (e) { failed = true; }
     }
     vaultErr = failed;
   }
@@ -175,29 +185,42 @@
   async function connectFolder() {
     if (vaultBusy) return; vaultBusy = true;
     try {
-      if (vaultBackend) await flushVault(); // switching: finish pending writes to the old folder first
+      if (vaultBackend) {
+        await flushVault();                 // switching: finish pending writes to the old folder first
+        if (dirty.size) { vaultErr = true; vaultBusy = false; return; } // an edit failed to flush — abort rather than silently lose it
+      }
       const b = await connectVault();
       if (b) {
         flushSave();
         const existing = await b.loadAll();
-        // switching vaults → adopt only the new vault's notes (no ghost carry-over)
-        // first connect → merge with localStorage in case seed notes haven't been flushed yet
         const switching = !!vaultBackend;
-        const merged = switching ? existing.slice() : (existing.length ? mergeByUpdated(existing, notes) : notes.slice());
-        // a note's _path is only meaningful if THIS folder has that file for that id;
-        // anything else (old vault, stale cache) must be cleared or saves could misfire
-        const diskPathById = new Map(existing.map((n) => [n.id, n._path]));
-        for (const n of merged) {
-          if (n._path && diskPathById.get(n.id) !== n._path) n._path = undefined;
-          try { await b.saveNote(n); } catch (e) { vaultErr = true; dirty.add(n.id); } // a failed write stays dirty and retries on the next sync tick
+        if (switching) {
+          // the new vault's notes already live on disk — adopt them straight away so the
+          // sidebar repaints instantly; do NOT re-save them (that would churn/rename files
+          // in the folder we just opened). Clear all old-vault state for a clean slate.
+          refsLoading = true; _conflicts.clear(); pendingDelete.clear(); activeFolder = ''; tagFilter = null;
+          adopt(existing);
+          folders = [...new Set(existing.map((n) => n.folder).filter(Boolean))]; saveFolders(folders);
+        } else {
+          // first connect → migrate current (localStorage) notes into the chosen folder,
+          // merging with anything already there so nothing is lost
+          const merged = existing.length ? mergeByUpdated(existing, notes) : notes.slice();
+          const fromDisk = new Set(existing);   // notes the merge kept unchanged from disk — no need to rewrite them
+          // a note's _path is only meaningful if THIS folder has that file for that id;
+          // anything else (old vault, stale cache) must be cleared or saves could misfire
+          const diskPathById = new Map(existing.map((n) => [n.id, n._path]));
+          for (const n of merged) {
+            if (fromDisk.has(n)) continue;      // byte-for-byte the disk copy → skip the write to avoid needless churn
+            if (n._path && diskPathById.get(n.id) !== n._path) n._path = undefined;
+            try { await b.saveNote(n); } catch (e) { vaultErr = true; dirty.add(n.id); } // a failed write stays dirty and retries on the next sync tick
+          }
+          adopt(merged);
+          folders = [...new Set(merged.map((n) => n.folder).filter(Boolean))]; saveFolders(folders);
         }
-        adopt(merged);
-        folders = [...new Set(merged.map((n) => n.folder).filter(Boolean))]; saveFolders(folders);
         vaultBackend = b;
         needVault = false; vaultMissing = null;
         setWinTitle(b.name);
-        if (switching) { refs = []; activeFolder = ''; tagFilter = null; _conflicts.clear(); } // clean slate on switch
-        refsFromVault(b);
+        await refsFromVault(b, switching);      // replace refs on a switch; guarded so the write-back can't clobber references.json
       }
     } catch (e) {} finally { vaultBusy = false; }
   }
@@ -216,8 +239,11 @@
     for (const n of incoming) {
       const ex = m.get(n.id);
       const newer = !ex || (n.updated || '') > (ex.updated || '');
-      const sameTimeDiffBody = ex && (n.updated || '') === (ex.updated || '') && (n.body || '') !== (ex.body || '');
-      if (newer || sameTimeDiffBody) m.set(n.id, n);
+      // an external hand-edit (body, folder move, title, or tags) that didn't bump `updated` must still win
+      const sameTimeDiffMeta = ex && (n.updated || '') === (ex.updated || '') &&
+        ((n.body || '') !== (ex.body || '') || (n.folder || '') !== (ex.folder || '') ||
+         (n.title || '') !== (ex.title || '') || (n.tags || []).join(',') !== (ex.tags || []).join(','));
+      if (newer || sameTimeDiffMeta) m.set(n.id, n);
     }
     return [...m.values()];
   }
@@ -234,6 +260,12 @@
       await flushVault();                                   // 1) push local edits to the folder
       const disk = await vaultBackend.loadAll();            // 2) read the folder's current state
       const diskIds = new Set(disk.map((n) => n.id));
+      // tombstones: retry a delete whose file removal never confirmed, and never resurrect a note the user deleted
+      if (pendingDelete.size) {
+        for (const dn of disk) if (pendingDelete.has(dn.id)) { if (await vaultBackend.removeByPath(dn._path)) pendingDelete.delete(dn.id); } // retry; drop tombstone on confirmed removal
+        for (const id of [...pendingDelete]) if (!diskIds.has(id)) pendingDelete.delete(id); // already gone from disk → tombstone resolved
+      }
+      const live = pendingDelete.size ? disk.filter((n) => !pendingDelete.has(n.id)) : disk;
       const protectedId = mode === 'write' && current ? currentId : null;
       // 3) honour deletions from another device: a note that had a file, is gone from a non-empty
       //    folder, has no unsaved edit, and isn't the note open for editing → drop it.
@@ -242,7 +274,7 @@
       //    conflict copy instead of silently losing it under the local edit (once per remote version).
       const extra = [];
       if (protectedId) {
-        const remote = disk.find((n) => n.id === protectedId);
+        const remote = live.find((n) => n.id === protectedId);
         const localCur = notes.find((n) => n.id === protectedId);
         const key = remote && protectedId + '@' + (remote.updated || '');
         if (remote && localCur && (remote.body || '') !== (localCur.body || '') && (remote.updated || '') >= (localCur.updated || '') && !_conflicts.has(key)) {
@@ -252,7 +284,7 @@
           dirty.add(cid);
         }
       }
-      const merged = mergeByUpdated(kept, protectedId ? disk.filter((n) => n.id !== protectedId) : disk).concat(extra);
+      const merged = mergeByUpdated(kept, protectedId ? live.filter((n) => n.id !== protectedId) : live).concat(extra);
       if (syncChanged(notes, merged)) {
         const prevId = currentId;
         adopt(merged);
@@ -264,7 +296,9 @@
   }
   function syncChanged(a, b) {
     if (a.length !== b.length) return true;
-    const sig = (arr) => arr.map((n) => n.id + ':' + (n.updated || '')).sort().join('|');
+    // include body length + a cheap checksum so an external body edit that kept the same `updated` still repaints the UI
+    const bsum = (s) => { let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0; return h; };
+    const sig = (arr) => arr.map((n) => n.id + ':' + (n.updated || '') + ':' + (n.folder || '') + ':' + (n.title || '') + ':' + (n.tags || []).join(',') + ':' + bsum(n.body || '')).sort().join('|');
     return sig(a) !== sig(b);
   }
   $effect(() => {
@@ -334,7 +368,7 @@
   function addFolder() {
     const raw = (newFolderName || '').trim(); newFolderName = null;
     if (!raw) return;
-    const name = raw.replace(/\//g, '-');
+    const name = raw.replace(/[\/\\]/g, '-');   // strip both separators so a name can never become nested dirs on Windows
     const path = activeFolder ? activeFolder + '/' + name : name;
     if (!folders.includes(path)) folders.push(path);
     saveFolders(folders); collapsed[activeFolder] = false;
@@ -389,16 +423,142 @@
   }
   function open(id) { if (!idx.byId[id]) return; flushSave(); currentId = id; mode = 'read'; view = 'notes'; paletteOpen = false; graphFull = false; }
 
-  // --- right-click context menu actions ---
-  function openCtx(id, e) {
+  // --- context-aware right-click menu ---
+  // one global handler suppresses the native WebView menu everywhere and opens an Arf menu
+  // whose items depend on what was clicked (note, folder, tag, link, editor, read view, or app).
+  function onContextMenu(e) {
     e.preventDefault();
-    if (!idx.byId[id]) return;
+    const items = buildCtxItems(e.target);
+    if (!items || !items.length) { closeCtx(); return; }
     const zf = (zoom || 100) / 100;
-    ctxMenu = { x: Math.round(e.clientX / zf), y: Math.round(e.clientY / zf), noteId: id };
+    const W = window.innerWidth / zf, H = window.innerHeight / zf;
+    const rows = items.filter((i) => !i.sep).length, seps = items.filter((i) => i.sep).length;
+    const mw = 260, mh = rows * 30 + seps * 9 + 12;      // matches .ctxmenu max-width; labels ellipsize so this holds
+    let x = e.clientX / zf, y = e.clientY / zf;
+    if (x + mw > W) x = Math.max(4, W - mw - 4);
+    if (y + mh > H) y = Math.max(4, H - mh - 4);
+    ctxMenu = { x: Math.round(x), y: Math.round(y), items };
     ctxSub = null;
   }
   function closeCtx() { ctxMenu = null; ctxSub = null; }
+  function runCtx(it) { if (it.disabled) return; const r = it.run; closeCtx(); if (r) r(); }
+  $effect(() => { window.addEventListener('contextmenu', onContextMenu); return () => window.removeEventListener('contextmenu', onContextMenu); });
   async function copyText(t) { try { await navigator.clipboard.writeText(t); } catch (e) {} }
+  async function readClip() { try { return await navigator.clipboard.readText(); } catch (e) { return ''; } }
+
+  function buildCtxItems(t) {
+    if (!t || !t.closest) return generalMenu();
+    const cite = t.closest('[data-cite]'); if (cite) return [{ label: 'Open reference', run: () => openReference(cite.getAttribute('data-cite')) }];
+    const nav = t.closest('[data-nav]'); if (nav) return linkMenu(nav.getAttribute('data-nav'));
+    const tag = t.closest('[data-tag]'); if (tag) return tagMenu(tag.getAttribute('data-tag'));
+    const nid = t.closest('[data-nid]'); if (nid) return noteMenu(nid.getAttribute('data-nid'));
+    const fol = t.closest('.frow[data-folder]'); if (fol) return folderMenu(fol.getAttribute('data-folder'));
+    if (t.closest('.cm-editor')) return editorMenu();
+    const inp = t.closest('textarea, input:not([type=checkbox]):not([type=file]):not([type=radio])'); if (inp) return inputMenu(inp);
+    if (t.closest('.read')) return readMenu();
+    return generalMenu();
+  }
+  function noteMenu(id) {
+    const n = idx.byId[id]; if (!n) return generalMenu();
+    return [
+      { label: 'Open', run: () => open(id) },
+      { label: 'Open & edit', run: () => { open(id); mode = 'write'; } },
+      { label: 'Rename', run: () => renameFromCtx(id) },
+      { label: 'Duplicate', run: () => dupNote(id) },
+      { sep: true },
+      { label: 'Copy wikilink', run: () => copyWikilink(id) },
+      { label: 'Copy as Markdown', run: () => copyMd(id) },
+      { label: 'Export…', run: () => { currentId = id; mode = 'read'; view = 'notes'; flushSave(); docExport = true; } },
+      { sep: true },
+      { label: 'Delete', danger: true, run: () => deleteNote(id) },
+    ];
+  }
+  function linkMenu(id) {
+    if (!idx.byId[id]) return [{ label: 'Note not created yet', disabled: true }];
+    return [
+      { label: 'Open note', run: () => open(id) },
+      { label: 'Open & edit', run: () => { open(id); mode = 'write'; } },
+      { label: 'Copy wikilink', run: () => copyWikilink(id) },
+    ];
+  }
+  function tagMenu(tag) {
+    return [
+      { label: tagFilter === tag ? 'Clear filter' : 'Filter by #' + tag, run: () => (tagFilter = tagFilter === tag ? null : tag) },
+      { label: 'Copy #' + tag, run: () => copyText('#' + tag) },
+    ];
+  }
+  function folderMenu(path) {
+    return [
+      { label: 'New note here', run: () => { activeFolder = path; create(); } },
+      { label: 'New subfolder', run: () => { activeFolder = path; newFolderName = ''; } },
+      { sep: true },
+      { label: collapsed[path] ? 'Expand' : 'Collapse', run: () => toggleFolder(path) },
+    ];
+  }
+  function editorMenu() {
+    if (!editorRef) return generalMenu();
+    const has = editorRef.edHasSelection();
+    // re-guard editorRef inside every run(): the editor can unmount (mode→read) while the menu is open
+    return [
+      { label: 'Cut', disabled: !has, run: () => { const s = editorRef?.edCut(); if (s) copyText(s); } },
+      { label: 'Copy', disabled: !has, run: () => { const s = editorRef?.edCopy(); if (s) copyText(s); } },
+      { label: 'Paste', run: async () => { const txt = await readClip(); editorRef?.edPaste(txt); } },
+      { label: 'Select all', run: () => editorRef?.edSelectAll() },
+      { sep: true },
+      { label: 'Bold', disabled: !has, run: () => editorRef?.edFormat('bold') },
+      { label: 'Italic', disabled: !has, run: () => editorRef?.edFormat('italic') },
+      { label: 'Inline code', disabled: !has, run: () => editorRef?.edFormat('code') },
+      { label: 'Link', run: () => editorRef?.edFormat('link') },
+    ];
+  }
+  function inputMenu(el) {
+    const has = el.selectionStart !== el.selectionEnd;
+    return [
+      { label: 'Cut', disabled: !has, run: () => inputCut(el) },
+      { label: 'Copy', disabled: !has, run: () => copyText(el.value.slice(el.selectionStart, el.selectionEnd)) },
+      { label: 'Paste', run: async () => inputPaste(el, await readClip()) },
+      { label: 'Select all', run: () => { el.focus(); el.select(); } },
+    ];
+  }
+  function inputCut(el) {
+    const t = el.value.slice(el.selectionStart, el.selectionEnd); if (!t) return;
+    copyText(t);
+    const s = el.selectionStart; el.value = el.value.slice(0, s) + el.value.slice(el.selectionEnd);
+    el.setSelectionRange(s, s); el.dispatchEvent(new Event('input', { bubbles: true })); el.focus();
+  }
+  function inputPaste(el, txt) {
+    if (txt == null) return;
+    const s = el.selectionStart, e = el.selectionEnd;
+    el.value = el.value.slice(0, s) + txt + el.value.slice(e);
+    const p = s + txt.length; el.setSelectionRange(p, p); el.dispatchEvent(new Event('input', { bubbles: true })); el.focus();
+  }
+  function readMenu() {
+    const selText = (typeof window.getSelection === 'function' && String(window.getSelection())) || '';
+    const items = [];
+    if (selText.trim()) items.push({ label: 'Copy', run: () => copyText(selText) }, { sep: true });
+    items.push(
+      { label: 'Edit note', run: () => (mode = 'write') },
+      { label: 'Copy as Markdown', disabled: !current, run: () => current && copyMd(current.id) },
+      { label: 'Export…', disabled: !current, run: () => (docExport = true) },
+    );
+    return items;
+  }
+  function generalMenu() {
+    if (needVault || vaultMissing) return [{ label: vaultMissing ? 'Locate vault folder…' : 'Choose vault folder…', run: connectFolder }];
+    return [
+      { label: 'New note', run: create },
+      { label: 'New folder', run: () => (newFolderName = '') },
+      { sep: true },
+      { label: 'Search…', run: () => { paletteOpen = true; query = ''; } },
+      { label: 'Knowledge graph', run: () => (graphFull = true) },
+      { label: 'Synthesis', run: () => (digestOpen = true) },
+      { sep: true },
+      { label: view === 'library' ? 'Notes' : 'Library', run: () => (view = view === 'library' ? 'notes' : 'library') },
+      { label: theme === 'dark' ? 'Light theme' : 'Dark theme', run: toggleTheme },
+      { label: 'Switch vault…', disabled: !isTauri, run: connectFolder },
+      { label: 'Settings', run: () => (settingsOpen = true) },
+    ];
+  }
   function dupNote(id) {
     const n = idx.byId[id]; if (!n) return;
     const copy = { ...n, id: ulid(), title: (n.title || 'Untitled') + ' (copy)', created: new Date().toISOString(), updated: new Date().toISOString() };
@@ -421,14 +581,20 @@
     closeCtx();
     setTimeout(() => { const el = document.querySelector('.title.ro'); if (el) { mode = 'write'; requestAnimationFrame(() => { const inp = document.querySelector('.title:not(.ro)'); if (inp) { inp.focus(); inp.select(); } }); } }, 30);
   }
-  function deleteNote(id) {
+  async function deleteNote(id) {
     const n = idx.byId[id]; if (!n) return;
     if (!window.confirm('Delete “' + (n.title || 'Untitled') + '”?\n\nThis removes the file from your vault folder.')) return;
-    if (vaultBackend) vaultBackend.removeNote(n);
+    const note = n;
     notes = notes.filter((x) => x.id !== id);
     if (currentId === id) currentId = notes[0]?.id ?? null;
-    writeNow();
+    dirty.delete(id);
     closeCtx();
+    writeNow();
+    if (vaultBackend && note._path) {
+      pendingDelete.add(id);                     // tombstone: a slow/failed file removal must not resurrect the note on the next sync
+      if (await vaultBackend.removeNote(note)) pendingDelete.delete(id); // confirmed gone → clear it
+      else vaultErr = true;                      // still on disk → stays tombstoned; syncFromFolder retries the removal
+    }
   }
   function moveToFolder(id, folder) {
     moveNote(id, folder);
@@ -638,7 +804,7 @@
         {#if tagFilter}
           <button class="clearfilter" onclick={() => (tagFilter = null)}>← clear #{tagFilter}</button>
           {#each listNotes as n (n.id)}
-            <button class="item" class:on={n.id === currentId} onclick={() => open(n.id)} oncontextmenu={(e) => openCtx(n.id, e)}>
+            <button class="item" class:on={n.id === currentId} data-nid={n.id} onclick={() => open(n.id)}>
               <span class="dot2" class:orphan={invDot(n.id) === '○'}>{invDot(n.id)}</span>
               <span class="txt"><span class="t">{n.title || 'Untitled'}</span></span>
             </button>
@@ -646,11 +812,11 @@
         {:else}
           {#each folderRows as r}
             {#if r.type === 'folder'}
-              <button class="frow" class:active={activeFolder === r.path} style="padding-left:{6 + r.depth * 12}px" onclick={() => { toggleFolder(r.path); activeFolder = r.path; }}>
+              <button class="frow" class:active={activeFolder === r.path} data-folder={r.path} style="padding-left:{6 + r.depth * 12}px" onclick={() => { toggleFolder(r.path); activeFolder = r.path; }}>
                 <span class="caret">{r.hasChildren ? (r.collapsed ? '▸' : '▾') : '·'}</span><span class="fn">{r.name}</span>{#if r.count}<span class="fcount">{r.count}</span>{/if}
               </button>
             {:else}
-              <button class="item" class:on={r.note.id === currentId} style="padding-left:{6 + r.depth * 12}px" onclick={() => open(r.note.id)} oncontextmenu={(e) => openCtx(r.note.id, e)}>
+              <button class="item" class:on={r.note.id === currentId} data-nid={r.note.id} style="padding-left:{6 + r.depth * 12}px" onclick={() => open(r.note.id)}>
                 <span class="dot2" class:orphan={invDot(r.note.id) === '○'} title={dotTitle(r.note.id)}>{invDot(r.note.id)}</span>
                 <span class="txt"><span class="t">{r.note.title || 'Untitled'}</span></span>
               </button>
@@ -662,7 +828,7 @@
           <div class="lh" style="margin-top:1rem">Tags</div>
           <div class="tags">
             {#each allTags as tg}
-              <button class="tag" class:on={tagFilter === tg} onclick={() => (tagFilter = tagFilter === tg ? null : tg)}>#{tg}</button>
+              <button class="tag" class:on={tagFilter === tg} data-tag={tg} onclick={() => (tagFilter = tagFilter === tg ? null : tg)}>#{tg}</button>
             {/each}
           </div>
         {/if}
@@ -693,7 +859,7 @@
             </div>
           </div>
           {#if mode === 'write'}
-            {#key currentId}<div class="editor"><Editor value={current.body} onchange={editBody} resemble={resembleParagraph} /></div>{/key}
+            {#key currentId}<div class="editor"><Editor bind:this={editorRef} value={current.body} onchange={editBody} resemble={resembleParagraph} /></div>{/key}
           {:else}
             <div class="read" onclick={readClick}>{@html readHTML}</div>
           {/if}
@@ -705,7 +871,7 @@
       <aside class="rail">
         <div class="rh">Referenced in <span>{backlinks.length}</span></div>
         {#if backlinks.length}
-          {#each backlinks as b}<button class="ref" onclick={() => open(b.id)}>{b.title}</button>{/each}
+          {#each backlinks as b}<button class="ref" data-nid={b.id} onclick={() => open(b.id)}>{b.title}</button>{/each}
         {:else}<div class="rempty">No backlinks yet.</div>{/if}
 
         <div class="rh" style="margin-top:1.3rem">Resonance · {mlStatus === 'ready' ? 'MiniLM' : 'on-device'}
@@ -716,7 +882,7 @@
         </div>
         {#if resonance.length}
           {#each resonance as r}
-            <button class="ref ml" onclick={() => open(r.note.id)}><span class="sim" title="Similarity 0–1 (on-device)">{r.s.toFixed(2)}</span><span class="nm">{r.note.title}</span></button>
+            <button class="ref ml" data-nid={r.note.id} onclick={() => open(r.note.id)}><span class="sim" title="Similarity 0–1 (on-device)">{r.s.toFixed(2)}</span><span class="nm">{r.note.title}</span></button>
           {/each}
         {:else}<div class="rempty">Nothing close enough yet.</div>{/if}
 
@@ -845,17 +1011,15 @@
 {/if}
 
 {#if ctxMenu}
-  <div class="ctxback" onclick={closeCtx} oncontextmenu={(e) => { e.preventDefault(); closeCtx(); }} onkeydown={(e) => { if (e.key === 'Escape') closeCtx(); }} role="button" tabindex="0" aria-label="Close menu"></div>
-  <div class="ctxmenu" style="left:{ctxMenu.x}px; top:{ctxMenu.y}px">
-    <button class="ctxi" onclick={() => { open(ctxMenu.noteId); mode = 'write'; closeCtx(); }}>Open &amp; edit</button>
-    <button class="ctxi" onclick={() => renameFromCtx(ctxMenu.noteId)}>Rename</button>
-    <button class="ctxi" onclick={() => dupNote(ctxMenu.noteId)}>Duplicate</button>
-    <div class="ctxsep"></div>
-    <button class="ctxi" onclick={() => copyWikilink(ctxMenu.noteId)}>Copy wikilink</button>
-    <button class="ctxi" onclick={() => copyMd(ctxMenu.noteId)}>Copy as Markdown</button>
-    <button class="ctxi" onclick={() => { currentId = ctxMenu.noteId; mode = 'read'; view = 'notes'; flushSave(); docExport = true; closeCtx(); }}>Export…</button>
-    <div class="ctxsep"></div>
-    <button class="ctxi danger" onclick={() => deleteNote(ctxMenu.noteId)}>Delete</button>
+  <div class="ctxback" onclick={closeCtx} oncontextmenu={(e) => { e.preventDefault(); e.stopPropagation(); closeCtx(); }} onkeydown={(e) => { if (e.key === 'Escape') closeCtx(); }} role="button" tabindex="0" aria-label="Close menu"></div>
+  <div class="ctxmenu" style="left:{ctxMenu.x}px; top:{ctxMenu.y}px" oncontextmenu={(e) => { e.preventDefault(); e.stopPropagation(); }} role="menu" tabindex="-1">
+    {#each ctxMenu.items as it}
+      {#if it.sep}
+        <div class="ctxsep"></div>
+      {:else}
+        <button class="ctxi" class:danger={it.danger} disabled={it.disabled} onclick={() => runCtx(it)}>{it.label}</button>
+      {/if}
+    {/each}
   </div>
 {/if}
 
