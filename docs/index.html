@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Arf — Documentation</title>
+<meta name="description" content="Arf is a second brain for scientists and coders: notes, bidirectional links, a private on-device machine that suggests connections, a knowledge graph, and a universal reference Library.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%23faf9f7'/%3E%3Ctext x='50' y='73' text-anchor='middle' font-family='Georgia,serif' font-size='74' font-weight='700' fill='%230a0a0a'%3EA%3C/text%3E%3Ccircle cx='79' cy='67' r='8' fill='%232c4a6e'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="assets/arf-docs.css">
+<script>(function(){try{var t=localStorage.getItem("arf-docs-theme");if(!t&&window.matchMedia&&matchMedia("(prefers-color-scheme: dark)").matches)t="dark";if(t)document.documentElement.setAttribute("data-theme",t);}catch(e){}})();</script>
+</head>
+<body>
+<header class="topbar">
+  <a class="wm" href="index.html">Arf<span class="dot">.</span></a>
+  <nav>
+    <a href="index.html">Overview</a>
+    <a href="writing.html">Writing</a>
+    <a href="linking.html">Links &amp; Graph</a>
+    <a href="machine.html">The Machine</a>
+    <a href="library.html">Library</a>
+    <a href="data.html">Your Data</a>
+    <a href="design.html">Design</a>
+  </nav>
+  <span class="sp"></span>
+  <button class="toggle" id="themeBtn">◑ Theme</button>
+</header>
+
+<main>
+  <section class="hero">
+    <div class="wordmark">Arf<span class="dot">.</span></div>
+    <div class="tagline">A second brain for people who think for a living.</div>
+    <p class="sub">Capture a thought where it happens. Let the connections you never noticed find their way back to you.</p>
+    <a class="cta" href="https://github.com/tunabirgun/arf/releases/latest">Download Arf →</a>
+    <span class="ctasub">A desktop app for Windows, macOS, and Linux. No account — your notes stay on your device.</span>
+  </section>
+
+  <p>Arf is a note-taking tool for scientists, researchers, and coders. You write notes on papers, books, and concepts; you link them; and a small machine that runs entirely on your own computer watches for ideas that belong together and quietly points them out. The result is meant to help you distill insights you could not see when the thoughts were scattered.</p>
+
+  <p>Two commitments shape everything else. The first is that your notes are <strong>plain files you own</strong> — a folder of Markdown you can copy to a USB stick, keep in a synced folder, push to GitHub, or read in any editor forty years from now. The second is that the machine is <strong>private</strong>: the model runs on your device, and your text never leaves it.</p>
+
+  <div class="cardnav">
+    <a href="writing.html"><span class="t">Writing &amp; reading</span><span class="d">A calm editor — Markdown for those who want it, a plain rich-text mode for those who don't. Focus mode, code, and equations.</span></a>
+    <a href="linking.html"><span class="t">Links &amp; the graph</span><span class="d">Bidirectional links that survive renames, concept tags, and a knowledge graph you can actually read.</span></a>
+    <a href="machine.html"><span class="t">The on-device machine</span><span class="d">Resonance and the weekly Synthesis digest — private suggestions that turn a note pile into a network.</span></a>
+    <a href="library.html"><span class="t">The Library</span><span class="d">Every reference in detail, fetched from trusted open sources; export to BibTeX, RIS, CSL-JSON, and Zenodo.</span></a>
+    <a href="data.html"><span class="t">Your data</span><span class="d">The plain-file vault, the <span class="mono">.arf</span> bundle, continuous folder sync across devices, and document export to DOCX and PDF.</span></a>
+    <a href="design.html"><span class="t">Design &amp; the ink</span><span class="d">Why Arf is set in EB Garamond, why it is monochrome, and why the one accent is iron-gall blue.</span></a>
+  </div>
+
+  <h2>The name</h2>
+  <p>Arf is named after <strong>Cahit Arf</strong> (1910–1997), the Turkish mathematician. His best-known idea, the Arf invariant, reduces a complicated object to a single bit — connected, or not. That spirit runs through the tool: the quiet question behind a second brain is always whether a thought has found its place yet. Every note in Arf wears a small mark for exactly that, a filled dot once it is linked and a hollow one while it stands alone.</p>
+
+  <div class="note"><span class="nlabel">Runs on your device</span><p>Everything — your notes, the graph, and the suggestions from the on-device machine — runs on your own computer. There is no account and no server, and your text never leaves your device. See <a href="machine.html">The Machine</a> for how the private suggestion engine works.</p></div>
+
+  <h2>Get Arf</h2>
+  <p>Arf is a desktop app. Download the installer for your system from the <a href="https://github.com/tunabirgun/arf/releases/latest">releases page</a> — an <span class="mono">.exe</span> for Windows, a <span class="mono">.dmg</span> for macOS, an <span class="mono">.AppImage</span> or <span class="mono">.deb</span> for Linux. At first launch Arf asks you to choose the folder that will hold your notes; that folder is the vault. There is no account to create.</p>
+
+  <h2>Where to start</h2>
+  <p>Read <a href="writing.html">Writing &amp; reading</a> to see how a note is made, then <a href="linking.html">Links &amp; the graph</a> for how notes become a network. <a href="machine.html">The Machine</a> explains the private suggestion layer, and <a href="data.html">Your data</a> covers the part that matters most: that the whole thing is yours to keep.</p>
+
+  <div class="pager">
+    <span></span>
+    <a class="next" href="writing.html"><span class="dir">Next</span>Writing &amp; reading →</a>
+  </div>
+</main>
+
+<footer class="site">Arf — a second brain for scientists. · <a href="index.html">Documentation</a></footer>
+<script src="assets/theme.js"></script>
+</body>
+</html>

@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The on-device machine — Arf</title>
+<meta name="description" content="Arf's private machine-learning layer: on-device embeddings, Resonance, the weekly Synthesis digest, and why your text never leaves your computer.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%23faf9f7'/%3E%3Ctext x='50' y='73' text-anchor='middle' font-family='Georgia,serif' font-size='74' font-weight='700' fill='%230a0a0a'%3EA%3C/text%3E%3Ccircle cx='79' cy='67' r='8' fill='%232c4a6e'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="assets/arf-docs.css">
+<script>(function(){try{var t=localStorage.getItem("arf-docs-theme");if(!t&&window.matchMedia&&matchMedia("(prefers-color-scheme: dark)").matches)t="dark";if(t)document.documentElement.setAttribute("data-theme",t);}catch(e){}})();</script>
+</head>
+<body>
+<header class="topbar">
+  <a class="wm" href="index.html">Arf<span class="dot">.</span></a>
+  <nav>
+    <a href="index.html">Overview</a><a href="writing.html">Writing</a><a href="linking.html">Links &amp; Graph</a><a href="machine.html">The Machine</a><a href="library.html">Library</a><a href="data.html">Your Data</a><a href="design.html">Design</a>
+  </nav>
+  <span class="sp"></span>
+  <button class="toggle" id="themeBtn">◑ Theme</button>
+</header>
+
+<main>
+  <div class="eyebrow">The quiet machine</div>
+  <h1>The on-device machine</h1>
+  <p class="lede">Small, open, and it never phones home.</p>
+
+  <p>The reason note collections fail is rarely that capture was too hard. It is that notes pile up faster than anyone connects them, and the insight that was supposed to emerge stays buried in a heap. Arf's machine exists to fight exactly that — not to write for you, but to notice when two of your own thoughts belong together.</p>
+
+  <h2>How it works, briefly</h2>
+  <p>Turn it on and Arf fetches a small open-source language model, all-MiniLM-L6-v2 — about twenty-three megabytes, downloaded once and kept. For each note the model reads the text and produces a short list of 384 numbers that stands for the note's meaning. Notes about the same idea land close together in this space even when they share few words, which is what lets Arf notice a connection you never spelled out.</p>
+  <p>Finding related notes is then arithmetic. The closeness of two notes is the cosine of the angle between their number-lists — a value from zero to one, which is the score you see. Resonance ranks the notes nearest the one you are reading; the Synthesis digest looks for near pairs you have not linked. The model runs in the background on your own hardware, through the graphics card where there is one and the processor otherwise, and each note's numbers are cached, so nothing is recomputed until you change the text.</p>
+  <p>Until the model is downloaded, or if you never turn it on, a lighter classic method fills in from shared distinctive words — instant, but it only sees words, not meaning. The model is the upgrade that reads for sense.</p>
+  <p>The default model reads English. If you write in other languages, Settings offers a <strong>multilingual</strong> model (about 120 MB) that understands 50-plus languages, Turkish among them — so Resonance and Synthesis recognise connections across your notes whatever language you think in.</p>
+  <div class="note"><span class="nlabel">Private by construction</span><p>The model runs on your device. Your notes are never uploaded, there is no account, and there is no server that could see your text even if it wanted to. Only the public model file is fetched; the reading of your notes happens entirely on your machine. Privacy here is not a policy you have to trust; it is the architecture.</p></div>
+
+  <h2>Where it shows up</h2>
+  <p>The machine is deliberately quiet. It never interrupts, and it never fills a panel with noise. It appears at four moments:</p>
+  <div class="grid grid2">
+    <div class="cell"><span class="k">While writing</span><h3>A faint mark</h3><p>When a paragraph resembles an older note, a small mark appears in the margin. Keep typing and it fades.</p></div>
+    <div class="cell"><span class="k">On the page</span><h3>Resonance</h3><p>A short list of the notes most similar to the one you are reading that you have not linked yet — each with a similarity score.</p></div>
+    <div class="cell"><span class="k">Every week</span><h3>Synthesis digest</h3><p>A handful of note pairs that clearly belong together but were never connected, each with one prompt: write the sentence that joins them.</p></div>
+    <div class="cell"><span class="k">Left alone</span><h3>Orphan nudge</h3><p>A note with no links after a while gets a gentle mark — an invitation to place it before it is forgotten.</p></div>
+  </div>
+
+  <h2>Reading the scores</h2>
+  <p>The numbers beside Resonance and Synthesis suggestions are <strong>similarity scores</strong>, from zero to one: how alike two notes are according to the model. One means nearly the same idea; higher means more related. Resonance ranks the notes most like the one you are reading; Synthesis ranks pairs that are alike but unlinked. They are drawn in iron-gall blue because that single accent marks every connection in Arf.</p>
+
+  <h2>Honest about its limits</h2>
+  <p>Two things are worth stating plainly. General text models are weak at reading source code, so fenced code blocks are set aside from the prose fingerprints rather than allowed to muddy them. And the suggestions are exactly that — suggestions. The similarity thresholds are yours to tune, and a suggestion is only ever an invitation to look, never a claim that two notes must be joined.</p>
+
+  <div class="pager">
+    <a class="prev" href="linking.html"><span class="dir">Previous</span>← Links &amp; the graph</a>
+    <a class="next" href="library.html"><span class="dir">Next</span>The Library →</a>
+  </div>
+</main>
+
+<footer class="site">Arf — a second brain for scientists. · <a href="index.html">Documentation</a></footer>
+<script src="assets/theme.js"></script>
+</body>
+</html>

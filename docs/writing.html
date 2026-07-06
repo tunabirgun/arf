@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Writing &amp; reading — Arf</title>
+<meta name="description" content="How you write in Arf: a plain rich-text editor for everyone, raw Markdown for those who want it, focus mode, code blocks, and LaTeX equations.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%23faf9f7'/%3E%3Ctext x='50' y='73' text-anchor='middle' font-family='Georgia,serif' font-size='74' font-weight='700' fill='%230a0a0a'%3EA%3C/text%3E%3Ccircle cx='79' cy='67' r='8' fill='%232c4a6e'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="assets/arf-docs.css">
+<script>(function(){try{var t=localStorage.getItem("arf-docs-theme");if(!t&&window.matchMedia&&matchMedia("(prefers-color-scheme: dark)").matches)t="dark";if(t)document.documentElement.setAttribute("data-theme",t);}catch(e){}})();</script>
+</head>
+<body>
+<header class="topbar">
+  <a class="wm" href="index.html">Arf<span class="dot">.</span></a>
+  <nav>
+    <a href="index.html">Overview</a>
+    <a href="writing.html">Writing</a>
+    <a href="linking.html">Links &amp; Graph</a>
+    <a href="machine.html">The Machine</a>
+    <a href="library.html">Library</a>
+    <a href="data.html">Your Data</a>
+    <a href="design.html">Design</a>
+  </nav>
+  <span class="sp"></span>
+  <button class="toggle" id="themeBtn">◑ Theme</button>
+</header>
+
+<main>
+  <div class="eyebrow">The surface</div>
+  <h1>Writing &amp; reading</h1>
+  <p class="lede">The note is the whole product. Everything else stays out of the way until you look for it.</p>
+
+  <p>A note in Arf is a page of text. It reads like paper — set in EB Garamond, in a column narrow enough to be comfortable, with your quotes, code, and equations in place. You can write in two ways, and you choose which without any penalty, because both save to the same plain Markdown file underneath.</p>
+
+  <h2>Two ways to write, one file underneath</h2>
+  <p>Markdown is fast and precise once you know it, and it keeps your notes portable. But asking a working scientist to learn <code>**bold**</code> and <code>##&nbsp;heading</code> before they can take a note is a real barrier. So Arf offers both:</p>
+
+  <div class="grid">
+    <div class="cell"><span class="k">Default</span><h3>Rich text</h3><p>A plain, familiar editor. Select text and a small toolbar appears; type <code>/</code> for an insert menu. Bold, headings, lists, tables, links, images — the things you already know from Word or Docs, with nothing to memorise.</p></div>
+    <div class="cell"><span class="k">Optional</span><h3>Markdown</h3><p>Prefer to type the syntax? Switch to raw Markdown and work in source. It is the same note; the toggle changes only how you edit it, never what is stored.</p></div>
+  </div>
+
+  <p>Whichever mode you use, the file on disk stays clean Markdown, so a note written in the rich-text editor opens perfectly in any other Markdown tool, and one written elsewhere opens perfectly here.</p>
+
+  <div class="note"><span class="nlabel">Why this matters</span><p>The portability promise only holds if the file is honest Markdown. Formatting that Markdown cannot express is kept in a way that never corrupts the file — so you never open your vault in another editor and find it full of stray markup.</p></div>
+
+  <h2>Focus mode</h2>
+  <p>When you want to write rather than navigate, focus mode hides the side panels, centers the column, and dims every paragraph except the one under your cursor. It is the difference between a workspace and a desk with a single sheet of paper on it. Press <span class="mono">Esc</span> to leave.</p>
+
+  <h2>Code, for the coders</h2>
+  <p>Arf is built for computational researchers too, so code is a first-class citizen. Fenced blocks are highlighted per language — R, Python, bash, SQL, and the rest — but in ink rather than a rainbow: comments recede, keywords come forward, and the block reads like part of the page instead of a screenshot from an IDE.</p>
+  <pre><code># overlap of pointer states under dephasing
+decohere &lt;- function(rho, gamma, t) {
+  off &lt;- exp(-gamma * t)          # coherence envelope
+  rho[upper.tri(rho)] &lt;- rho[upper.tri(rho)] * off
+  rho                              # diagonals untouched
+}</code></pre>
+
+  <h2>Equations, for the mathematicians</h2>
+  <p>Mathematics is written the way you already write it, in LaTeX. Inline math sits between single dollar signs and display math between double ones:</p>
+  <pre><code>The Arf invariant of a quadratic form is
+$$\mathrm{Arf}(q) = \sum_{i=1}^{n} q(a_i)\,q(b_i) \in \mathbb{F}_2$$</code></pre>
+  <p>It renders live as you read, and the LaTeX stays in the file, so your equations travel with your notes.</p>
+
+  <h2>Typography you control</h2>
+  <p>A single control adjusts the reading experience — text size, line height, and light or dark — and the choice is remembered per device. The defaults are tuned for long reading: EB Garamond sets small, so the body runs a little larger than a sans would, with generous leading.</p>
+
+  <div class="pager">
+    <a class="prev" href="index.html"><span class="dir">Previous</span>← Overview</a>
+    <a class="next" href="linking.html"><span class="dir">Next</span>Links &amp; the graph →</a>
+  </div>
+</main>
+
+<footer class="site">Arf — a second brain for scientists. · <a href="index.html">Documentation</a></footer>
+<script src="assets/theme.js"></script>
+</body>
+</html>

@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Design &amp; the ink — Arf</title>
+<meta name="description" content="Arf's design language: EB Garamond, monochrome ink on paper, and why the single accent is iron-gall blue — the ink of scholarship for a thousand years.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%23faf9f7'/%3E%3Ctext x='50' y='73' text-anchor='middle' font-family='Georgia,serif' font-size='74' font-weight='700' fill='%230a0a0a'%3EA%3C/text%3E%3Ccircle cx='79' cy='67' r='8' fill='%232c4a6e'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="assets/arf-docs.css">
+<script>(function(){try{var t=localStorage.getItem("arf-docs-theme");if(!t&&window.matchMedia&&matchMedia("(prefers-color-scheme: dark)").matches)t="dark";if(t)document.documentElement.setAttribute("data-theme",t);}catch(e){}})();</script>
+</head>
+<body>
+<header class="topbar">
+  <a class="wm" href="index.html">Arf<span class="dot">.</span></a>
+  <nav>
+    <a href="index.html">Overview</a><a href="writing.html">Writing</a><a href="linking.html">Links &amp; Graph</a><a href="machine.html">The Machine</a><a href="library.html">Library</a><a href="data.html">Your Data</a><a href="design.html">Design</a>
+  </nav>
+  <span class="sp"></span>
+  <button class="toggle" id="themeBtn">◑ Theme</button>
+</header>
+
+<main>
+  <div class="eyebrow">Design</div>
+  <h1>Design &amp; the ink</h1>
+  <p class="lede">Ink on paper, one typeface, and a single colour that had to earn its place.</p>
+
+  <p>Arf is meant to feel like a good notebook, not a piece of software. That intention drives every visual decision: a calm surface, generous space, no chrome that is not doing work, and a register that reads as scholarly rather than commercial. This page — like the whole documentation, and the app itself — is a specimen of that language.</p>
+
+  <h2>One typeface: EB Garamond</h2>
+  <p>Everything you read in Arf is set in <strong>EB Garamond</strong>, a faithful open revival of the sixteenth-century types of Claude Garamond, the faces that defined the scholarly book. It is used for a simple reason: it is the type of sustained reading and thinking. It sets a touch small, so Arf runs it a little larger than a sans would, with room to breathe. The interface furniture that must stay legible at tiny sizes — labels, timestamps, code — is handed to a quiet sans and a monospace, so the serif is never asked to do a job it does badly.</p>
+  <p>EB Garamond is free under the SIL Open Font License, which matters for a tool that means to be freely used and freely kept.</p>
+
+  <h2>Monochrome, on purpose</h2>
+  <p>The palette is ink on warm paper: a near-black on an off-white that is not quite white, with a scale of greys for everything quiet. It is monochrome by default, and that restraint is a design position, not a limitation. Distinctions are carried by weight, by italics, by a solid versus a dashed line, by a filled versus a hollow shape — so the interface stays legible for colour-blind readers, in high-contrast modes, and anywhere the palette is overridden.</p>
+  <div class="swatches">
+    <div class="sw"><div class="chip" style="background:#faf9f7"></div><div class="lab"><b>paper</b>#faf9f7</div></div>
+    <div class="sw"><div class="chip" style="background:#2a2a2a"></div><div class="lab"><b>ink</b>#2a2a2a</div></div>
+    <div class="sw"><div class="chip" style="background:#595959"></div><div class="lab"><b>muted</b>#595959</div></div>
+    <div class="sw"><div class="chip" style="background:#e3e3e3"></div><div class="lab"><b>line</b>#e3e3e3</div></div>
+    <div class="sw"><div class="chip" style="background:#2c4a6e"></div><div class="lab"><b>iron-gall</b>#2c4a6e</div></div>
+    <div class="sw"><div class="chip" style="background:#0a0a0a"></div><div class="lab"><b>night</b>#0a0a0a</div></div>
+  </div>
+  <p>There is a full dark mode — "night study" — that swaps only the ink and paper, never the rules. In dark mode the serif's weight is nudged up a fraction so its fine strokes do not thin out on a black ground. Use the theme control in the header.</p>
+
+  <h2>Why iron-gall blue</h2>
+  <p>Arf has exactly one accent colour, and it is a specific one: <strong>iron-gall blue</strong>, the deep blue-black at <code>#2c4a6e</code>. It is worth explaining, because the choice is the whole argument for the design.</p>
+  <p>Iron-gall ink was <em>the</em> writing ink of the Western world for well over a thousand years — from late antiquity into the nineteenth century. It was made by steeping oak galls for their tannins and adding iron salts; the reaction produced a dark, permanent ink that bit into the page and would not wash away. Nearly everything that mattered was written in it. Leonardo's notebooks, Bach's scores, Newton's manuscripts, the letters and ledgers and lab books of centuries of scholars — all iron-gall. It goes onto the page a cool blue-black and matures, over years, toward a warm brown.</p>
+  <p>For a tool about committing thought to paper, no colour could be more honest. It is not a brand hue chosen to stand out, and it is deliberately not drawn from anything ornamental. It is simply the colour that ideas were written in for most of recorded scholarship. In Arf it appears only where a connection lives — a link, a tag, a suggestion from the machine, the dot in the wordmark — so the one colour on the page always means the same thing: <em>here is where thought connects to thought.</em> It clears the highest contrast standard in both light and dark, and against the monochrome it reads as considered rather than loud.</p>
+  <div class="note"><span class="nlabel">In short</span><p>Iron-gall is the ink of the notebook Arf is trying to be. Choosing it is the same decision as setting the whole thing in Garamond: reach for the materials of scholarship, and use them plainly.</p></div>
+
+  <h2>The mark</h2>
+  <p>The logo is the word <em>Arf</em> set in the product's own typeface, with a single trailing dot in iron-gall. The dot is not decoration. It is the <strong>invariant dot</strong> — the small mark every note wears, filled once it has been linked to another thought and hollow while it stands alone. It is a quiet nod to Cahit Arf, whose most famous idea reduces a complicated object to a single bit: connected, or not. There is no portrait and no ornament, because the name and the mathematics are enough.</p>
+
+  <div class="pager">
+    <a class="prev" href="data.html"><span class="dir">Previous</span>← Your data</a>
+    <a class="next" href="index.html"><span class="dir">Next</span>Back to overview →</a>
+  </div>
+</main>
+
+<footer class="site">Arf — a second brain for scientists. · <a href="index.html">Documentation</a></footer>
+<script src="assets/theme.js"></script>
+</body>
+</html>

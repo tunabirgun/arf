@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Links &amp; the graph — Arf</title>
+<meta name="description" content="Bidirectional links that survive renames, concept tags, backlinks, and a knowledge graph you can actually read.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%23faf9f7'/%3E%3Ctext x='50' y='73' text-anchor='middle' font-family='Georgia,serif' font-size='74' font-weight='700' fill='%230a0a0a'%3EA%3C/text%3E%3Ccircle cx='79' cy='67' r='8' fill='%232c4a6e'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="assets/arf-docs.css">
+<script>(function(){try{var t=localStorage.getItem("arf-docs-theme");if(!t&&window.matchMedia&&matchMedia("(prefers-color-scheme: dark)").matches)t="dark";if(t)document.documentElement.setAttribute("data-theme",t);}catch(e){}})();</script>
+</head>
+<body>
+<header class="topbar">
+  <a class="wm" href="index.html">Arf<span class="dot">.</span></a>
+  <nav>
+    <a href="index.html">Overview</a><a href="writing.html">Writing</a><a href="linking.html">Links &amp; Graph</a><a href="machine.html">The Machine</a><a href="library.html">Library</a><a href="data.html">Your Data</a><a href="design.html">Design</a>
+  </nav>
+  <span class="sp"></span>
+  <button class="toggle" id="themeBtn">◑ Theme</button>
+</header>
+
+<main>
+  <div class="eyebrow">Structure</div>
+  <h1>Links &amp; the graph</h1>
+  <p class="lede">A note becomes useful the moment it stops being alone.</p>
+
+  <p>Organization in Arf is a hybrid, because that is what researchers actually use in practice. You get folders and subfolders for coarse structure, concept hashtags for categories, and links for the real conceptual relationships between ideas. None of them is mandatory; you can save a note with no folder and no tag and only connect it later.</p>
+
+  <h2>Links that survive a rename</h2>
+  <p>You link one note to another by referring to it, and Arf keeps track of the relationship in both directions. The note you point to shows a <strong>backlinks</strong> list — a quiet "referenced in" section at the foot of the page — so you discover the connections you forgot you made.</p>
+  <p>The important detail is under the surface. Every note carries a stable identifier that never changes, and links resolve to that identifier rather than to a filename. So you can rename a note, in Arf or in Finder, and every link to it still holds. Link rot from renaming, the quiet way a note collection falls apart, does not happen here.</p>
+  <div class="note"><span class="nlabel">Portable by default</span><p>Links are written as ordinary Markdown, so a vault dropped into a GitHub repository or another editor still renders. Wiki-style <code>[[links]]</code> are available as an option for those who prefer them.</p></div>
+
+  <h2>Tags for concepts</h2>
+  <p>A hashtag like <code>#decoherence</code> groups notes by concept, and tags nest — <code>#method/statistics</code> — so you can be as coarse or as fine as you like. Clicking a tag filters your notes to it. Tags and folders answer different questions: a folder is where a note lives, a tag is what it is about, and a link is how it relates to another idea.</p>
+
+  <h2>The knowledge graph</h2>
+  <p>Most note tools ship a graph that looks impressive in a screenshot and turns into an unreadable hairball the moment you have real notes. Arf takes the opposite approach.</p>
+  <p>The everyday graph is <strong>local</strong>: it shows the note you are reading and its immediate neighbours, one or two hops out. It is small, legible, and always about where you are. When you want the whole picture, a single click opens the <strong>full-window graph</strong> of your entire vault, and it is built to be used, not just admired:</p>
+  <div class="grid">
+    <div class="cell"><span class="k">Move</span><h3>Drag &amp; arrange</h3><p>Grab any node and place it. The layout settles once and then holds still — no perpetual jitter.</p></div>
+    <div class="cell"><span class="k">Look</span><h3>Zoom, pan, hover</h3><p>Scroll to zoom toward the cursor, drag the background to pan, and hover a node to light up its neighbourhood while the rest recedes.</p></div>
+    <div class="cell"><span class="k">Select</span><h3>Multi-select</h3><p>Ctrl-click (⌘-click on a Mac) gathers several nodes at once, so you can reason about a cluster rather than one note at a time.</p></div>
+  </div>
+  <p>The graph reads in ink, not colour. A node's size grows with how many links point to it; a filled circle has connections while a hollow one is still an orphan; solid edges are links you made, and dashed edges are the machine's suggestions. Nothing depends on colour alone, so it stays legible for everyone.</p>
+
+  <div class="pager">
+    <a class="prev" href="writing.html"><span class="dir">Previous</span>← Writing &amp; reading</a>
+    <a class="next" href="machine.html"><span class="dir">Next</span>The on-device machine →</a>
+  </div>
+</main>
+
+<footer class="site">Arf — a second brain for scientists. · <a href="index.html">Documentation</a></footer>
+<script src="assets/theme.js"></script>
+</body>
+</html>

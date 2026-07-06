@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Your data — Arf</title>
+<meta name="description" content="The plain-file vault, the .arf bundle, continuous folder sync across devices, and document export to Markdown, HTML, DOCX, and PDF.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%23faf9f7'/%3E%3Ctext x='50' y='73' text-anchor='middle' font-family='Georgia,serif' font-size='74' font-weight='700' fill='%230a0a0a'%3EA%3C/text%3E%3Ccircle cx='79' cy='67' r='8' fill='%232c4a6e'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="assets/arf-docs.css">
+<script>(function(){try{var t=localStorage.getItem("arf-docs-theme");if(!t&&window.matchMedia&&matchMedia("(prefers-color-scheme: dark)").matches)t="dark";if(t)document.documentElement.setAttribute("data-theme",t);}catch(e){}})();</script>
+</head>
+<body>
+<header class="topbar">
+  <a class="wm" href="index.html">Arf<span class="dot">.</span></a>
+  <nav>
+    <a href="index.html">Overview</a><a href="writing.html">Writing</a><a href="linking.html">Links &amp; Graph</a><a href="machine.html">The Machine</a><a href="library.html">Library</a><a href="data.html">Your Data</a><a href="design.html">Design</a>
+  </nav>
+  <span class="sp"></span>
+  <button class="toggle" id="themeBtn">◑ Theme</button>
+</header>
+
+<main>
+  <div class="eyebrow">Ownership</div>
+  <h1>Your data, actually yours</h1>
+  <p class="lede">A folder of files that outlives the app.</p>
+
+  <p>The single promise Arf will not break is that your work belongs to you, in a form no company controls. Your vault is a plain folder: one Markdown file per note, your PDFs and images beside them, a small header on each note. You choose that folder at first launch, and the app — native on Windows, macOS, and Linux — reads and writes it directly on your disk. Copy it to a USB stick, keep it in a Drive or Dropbox folder, open it in any editor, and it still makes sense. Everything Arf builds on top — the search index, the fingerprints, the graph layout — lives in one throwaway folder that can be deleted and rebuilt at any time. It is never precious, and it is never the only copy of anything you wrote.</p>
+
+  <h2>The <span class="mono">.arf</span> bundle</h2>
+  <p>Sometimes you want the whole brain as a single object — to email it, to archive a dated backup, to hand it to a collaborator. An <code>.arf</code> file is exactly that: your entire vault, notes and attachments together, packed into one portable file. The working vault stays an open folder; the bundle is just how it travels.</p>
+
+  <h2>Sync across your devices</h2>
+  <p>Because your vault is an ordinary folder of Markdown files, syncing it needs no account with Arf and no server of ours. Keep the vault folder you chose at first launch in a place your devices already sync — Dropbox, iCloud Drive, OneDrive, Google Drive, or Syncthing. Point Arf at the same folder on each machine and you are done.</p>
+  <blockquote>Choose the folder once. Arf keeps it in step — both ways, automatically, while you work.<cite>The sync flow, in one sentence</cite></blockquote>
+  <p>Arf watches the folder continuously. An edit you make on your laptop appears on the desktop within seconds; a note you delete on one device is removed on the others. There is no button to press and no command line — the cloud service you already use moves the files, and Arf reconciles them by keeping the newer version of each note. The header at the top of the sidebar tells you plainly what it is doing: <span class="mono">Synced · your-folder</span>. Power users who prefer real version history can put that same folder in a git repository and commit underneath.</p>
+  <div class="note"><span class="nlabel">A word on durability</span><p>Arf writes real files to your disk; nothing is kept in a private app database. The <code>.arf</code> bundle export is always available as a dated backup of the whole vault.</p></div>
+
+  <h2>Export your writing</h2>
+  <p>Notes leave as easily as they arrive. Any note exports to Markdown, HTML, DOCX, or PDF, and the document export is built to avoid the things that make an exported file look broken:</p>
+  <ul>
+    <li><strong>No orphaned headings</strong> — a heading is kept with the paragraph that follows it, so none is ever stranded alone at the bottom of a page.</li>
+    <li><strong>No out-scaling</strong> — images and code blocks are fit to the text width instead of spilling past the margin.</li>
+    <li><strong>Your typography, preserved</strong> — the page keeps its EB Garamond setting, with page size and margins under your control.</li>
+  </ul>
+  <p>Citations in the document resolve through the Library, so a manuscript exports with its reference list intact.</p>
+
+  <div class="pager">
+    <a class="prev" href="library.html"><span class="dir">Previous</span>← The Library</a>
+    <a class="next" href="design.html"><span class="dir">Next</span>Design &amp; the ink →</a>
+  </div>
+</main>
+
+<footer class="site">Arf — a second brain for scientists. · <a href="index.html">Documentation</a></footer>
+<script src="assets/theme.js"></script>
+</body>
+</html>

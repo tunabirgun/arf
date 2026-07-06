@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Library — Arf</title>
+<meta name="description" content="Arf's Library: every bibliographic reference in detail, fetched from trusted open sources, with export to BibTeX, RIS, CSL-JSON, formatted styles, and Zenodo.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%23faf9f7'/%3E%3Ctext x='50' y='73' text-anchor='middle' font-family='Georgia,serif' font-size='74' font-weight='700' fill='%230a0a0a'%3EA%3C/text%3E%3Ccircle cx='79' cy='67' r='8' fill='%232c4a6e'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="assets/arf-docs.css">
+<script>(function(){try{var t=localStorage.getItem("arf-docs-theme");if(!t&&window.matchMedia&&matchMedia("(prefers-color-scheme: dark)").matches)t="dark";if(t)document.documentElement.setAttribute("data-theme",t);}catch(e){}})();</script>
+</head>
+<body>
+<header class="topbar">
+  <a class="wm" href="index.html">Arf<span class="dot">.</span></a>
+  <nav>
+    <a href="index.html">Overview</a><a href="writing.html">Writing</a><a href="linking.html">Links &amp; Graph</a><a href="machine.html">The Machine</a><a href="library.html">Library</a><a href="data.html">Your Data</a><a href="design.html">Design</a>
+  </nav>
+  <span class="sp"></span>
+  <button class="toggle" id="themeBtn">◑ Theme</button>
+</header>
+
+<main>
+  <div class="eyebrow">Sources</div>
+  <h1>The Library</h1>
+  <p class="lede">Every reference you cite, kept in full, and never allowed to rot.</p>
+
+  <p>Arf is not a reference manager competing with Zotero, and it does not ask you to abandon one. But a research-notes tool needs to hold the sources those notes are about, in detail, and to make citing them effortless. That is the Library: a browsable record of every reference in your work — journal articles, books, magazine and newspaper pieces, chapters, conference papers, preprints, datasets, theses, and web pages.</p>
+
+  <h2>Fetched from open bibliographic sources</h2>
+  <p>You add a reference by giving Arf an identifier — a DOI, an ISBN, or an arXiv ID — and it fills in the title, authors, year, and venue for you from open, no-account sources:</p>
+  <div class="tbl"><table>
+    <thead><tr><th>You have</th><th>Arf fetches from</th></tr></thead>
+    <tbody>
+      <tr><td>A DOI</td><td>Crossref — the canonical scholarly record</td></tr>
+      <tr><td>An ISBN</td><td>Open Library</td></tr>
+      <tr><td>An arXiv ID</td><td>Crossref, via the paper's arXiv DOI</td></tr>
+    </tbody>
+  </table></div>
+  <p>Only the identifier you typed ever leaves your device — never your notes. Each reference records <strong>which source it came from</strong>, and you can correct any field by hand. If a lookup finds nothing, you add the reference and fill the details yourself.</p>
+
+  <h2>Web pages that don't disappear</h2>
+  <p>A web citation is worthless once the page changes or vanishes. When you add a web source, Arf preserves it through the Internet Archive's Wayback Machine — capturing a snapshot and recording the archived link, the capture date, and the date you accessed it. The citation points at something permanent.</p>
+
+  <h2>Cite as you write, export anywhere</h2>
+  <p>Inserting a citation from the Library into a note is a single action, and Arf builds the reference list for you. When it is time to leave — to a manuscript, a co-author, or another tool — the Library exports to every format you are likely to need:</p>
+  <div class="grid grid2">
+    <div class="cell"><span class="k">Managers</span><h3>BibTeX · RIS</h3><p>RIS is what EndNote, Zotero, and Mendeley read. BibTeX for LaTeX workflows.</p></div>
+    <div class="cell"><span class="k">Interchange</span><h3>CSL-JSON</h3><p>The format Arf stores internally and the lingua franca of citation tools.</p></div>
+    <div class="cell"><span class="k">Formatted</span><h3>APA · Nature · &amp;c.</h3><p>Rendered in any of thousands of citation styles for pasting straight into a document.</p></div>
+    <div class="cell"><span class="k">Deposit</span><h3>Zenodo</h3><p>Deposition metadata for archiving your own work.</p></div>
+  </div>
+  <p>Import runs the same way in reverse, so an existing <code>.bib</code> or RIS file comes in cleanly.</p>
+
+  <div class="pager">
+    <a class="prev" href="machine.html"><span class="dir">Previous</span>← The on-device machine</a>
+    <a class="next" href="data.html"><span class="dir">Next</span>Your data →</a>
+  </div>
+</main>
+
+<footer class="site">Arf — a second brain for scientists. · <a href="index.html">Documentation</a></footer>
+<script src="assets/theme.js"></script>
+</body>
+</html>

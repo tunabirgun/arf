@@ -8,7 +8,7 @@ A local-first second brain for scientists and coders. Write notes on papers, boo
 ![On-device ML](https://img.shields.io/badge/ML-on--device-555)
 
 - **Download:** <https://github.com/tunabirgun/arf/releases/latest> — Windows, macOS, Linux
-- **Documentation:** <https://tunabirgun.github.io/arf-docs/>
+- **Documentation:** <https://tunabirgun.github.io/arf/>
 
 ![Arf — a note with rendered math, wikilinks, a citation, backlinks, resonance, and the local graph](screenshot.png)
 
