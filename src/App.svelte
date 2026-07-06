@@ -456,12 +456,23 @@
   function setZoom(z) { zoom = Math.max(70, Math.min(160, z)); }
   function setTheme(tv) { theme = tv; document.documentElement.setAttribute('data-theme', tv); try { localStorage.setItem('arf-theme', tv); } catch (e) {} }
   $effect(() => { try { document.documentElement.style.zoom = String(zoom / 100); localStorage.setItem('arf-zoom', zoom); } catch (e) {} });
-  function linkPair(aId, bId) {
+  function linkPair(aId, bId, terms) {
     const a = idx.byId[aId], b = idx.byId[bId]; if (!a || !b) return;
-    const s = window.prompt('Write the sentence that connects “' + a.title + '” and “' + b.title + '”:', '');
+    const suggestion = suggestRelation(a, b, terms);
+    const s = window.prompt('Write the sentence that connects "' + a.title + '" and "' + b.title + '":', suggestion);
     if (s === null) return; // cancelled — do not fake the connection
     const line = s.trim() ? s.trim().replace(/\.?$/, '') + ' — see [[' + b.title + ']].' : 'Related to [[' + b.title + ']].';
     a.body = (a.body || '').trimEnd() + '\n\n' + line; a.updated = new Date().toISOString(); markDirty(aId); flushSave();
+  }
+  // Build a natural connecting sentence from the shared terms and titles.
+  // MiniLM gives us the similarity; the shared terms give us the *why*.
+  function suggestRelation(a, b, terms) {
+    const t = (terms || []).filter((x) => x.length > 3);
+    if (!t.length) return a.title + ' and [[' + b.title + ']] are related.';
+    // pick up to 3 distinctive shared terms, joined naturally
+    const picked = t.slice(0, 3);
+    const termList = picked.length === 1 ? picked[0] : picked.slice(0, -1).join(', ') + ' and ' + picked[picked.length - 1];
+    return 'Both ' + a.title + ' and [[' + b.title + "]] touch on " + termList + '.';
   }
 
   // read-view delegation
@@ -540,6 +551,7 @@
     else if (mod && e.key.toLowerCase() === 'n') { e.preventDefault(); if (view === 'library') view = 'notes'; create(); }
     else if (mod && e.key.toLowerCase() === 's') { e.preventDefault(); flushSave(); }
     else if (mod && e.key.toLowerCase() === 'b') { e.preventDefault(); view = view === 'library' ? 'notes' : 'library'; }
+    else if (mod && e.key.toLowerCase() === 'r') { e.preventDefault(); flushSave(); syncFromFolder(); }
     else if (mod && e.key === 'Backspace' && current && mode === 'read') { e.preventDefault(); deleteNote(currentId); }
     else if (e.key === 'Escape') { paletteOpen = false; digestOpen = false; graphFull = false; docExport = false; settingsOpen = false; focus = false; closeCtx(); }
   }
@@ -624,7 +636,7 @@
         {#if tagFilter}
           <button class="clearfilter" onclick={() => (tagFilter = null)}>← clear #{tagFilter}</button>
           {#each listNotes as n (n.id)}
-            <button class="item" class:on={n.id === currentId} onclick={() => open(n.id)}>
+            <button class="item" class:on={n.id === currentId} onclick={() => open(n.id)} oncontextmenu={(e) => openCtx(n.id, e)}>
               <span class="dot2" class:orphan={invDot(n.id) === '○'}>{invDot(n.id)}</span>
               <span class="txt"><span class="t">{n.title || 'Untitled'}</span></span>
             </button>
@@ -636,7 +648,7 @@
                 <span class="caret">{r.hasChildren ? (r.collapsed ? '▸' : '▾') : '·'}</span><span class="fn">{r.name}</span>{#if r.count}<span class="fcount">{r.count}</span>{/if}
               </button>
             {:else}
-              <button class="item" class:on={r.note.id === currentId} style="padding-left:{6 + r.depth * 12}px" onclick={() => open(r.note.id)}>
+              <button class="item" class:on={r.note.id === currentId} style="padding-left:{6 + r.depth * 12}px" onclick={() => open(r.note.id)} oncontextmenu={(e) => openCtx(r.note.id, e)}>
                 <span class="dot2" class:orphan={invDot(r.note.id) === '○'} title={dotTitle(r.note.id)}>{invDot(r.note.id)}</span>
                 <span class="txt"><span class="t">{r.note.title || 'Untitled'}</span></span>
               </button>
@@ -779,7 +791,7 @@
               <span class="pairtitles"><button class="a" onclick={() => open(p.a)}>{idx.byId[p.a].title}</button> <span class="mid">↔</span> <button class="a" onclick={() => open(p.b)}>{idx.byId[p.b].title}</button></span>
               {#if p.terms.length}<span class="shared">shared: {#each p.terms as tm}<span class="shtag">{tm}</span>{/each}</span>{/if}
             </span>
-            <span class="psim">{p.s.toFixed(2)}</span><button class="link" onclick={() => linkPair(p.a, p.b)}>Link</button>
+            <span class="psim">{p.s.toFixed(2)}</span><button class="link" onclick={() => linkPair(p.a, p.b, p.terms)}>Link</button>
           </div>
         {:else}<div class="rempty" style="padding:1rem 0">Everything similar is already linked. Good week.</div>{/each}
       </div>
@@ -824,9 +836,24 @@
 
       <div class="setlabel">About</div>
       <div class="setrow"><span class="sk">Arf {APP_VERSION}</span>
-        <span class="setstat"><a href="https://tunabirgun.github.io/arf-docs/" target="_blank" rel="noopener">Docs</a> · <a href="https://github.com/tunabirgun/arf" target="_blank" rel="noopener">Source</a></span>
+        <span class="setstat"><a href="https://tunabirgun.github.io/arf/" target="_blank" rel="noopener">Docs</a> · <a href="https://github.com/tunabirgun/arf" target="_blank" rel="noopener">Source</a></span>
       </div>
     </div>
+  </div>
+{/if}
+
+{#if ctxMenu}
+  <div class="ctxback" onclick={closeCtx} oncontextmenu={(e) => { e.preventDefault(); closeCtx(); }} onkeydown={(e) => { if (e.key === 'Escape') closeCtx(); }} role="button" tabindex="0" aria-label="Close menu"></div>
+  <div class="ctxmenu" style="left:{ctxMenu.x}px; top:{ctxMenu.y}px">
+    <button class="ctxi" onclick={() => { open(ctxMenu.noteId); mode = 'write'; closeCtx(); }}>Open &amp; edit</button>
+    <button class="ctxi" onclick={() => renameFromCtx(ctxMenu.noteId)}>Rename</button>
+    <button class="ctxi" onclick={() => dupNote(ctxMenu.noteId)}>Duplicate</button>
+    <div class="ctxsep"></div>
+    <button class="ctxi" onclick={() => copyWikilink(ctxMenu.noteId)}>Copy wikilink</button>
+    <button class="ctxi" onclick={() => copyMd(ctxMenu.noteId)}>Copy as Markdown</button>
+    <button class="ctxi" onclick={() => { currentId = ctxMenu.noteId; mode = 'read'; view = 'notes'; flushSave(); docExport = true; closeCtx(); }}>Export…</button>
+    <div class="ctxsep"></div>
+    <button class="ctxi danger" onclick={() => deleteNote(ctxMenu.noteId)}>Delete</button>
   </div>
 {/if}
 

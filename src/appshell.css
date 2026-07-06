@@ -261,3 +261,12 @@
 .wbtn:hover { opacity: .92; }
 .wsub { font-family: var(--sans); font-size: 13px; line-height: 1.5; color: var(--fg-muted); margin: 1.2rem 0 0; }
 
+/* ===== right-click context menu ===== */
+.ctxback { position: fixed; inset: 0; z-index: 49; }
+.ctxmenu { position: fixed; z-index: 50; min-width: 168px; background: var(--surface); border: 1px solid var(--line-strong); border-radius: 7px; box-shadow: 0 10px 40px rgba(0,0,0,.22); padding: .4rem 0; font-family: var(--sans); font-size: 13px; }
+.ctxi { display: block; width: 100%; text-align: left; background: none; border: 0; padding: .4rem .9rem; color: var(--fg); cursor: pointer; line-height: 1.3; }
+.ctxi:hover { background: var(--accent-soft); color: var(--fg-bright); }
+.ctxi.danger { color: #b04a4a; }
+.ctxi.danger:hover { background: #b04a4a1f; }
+.ctxsep { height: 1px; background: var(--line); margin: .35rem .6rem; }
+
