@@ -1,5 +1,3 @@
-<p align="center"><img src="logo.svg" width="280" alt="Arf"></p>
-
 # Arf
 
 A local-first second brain for scientists and coders. Write notes on papers, books, and concepts; link them; and let a private, on-device model surface the connections you didn't draw. Your notes are plain Markdown files you own, and nothing leaves your device.

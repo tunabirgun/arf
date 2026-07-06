@@ -1,5 +1,5 @@
 <script>
-  import { loadNotes, saveNotes, newNote, toMarkdown, loadFolders, saveFolders, corruptBackupKey } from './lib/vault.js';
+  import { loadNotes, saveNotes, newNote, toMarkdown, loadFolders, saveFolders, corruptBackupKey, ulid } from './lib/vault.js';
   import { buildFolderRows, folderList } from './lib/folders.js';
   import { buildIndex, buildVectorizer, related, hasLinks, digestPairs, cosine, sharedTerms } from './lib/graphindex.js';
   import { renderMarkdown, setLinkResolver, setCiteResolver } from './lib/markdown.js';
@@ -49,6 +49,8 @@
   let digestOpen = $state(false);
   let graphFull = $state(false);
   let focus = $state(false);
+  let ctxMenu = $state(null);   // { x, y, noteId } — the right-click menu on a sidebar note
+  let ctxSub = $state(null);    // open submenu id, e.g., 'move'
   let query = $state('');
   let folders = $state(loadFolders());
   let collapsed = $state({});
@@ -384,6 +386,52 @@
     docExport = false;
   }
   function open(id) { if (!idx.byId[id]) return; flushSave(); currentId = id; mode = 'read'; view = 'notes'; paletteOpen = false; graphFull = false; }
+
+  // --- right-click context menu actions ---
+  function openCtx(id, e) {
+    e.preventDefault();
+    if (!idx.byId[id]) return;
+    const zf = (zoom || 100) / 100;
+    ctxMenu = { x: Math.round(e.clientX / zf), y: Math.round(e.clientY / zf), noteId: id };
+    ctxSub = null;
+  }
+  function closeCtx() { ctxMenu = null; ctxSub = null; }
+  async function copyText(t) { try { await navigator.clipboard.writeText(t); } catch (e) {} }
+  function dupNote(id) {
+    const n = idx.byId[id]; if (!n) return;
+    const copy = { ...n, id: ulid(), title: (n.title || 'Untitled') + ' (copy)', created: new Date().toISOString(), updated: new Date().toISOString() };
+    delete copy._path;  // a duplicate must be written to a new file, not overwrite the original
+    notes.unshift(copy); markDirty(copy.id); persist();
+    currentId = copy.id; mode = 'write'; view = 'notes';
+    closeCtx();
+  }
+  function copyMd(id) {
+    const n = idx.byId[id]; if (!n) return;
+    copyText(toMarkdown(n)); closeCtx();
+  }
+  function copyWikilink(id) {
+    const n = idx.byId[id]; if (!n) return;
+    copyText('[[' + n.title + ']]'); closeCtx();
+  }
+  function renameFromCtx(id) {
+    const n = idx.byId[id]; if (!n) return;
+    currentId = id; view = 'notes'; mode = 'read';
+    closeCtx();
+    setTimeout(() => { const el = document.querySelector('.title.ro'); if (el) { mode = 'write'; requestAnimationFrame(() => { const inp = document.querySelector('.title:not(.ro)'); if (inp) { inp.focus(); inp.select(); } }); } }, 30);
+  }
+  function deleteNote(id) {
+    const n = idx.byId[id]; if (!n) return;
+    if (!window.confirm('Delete “' + (n.title || 'Untitled') + '”?\n\nThis removes the file from your vault folder.')) return;
+    if (vaultBackend) vaultBackend.removeNote(n);
+    notes = notes.filter((x) => x.id !== id);
+    if (currentId === id) currentId = notes[0]?.id ?? null;
+    writeNow();
+    closeCtx();
+  }
+  function moveToFolder(id, folder) {
+    moveNote(id, folder);
+    closeCtx();
+  }
   function firstLine(b) { const l = (b || '').split('\n').find((x) => x.trim()); return l ? l.replace(/[#>*`\[\]]/g, '').slice(0, 52) : 'Empty note'; }
   function invDot(id) { return hasLinks(id, idx) ? '●' : '○'; }
   function dotTitle(id) { return hasLinks(id, idx) ? 'Linked to other notes' : 'Orphan — not linked to any note yet'; }
@@ -489,7 +537,11 @@
     if (mod && e.key.toLowerCase() === 'k') { e.preventDefault(); paletteOpen = true; query = ''; }
     else if (mod && e.key.toLowerCase() === 'e') { e.preventDefault(); if (view === 'notes') mode = mode === 'read' ? 'write' : 'read'; }
     else if (mod && e.key.toLowerCase() === 'g') { e.preventDefault(); graphFull = !graphFull; }
-    else if (e.key === 'Escape') { paletteOpen = false; digestOpen = false; graphFull = false; docExport = false; settingsOpen = false; focus = false; }
+    else if (mod && e.key.toLowerCase() === 'n') { e.preventDefault(); if (view === 'library') view = 'notes'; create(); }
+    else if (mod && e.key.toLowerCase() === 's') { e.preventDefault(); flushSave(); }
+    else if (mod && e.key.toLowerCase() === 'b') { e.preventDefault(); view = view === 'library' ? 'notes' : 'library'; }
+    else if (mod && e.key === 'Backspace' && current && mode === 'read') { e.preventDefault(); deleteNote(currentId); }
+    else if (e.key === 'Escape') { paletteOpen = false; digestOpen = false; graphFull = false; docExport = false; settingsOpen = false; focus = false; closeCtx(); }
   }
 </script>
 
