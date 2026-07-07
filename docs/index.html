@@ -10,7 +10,7 @@
 <script>(function(){try{var t=localStorage.getItem("arf-docs-theme");if(!t&&window.matchMedia&&matchMedia("(prefers-color-scheme: dark)").matches)t="dark";if(t)document.documentElement.setAttribute("data-theme",t);}catch(e){}})();</script>
 <style>
   /* swipeable tour — a minimal carousel of the app, on the overview */
-  .tour{margin:2.4rem 0 1.5rem;}
+  .tour{max-width:840px; margin:2.4rem auto 1.5rem;}
   .tour:focus{outline:none;}
   .tour-vp{position:relative; overflow:hidden; border:1px solid var(--line); border-radius:12px; background:#0a0a0a; box-shadow:0 10px 30px rgba(0,0,0,.08); touch-action:pan-y;}
   .tour-track{display:flex; transition:transform .5s cubic-bezier(.22,.61,.36,1); will-change:transform;}
