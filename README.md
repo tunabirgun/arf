@@ -1,5 +1,8 @@
 <p align="center">
-  <img src="banner.png" alt="Arf" width="680">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="banner-dark.png">
+    <img src="banner.png" alt="Arf" width="680">
+  </picture>
 </p>
 
 <p align="center">
