@@ -15,7 +15,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/tunabirgun/arf/releases/latest"><b>Download</b></a>&nbsp;&nbsp;·&nbsp;&nbsp;<a href="https://tunabirgun.github.io/arf/"><b>Documentation</b></a>&nbsp;&nbsp;·&nbsp;&nbsp;<a href="https://tunabirgun.github.io/arf/gallery.html"><b>Gallery</b></a>
+  <a href="https://github.com/tunabirgun/arf/releases/latest"><b>Download</b></a>&nbsp;&nbsp;·&nbsp;&nbsp;<a href="https://tunabirgun.github.io/arf/"><b>Documentation</b></a>
 </p>
 
 <p align="center">
@@ -43,7 +43,7 @@ It is named after the mathematician Cahit Arf, whose Arf invariant reduces a com
 </tr>
 </table>
 
-<p align="center"><a href="https://tunabirgun.github.io/arf/gallery.html"><b>See the full gallery →</b></a></p>
+<p align="center"><a href="https://tunabirgun.github.io/arf/"><b>Take the tour →</b></a></p>
 
 ## Features
 

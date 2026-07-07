@@ -8,6 +8,33 @@
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%23faf9f7'/%3E%3Ctext x='50' y='73' text-anchor='middle' font-family='Georgia,serif' font-size='74' font-weight='700' fill='%230a0a0a'%3EA%3C/text%3E%3Ccircle cx='79' cy='67' r='8' fill='%232c4a6e'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="assets/arf-docs.css">
 <script>(function(){try{var t=localStorage.getItem("arf-docs-theme");if(!t&&window.matchMedia&&matchMedia("(prefers-color-scheme: dark)").matches)t="dark";if(t)document.documentElement.setAttribute("data-theme",t);}catch(e){}})();</script>
+<style>
+  /* swipeable tour — a minimal carousel of the app, on the overview */
+  .tour{margin:2.4rem 0 1.5rem;}
+  .tour:focus{outline:none;}
+  .tour-vp{position:relative; overflow:hidden; border:1px solid var(--line); border-radius:12px; background:#0a0a0a; box-shadow:0 10px 30px rgba(0,0,0,.08); touch-action:pan-y;}
+  .tour-track{display:flex; transition:transform .5s cubic-bezier(.22,.61,.36,1); will-change:transform;}
+  .tour-track.drag{transition:none;}
+  .tour-slide{flex:0 0 100%; min-width:0;}
+  .tour-slide img{display:block; width:100%; height:auto; -webkit-user-drag:none; user-select:none;}
+  .tour-arrow{position:absolute; top:50%; transform:translateY(-50%); width:44px; height:44px; border-radius:50%;
+    border:1px solid rgba(255,255,255,.16); background:rgba(18,18,18,.5); backdrop-filter:blur(6px);
+    color:#f2f2f2; font-family:var(--sans); font-size:24px; line-height:1; cursor:pointer;
+    display:flex; align-items:center; justify-content:center; z-index:2;
+    opacity:0; transition:opacity .2s, background .2s, border-color .2s;}
+  .tour-vp:hover .tour-arrow{opacity:1;}
+  .tour-arrow:hover{background:rgba(28,28,28,.82); border-color:var(--accent);}
+  .tour-arrow:focus-visible{opacity:1; outline:2px solid #7fa8c9; outline-offset:2px;}
+  .tour-arrow.tprev{left:14px;} .tour-arrow.tnext{right:14px;}
+  @media(hover:none){ .tour-arrow{opacity:.85;} }
+  .tour-cap{display:flex; flex-wrap:wrap; gap:.15rem .55rem; align-items:baseline; justify-content:center; text-align:center; margin:1rem auto 0; max-width:60ch; min-height:1.6em;}
+  .tour-cap b{font-family:var(--serif); font-weight:600; font-size:19px; color:var(--fg-bright);}
+  .tour-cap span{font-family:var(--sans); font-size:14.5px; color:var(--fg-muted);}
+  .tour-dots{display:flex; gap:.5rem; justify-content:center; margin-top:.9rem;}
+  .tour-dot{width:8px; height:8px; padding:0; border:0; border-radius:50%; background:var(--line-strong); cursor:pointer; transition:background .2s, width .2s;}
+  .tour-dot.on{background:var(--accent); width:22px; border-radius:4px;}
+  .tour-dot:focus-visible{outline:2px solid var(--accent); outline-offset:2px;}
+</style>
 </head>
 <body>
 <header class="topbar">
@@ -20,7 +47,6 @@
     <a href="library.html">Library</a>
     <a href="data.html">Your Data</a>
     <a href="design.html">Design</a>
-    <a href="gallery.html">Gallery</a>
     <a href="https://github.com/tunabirgun/arf">Source</a>
   </nav>
   <span class="sp"></span>
@@ -36,6 +62,24 @@
     <span class="ctasub">A desktop app for Windows, macOS, and Linux. No account — your notes stay on your device. Free and open source — <a href="https://github.com/tunabirgun/arf">read the source</a>.</span>
   </section>
 
+  <section class="tour" aria-roledescription="carousel" aria-label="A tour of Arf" tabindex="0">
+    <div class="tour-vp" id="tourVp">
+      <div class="tour-track" id="tourTrack">
+        <div class="tour-slide"><img src="assets/gallery/plain-files.png" alt="A vault of plain Markdown files — a folder tree beside a note" width="2536" height="1902" draggable="false" loading="lazy"></div>
+        <div class="tour-slide"><img src="assets/gallery/note.png" alt="A note with prose, a typeset equation, a wikilink, and code" width="2536" height="1902" draggable="false" loading="lazy"></div>
+        <div class="tour-slide"><img src="assets/gallery/formatting.png" alt="Write mode with a light formatting bar" width="2536" height="1902" draggable="false" loading="lazy"></div>
+        <div class="tour-slide"><img src="assets/gallery/graph.png" alt="The knowledge graph" width="2536" height="1902" draggable="false" loading="lazy"></div>
+        <div class="tour-slide"><img src="assets/gallery/resonance.png" alt="A note beside the Resonance rail of similar notes" width="2536" height="1902" draggable="false" loading="lazy"></div>
+        <div class="tour-slide"><img src="assets/gallery/faint-mark.png" alt="A note being written, with a faint resemblance mark" width="2536" height="1902" draggable="false" loading="lazy"></div>
+        <div class="tour-slide"><img src="assets/gallery/synthesis.png" alt="The weekly Synthesis pairing two unlinked notes" width="2536" height="1902" draggable="false" loading="lazy"></div>
+      </div>
+      <button class="tour-arrow tprev" id="tourPrev" type="button" aria-label="Previous">‹</button>
+      <button class="tour-arrow tnext" id="tourNext" type="button" aria-label="Next">›</button>
+    </div>
+    <p class="tour-cap" id="tourCap"><b></b><span></span></p>
+    <div class="tour-dots" id="tourDots" role="tablist" aria-label="Choose a slide"></div>
+  </section>
+
   <p>Arf is a note-taking tool for scientists, researchers, and coders. You write notes on papers, books, and concepts; you link them; and a small machine that runs entirely on your own computer watches for ideas that belong together and quietly points them out. The result is meant to help you distill insights you could not see when the thoughts were scattered.</p>
 
   <p>Three commitments shape everything else. The first is that your notes are <strong>plain files you own</strong> — a folder of Markdown you can copy to a USB stick, keep in a synced folder, push to GitHub, or read in any editor forty years from now. The second is that the machine is <strong>private</strong>: the model runs on your device, and your text never leaves it. The third is that Arf is <strong>open</strong> — free and MIT-licensed, its source there to read, so the first two are claims you can verify rather than trust.</p>
@@ -47,7 +91,6 @@
     <a href="library.html"><span class="t">The Library</span><span class="d">Every reference in detail, fetched from trusted open sources; export to BibTeX, RIS, CSL-JSON, and Zenodo.</span></a>
     <a href="data.html"><span class="t">Your data</span><span class="d">The plain-file vault, the <span class="mono">.arf</span> bundle, continuous folder sync across devices, and document export to DOCX and PDF.</span></a>
     <a href="design.html"><span class="t">Design &amp; the ink</span><span class="d">Why Arf is set in EB Garamond, why it is monochrome, and why the one accent is iron-gall blue.</span></a>
-    <a href="gallery.html"><span class="t">Gallery</span><span class="d">A visual tour — plain files, typeset math, the graph, Resonance, and the weekly Synthesis, each at a glance.</span></a>
   </div>
 
   <h2>The name</h2>
@@ -69,5 +112,61 @@
 
 <footer class="site">Arf — a second brain for scientists. · <a href="index.html">Documentation</a></footer>
 <script src="assets/theme.js"></script>
+<script>
+(function(){
+  var slides=[
+    {t:'Plain Markdown files', d:'A folder on your disk — copy it, sync it, open it in any editor.'},
+    {t:'One note: prose, math & code', d:'Write in Markdown; read it typeset. Inline math and fenced code render in place.'},
+    {t:'Formatting when you want it', d:'A light bar for bold, headings, links, and quotes — plain Markdown underneath.'},
+    {t:'The knowledge graph', d:'Every wikilink is an edge. Backlinks, tags, and orphaned notes — the shape of what you know.'},
+    {t:'Resonance', d:'On-device embeddings surface related notes even when nothing links them yet.'},
+    {t:'The faint mark', d:'A quiet dot when what you’re writing already lives in another note.'},
+    {t:'The weekly synthesis', d:'Notes the machine finds alike but you never linked — one click from a link.'}
+  ];
+  var track=document.getElementById('tourTrack'), vp=document.getElementById('tourVp'),
+      cap=document.getElementById('tourCap'), dotsWrap=document.getElementById('tourDots'),
+      sec=track&&track.closest('.tour');
+  if(!track||!vp||!cap||!dotsWrap||!sec) return;
+  var n=slides.length, i=0, dots=[];
+  slides.forEach(function(s,k){
+    var b=document.createElement('button'); b.className='tour-dot'; b.type='button';
+    b.setAttribute('aria-label','Slide '+(k+1)+': '+s.t);
+    b.addEventListener('click',function(){ go(k); });
+    dotsWrap.appendChild(b); dots.push(b);
+  });
+  function render(){
+    track.style.transform='translateX('+(-i*100)+'%)';
+    cap.querySelector('b').textContent=slides[i].t;
+    cap.querySelector('span').textContent=slides[i].d;
+    for(var k=0;k<dots.length;k++) dots[k].classList.toggle('on',k===i);
+  }
+  function go(k){ i=(k%n+n)%n; render(); }
+  document.getElementById('tourPrev').addEventListener('click',function(){ go(i-1); });
+  document.getElementById('tourNext').addEventListener('click',function(){ go(i+1); });
+  sec.addEventListener('keydown',function(e){
+    if(e.key==='ArrowLeft'){ e.preventDefault(); go(i-1); }
+    else if(e.key==='ArrowRight'){ e.preventDefault(); go(i+1); }
+  });
+  // pointer swipe / drag
+  var startX=0, dx=0, dragging=false, w=0;
+  vp.addEventListener('pointerdown',function(e){
+    if(e.target.closest('.tour-arrow')) return;   // let the arrow buttons receive their own click
+    dragging=true; w=vp.clientWidth||1; startX=e.clientX; dx=0; track.classList.add('drag');
+  });
+  window.addEventListener('pointermove',function(e){
+    if(!dragging) return; dx=e.clientX-startX;
+    track.style.transform='translateX(calc('+(-i*100)+'% + '+dx+'px))';
+  });
+  function end(){
+    if(!dragging) return; dragging=false; track.classList.remove('drag');
+    if(Math.abs(dx)>w*0.14){ go(dx<0?i+1:i-1); } else { render(); }
+    dx=0;
+  }
+  window.addEventListener('pointerup',end);
+  window.addEventListener('pointercancel',end);
+  vp.addEventListener('dragstart',function(e){ e.preventDefault(); });
+  render();
+})();
+</script>
 </body>
 </html>

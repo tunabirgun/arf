@@ -63,7 +63,7 @@ jobs:
             - **Connect notes in place.** Linking two notes opens a proper in-app editor — the shared concepts and a suggested sentence — instead of a bare browser prompt.
             - **Link straight from Resonance.** Every suggestion on the right rail now links in one step, the same flow as the weekly Synthesis.
             - **Suggestions that don't repeat.** The sentence Arf proposes when you connect two notes now varies with what they share, rather than reusing one template.
-            - **A gallery** in the [documentation](https://tunabirgun.github.io/arf/gallery.html) — a visual tour of the app.
+            - **A visual tour** on the [documentation home](https://tunabirgun.github.io/arf/) — swipe through the app.
 
             **Carried over from 1.0**: a live knowledge graph, on-device Resonance and the weekly Synthesis digest, wikilinks that survive renames, LaTeX, `[@citation]` keys, and a command palette — all running entirely on your device.
 
