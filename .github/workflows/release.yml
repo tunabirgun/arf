@@ -56,12 +56,23 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: 'Arf ${{ github.ref_name }}'
           releaseBody: |
-            Native desktop builds of Arf — a local-first second brain for scientists.
+            **Arf 1.1** — a second brain that stays a folder of plain text. Your notes are Markdown files on your own disk; an on-device model finds the connections you missed. It takes its name from the Arf invariant, the property of a quadratic form that survives every change of basis — your notes should survive every change of tool.
 
-            These builds are **unsigned** (no paid certificate yet):
-            - **Windows**: SmartScreen may warn — click **More info → Run anyway**.
-            - **macOS**: right-click the app → **Open** the first time (Gatekeeper).
-            - **Linux**: the `.AppImage` is portable; `chmod +x` and run.
+            **New in 1.1**
+            - **Math renders whole.** Display and inline equations no longer drop their delimiters — a CSS class name shared with KaTeX was pushing every closing parenthesis out of the equation.
+            - **Connect notes in place.** Linking two notes opens a proper in-app editor — the shared concepts and a suggested sentence — instead of a bare browser prompt.
+            - **Link straight from Resonance.** Every suggestion on the right rail now links in one step, the same flow as the weekly Synthesis.
+            - **Suggestions that don't repeat.** The sentence Arf proposes when you connect two notes now varies with what they share, rather than reusing one template.
+            - **A gallery** in the [documentation](https://tunabirgun.github.io/arf/gallery.html) — a visual tour of the app.
+
+            **Carried over from 1.0**: a live knowledge graph, on-device Resonance and the weekly Synthesis digest, wikilinks that survive renames, LaTeX, `[@citation]` keys, and a command palette — all running entirely on your device.
+
+            **Installing** — these builds are unsigned (no paid certificate yet):
+            - **Windows** — SmartScreen may warn: *More info → Run anyway*.
+            - **macOS** — right-click the app → *Open* the first time (Gatekeeper).
+            - **Linux** — the `.AppImage` is portable: `chmod +x` and run.
+
+            Free and open source. Read the source, not the privacy policy.
           releaseDraft: false
           prerelease: false
           args: ${{ matrix.args }}

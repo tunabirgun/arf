@@ -146,7 +146,8 @@
 .modal { position: relative; margin-top: 9vh; width: min(600px, 92vw); background: var(--surface); border: 1px solid var(--line-strong); border-radius: 8px; box-shadow: 0 18px 50px rgba(0,0,0,.22); padding: 1.2rem 1.3rem 1.4rem; }
 .modal h3 { margin: 0; font-size: 24px; color: var(--fg-bright); font-weight: 600; }
 .modal .msub { margin: .3rem 0 .6rem; font-size: 14px; color: var(--fg-muted); font-style: italic; }
-.mclose { position: absolute; top: 1rem; right: 1.1rem; background: none; border: 0; color: var(--fg-faint); font-size: 20px; cursor: pointer; }
+/* .dlg-x, not .mclose: KaTeX uses .mclose for closing delimiters — sharing the name absolute-positioned every ")" in an equation out of view */
+.dlg-x { position: absolute; top: 1rem; right: 1.1rem; background: none; border: 0; color: var(--fg-faint); font-size: 20px; cursor: pointer; }
 .dgbody { max-height: 60vh; overflow-y: auto; }
 .pair { display: flex; align-items: center; gap: .7rem; border-top: 1px solid var(--line); padding: .7rem 0; }
 .pair:first-child { border-top: 0; }
@@ -155,10 +156,29 @@
 .pair .mid { color: var(--accent); font-size: 15px; }
 .pair .pairtitles { display: block; }
 .pair .shared { display: block; margin-top: .3rem; font-family: var(--sans); font-size: 11px; color: var(--fg-faint); }
-.pair .shtag { display: inline-block; color: var(--accent); background: var(--accent-soft); border-radius: 4px; padding: .05rem .35rem; margin: 0 .25rem .15rem 0; }
+.shtag { display: inline-block; color: var(--accent); background: var(--accent-soft); border-radius: 4px; padding: .05rem .35rem; margin: 0 .25rem .15rem 0; }
 .pair .psim { font-family: var(--mono); font-size: 11px; color: var(--accent); }
 .pair .link { font-family: var(--sans); font-size: 11px; border: 1px solid var(--line-strong); border-radius: 3px; padding: .3rem .6rem; background: none; color: var(--fg-muted); cursor: pointer; }
 .pair .link:hover { border-color: var(--accent); color: var(--fg-bright); }
+
+/* Resonance rail: each suggestion opens on click, with a link affordance revealed on hover/focus */
+.mlrow { display: flex; align-items: center; gap: .35rem; border-bottom: 1px solid var(--line); }
+.mlrow .ref { flex: 1; min-width: 0; border-bottom: 0; }
+.mlrow .ref .nm { display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
+.mllink { flex: none; font-family: var(--sans); font-size: 10px; color: var(--fg-faint); background: none; border: 1px solid transparent; border-radius: 4px; padding: .15rem .4rem; cursor: pointer; opacity: 0; transition: opacity .12s, color .12s, border-color .12s; }
+.mlrow:hover .mllink, .mlrow:focus-within .mllink, .mllink:focus-visible { opacity: 1; }
+.mllink:hover, .mllink:focus-visible { color: var(--accent); border-color: var(--line-strong); }
+
+/* connect-notes modal */
+.cnterms { font-family: var(--sans); font-size: 11px; color: var(--fg-faint); margin: .1rem 0 .55rem; }
+.cninput { width: 100%; font-family: var(--serif); font-size: 15px; line-height: 1.55; color: var(--fg); background: var(--surface); border: 1px solid var(--line-strong); border-radius: 6px; padding: .65rem .75rem; resize: vertical; }
+.cninput:focus { outline: none; border-color: var(--accent); }
+.cnrow { display: flex; align-items: center; justify-content: flex-end; gap: .5rem; margin-top: .85rem; }
+.cnhint { margin-right: auto; font-family: var(--mono); font-size: 11px; color: var(--fg-faint); }
+.cnbtn { font-family: var(--sans); font-size: 13px; padding: .45rem .95rem; border-radius: 6px; border: 1px solid var(--line-strong); background: none; color: var(--fg-muted); cursor: pointer; }
+.cnbtn:hover { border-color: var(--accent); color: var(--fg-bright); }
+.cnbtn.pri { background: var(--accent); border-color: var(--accent); color: var(--canvas); }
+.cnbtn.pri:hover { filter: brightness(1.07); color: var(--canvas); }
 
 .titlectl { display: inline-flex; align-items: center; gap: .5rem; flex: none; align-self: center; }
 .expbtn { font-family: var(--sans); font-size: 13px; color: var(--fg-faint); background: none; border: 1px solid var(--line-strong); border-radius: 5px; padding: .3rem .55rem; cursor: pointer; }

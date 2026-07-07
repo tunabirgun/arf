@@ -13,7 +13,7 @@
 
   const IS_MAC = /Mac|iPhone|iPad|iPod/.test((navigator.platform || '') + ' ' + (navigator.userAgent || ''));
   const MOD = IS_MAC ? '⌘' : 'Ctrl';
-  const APP_VERSION = '1.0.0';
+  const APP_VERSION = '1.1.0';
 
   let notes = $state(loadNotes());
   let refs = $state(loadRefs());        // shared reference library (also used by [@citekey] citations)
@@ -49,6 +49,7 @@
   let saved = $state(false);
   let paletteOpen = $state(false);
   let digestOpen = $state(false);
+  let connect = $state(null);   // { aId, bId, terms, text } — the styled connect-notes modal
   let graphFull = $state(false);
   let focus = $state(false);
   let ctxMenu = $state(null);   // { x, y, items } — the context-aware right-click menu
@@ -624,23 +625,50 @@
   function setZoom(z) { zoom = Math.max(70, Math.min(160, z)); }
   function setTheme(tv) { theme = tv; document.documentElement.setAttribute('data-theme', tv); try { localStorage.setItem('arf-theme', tv); } catch (e) {} }
   $effect(() => { try { document.documentElement.style.zoom = String(zoom / 100); localStorage.setItem('arf-zoom', zoom); } catch (e) {} });
+  // Open the styled connect modal (replaces the native window.prompt). Appends to note A on confirm.
   function linkPair(aId, bId, terms) {
     const a = idx.byId[aId], b = idx.byId[bId]; if (!a || !b) return;
-    const suggestion = suggestRelation(a, b, terms);
-    const s = window.prompt('Write the sentence that connects "' + a.title + '" and "' + b.title + '":', suggestion);
-    if (s === null) return; // cancelled — do not fake the connection
-    const line = s.trim() ? s.trim().replace(/\.?$/, '') + ' — see [[' + b.title + ']].' : 'Related to [[' + b.title + ']].';
+    connect = { aId, bId, terms: (terms || []).filter((x) => x.length > 3).slice(0, 5), text: suggestRelation(a, b, terms) };
+  }
+  // Link the note being viewed to a Resonance suggestion on the right rail.
+  function linkResonance(bId) {
+    if (!currentId) return;
+    linkPair(currentId, bId, sharedTerms(idx.byId[currentId], idx.byId[bId], 5));
+  }
+  function confirmConnect() {
+    if (!connect) return;
+    const { aId, bId, text } = connect; connect = null;
+    const a = idx.byId[aId], b = idx.byId[bId]; if (!a || !b) return;
+    let line = (text || '').trim();
+    if (!line) line = 'Related to [[' + b.title + ']].';
+    else if (line.toLowerCase().indexOf('[[' + b.title.toLowerCase() + ']]') < 0) line = line.replace(/[\s.]*$/, '') + ' — see [[' + b.title + ']].';
+    else if (!/[.!?]$/.test(line)) line += '.';
     a.body = (a.body || '').trimEnd() + '\n\n' + line; a.updated = new Date().toISOString(); markDirty(aId); flushSave();
   }
-  // Build a natural connecting sentence from the shared terms and titles.
-  // MiniLM gives us the similarity; the shared terms give us the *why*.
+  // Stable index into a template list, so the same pair always yields the same phrasing.
+  function pick(s, n) { let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0; return ((h % n) + n) % n; }
+  // A natural connecting sentence built from the titles and the shared terms — MiniLM gives
+  // the similarity, the shared terms give the *why*. Varied phrasing, chosen stably per pair.
   function suggestRelation(a, b, terms) {
-    const t = (terms || []).filter((x) => x.length > 3);
-    if (!t.length) return a.title + ' and [[' + b.title + ']] are related.';
-    // pick up to 3 distinctive shared terms, joined naturally
-    const picked = t.slice(0, 3);
-    const termList = picked.length === 1 ? picked[0] : picked.slice(0, -1).join(', ') + ' and ' + picked[picked.length - 1];
-    return 'Both ' + a.title + ' and [[' + b.title + "]] touch on " + termList + '.';
+    const bl = '[[' + b.title + ']]';
+    const t = (terms || []).filter((x) => x.length > 3).slice(0, 3);
+    if (!t.length) {
+      const g = [
+        a.title + ' and ' + bl + ' develop the same idea from different sides.',
+        'A through-line runs from ' + a.title + ' to ' + bl + '.',
+        a.title + ' and ' + bl + ' belong to one line of thought.',
+      ];
+      return g[pick(a.id + b.id, g.length)];
+    }
+    const list = t.length === 1 ? t[0] : t.slice(0, -1).join(', ') + ' and ' + t[t.length - 1];
+    const forms = [
+      a.title + ' and ' + bl + ' both hinge on ' + list + '.',
+      'The idea of ' + list + ' ties ' + a.title + ' to ' + bl + '.',
+      a.title + ' picks up ' + list + ' where ' + bl + ' leaves off.',
+      'Read alongside ' + bl + ' — both trace ' + list + '.',
+      a.title + ' and ' + bl + ' converge on ' + list + '.',
+    ];
+    return forms[pick(a.id + b.id + list, forms.length)];
   }
 
   // read-view delegation
@@ -721,7 +749,7 @@
     else if (mod && e.key.toLowerCase() === 'b') { e.preventDefault(); view = view === 'library' ? 'notes' : 'library'; }
     else if (mod && e.key.toLowerCase() === 'r') { e.preventDefault(); flushSave(); syncFromFolder(); }
     else if (mod && e.key === 'Backspace' && current && mode === 'read') { e.preventDefault(); deleteNote(currentId); }
-    else if (e.key === 'Escape') { paletteOpen = false; digestOpen = false; graphFull = false; docExport = false; settingsOpen = false; focus = false; closeCtx(); }
+    else if (e.key === 'Escape') { paletteOpen = false; digestOpen = false; connect = null; graphFull = false; docExport = false; settingsOpen = false; focus = false; closeCtx(); }
   }
 </script>
 
@@ -882,7 +910,10 @@
         </div>
         {#if resonance.length}
           {#each resonance as r}
-            <button class="ref ml" data-nid={r.note.id} onclick={() => open(r.note.id)}><span class="sim" title="Similarity 0–1 (on-device)">{r.s.toFixed(2)}</span><span class="nm">{r.note.title}</span></button>
+            <div class="mlrow">
+              <button class="ref ml" data-nid={r.note.id} onclick={() => open(r.note.id)}><span class="sim" title="Similarity 0–1 (on-device)">{r.s.toFixed(2)}</span><span class="nm">{r.note.title}</span></button>
+              <button class="mllink" title={'Link this note to “' + r.note.title + '”'} aria-label={'Link this note to ' + r.note.title} onclick={() => linkResonance(r.note.id)}>+ link</button>
+            </div>
           {/each}
         {:else}<div class="rempty">Nothing close enough yet.</div>{/if}
 
@@ -929,7 +960,7 @@
 {#if docExport}
   <div class="scrim" onclick={(e) => { if (e.target === e.currentTarget) docExport = false; }}>
     <div class="modal">
-      <button class="mclose" onclick={() => (docExport = false)}>✕</button>
+      <button class="dlg-x" onclick={() => (docExport = false)}>✕</button>
       <h3>Export writing</h3>
       <p class="msub">Your note as a clean document — headings kept with their text, images fit to the page.</p>
       <div class="fmtpick">
@@ -949,7 +980,7 @@
 {#if digestOpen}
   <div class="scrim" onclick={(e) => { if (e.target === e.currentTarget) digestOpen = false; }}>
     <div class="modal">
-      <button class="mclose" onclick={() => (digestOpen = false)}>✕</button>
+      <button class="dlg-x" onclick={() => (digestOpen = false)}>✕</button>
       <h3>This week's synthesis</h3>
       <p class="msub">Notes the machine finds alike but you've never linked — with the concepts they share, so you can see the connection at a glance and link what belongs.</p>
       <div class="dgbody">
@@ -967,10 +998,28 @@
   </div>
 {/if}
 
+{#if connect}
+  <div class="scrim" onclick={(e) => { if (e.target === e.currentTarget) connect = null; }}>
+    <div class="modal">
+      <button class="dlg-x" onclick={() => (connect = null)}>✕</button>
+      <h3>Connect notes</h3>
+      <p class="msub">A line will be added to <b>{idx.byId[connect.aId]?.title}</b> that links to <b>{idx.byId[connect.bId]?.title}</b>. Edit it to say what the connection is.</p>
+      {#if connect.terms.length}<div class="cnterms">shared: {#each connect.terms as tm}<span class="shtag">{tm}</span>{/each}</div>{/if}
+      <!-- svelte-ignore a11y_autofocus -->
+      <textarea class="cninput" rows="3" autofocus bind:value={connect.text} onkeydown={(e) => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); confirmConnect(); } }}></textarea>
+      <div class="cnrow">
+        <span class="cnhint">{MOD}+Enter to add</span>
+        <button class="cnbtn" onclick={() => (connect = null)}>Cancel</button>
+        <button class="cnbtn pri" onclick={confirmConnect}>Add link</button>
+      </div>
+    </div>
+  </div>
+{/if}
+
 {#if settingsOpen}
   <div class="scrim" onclick={(e) => { if (e.target === e.currentTarget) settingsOpen = false; }}>
     <div class="modal settings">
-      <button class="mclose" onclick={() => (settingsOpen = false)}>✕</button>
+      <button class="dlg-x" onclick={() => (settingsOpen = false)}>✕</button>
       <h3>Settings</h3>
 
       <div class="setlabel">Appearance</div>

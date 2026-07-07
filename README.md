@@ -15,7 +15,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/tunabirgun/arf/releases/latest"><b>Download</b></a>&nbsp;&nbsp;·&nbsp;&nbsp;<a href="https://tunabirgun.github.io/arf/"><b>Documentation</b></a>
+  <a href="https://github.com/tunabirgun/arf/releases/latest"><b>Download</b></a>&nbsp;&nbsp;·&nbsp;&nbsp;<a href="https://tunabirgun.github.io/arf/"><b>Documentation</b></a>&nbsp;&nbsp;·&nbsp;&nbsp;<a href="https://tunabirgun.github.io/arf/gallery.html"><b>Gallery</b></a>
 </p>
 
 <p align="center">
@@ -29,6 +29,21 @@ Your notes are plain Markdown files you own, and nothing leaves your device.
 Note collections rarely fail because capture was too hard. They fail because notes pile up faster than anyone connects them, and the insight that was supposed to emerge stays buried. Arf is built to fight that: it keeps your writing in plain files you control, and runs a small model on your own machine that notices when two of your thoughts belong together.
 
 It is named after the mathematician Cahit Arf, whose Arf invariant reduces a complicated object to a single bit — connected, or not. Every note in Arf carries that mark: a filled dot when it has links, a hollow one while it is still an orphan.
+
+## A look inside
+
+<table>
+<tr>
+<td width="50%"><img src="docs/assets/gallery/plain-files.png" alt="A vault of plain Markdown files"><br><sub><b>Plain files.</b> A folder on your disk — copy it, sync it, open it in any editor.</sub></td>
+<td width="50%"><img src="docs/assets/gallery/note.png" alt="A note with prose, typeset math, and code"><br><sub><b>One note.</b> Prose, typeset math, and code in one plain-text file.</sub></td>
+</tr>
+<tr>
+<td width="50%"><img src="docs/assets/gallery/graph.png" alt="The knowledge graph"><br><sub><b>The graph.</b> Every <code>[[wikilink]]</code> is an edge; orphans stand alone.</sub></td>
+<td width="50%"><img src="docs/assets/gallery/resonance.png" alt="Resonance — on-device similarity"><br><sub><b>Resonance.</b> On-device embeddings surface related notes you never linked.</sub></td>
+</tr>
+</table>
+
+<p align="center"><a href="https://tunabirgun.github.io/arf/gallery.html"><b>See the full gallery →</b></a></p>
 
 ## Features
 

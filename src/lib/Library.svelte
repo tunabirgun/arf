@@ -184,7 +184,7 @@
 {#if exportScope}
   <div class="scrim" onclick={(e) => { if (e.target === e.currentTarget) exportScope = null; }}>
     <div class="modal">
-      <button class="mclose" onclick={() => (exportScope = null)}>✕</button>
+      <button class="dlg-x" onclick={() => (exportScope = null)}>✕</button>
       <h3>Export references</h3>
       <p class="msub">Every format your tools need — BibTeX, RIS for EndNote, CSL-JSON, formatted styles, Zenodo.</p>
       <div style="display:flex;gap:.6rem;align-items:center">
