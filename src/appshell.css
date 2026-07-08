@@ -265,6 +265,10 @@
 .libcol.detail { border-left: 1px solid var(--line); background: color-mix(in srgb, var(--canvas) 55%, var(--surface)); }
 .libfilter { display: flex; justify-content: space-between; padding: .34rem .4rem; border-radius: 4px; color: var(--fg-muted); cursor: pointer; background: none; border: 0; width: 100%; text-align: left; font: inherit; }
 .libfilter:hover, .libfilter.on { background: var(--accent-soft); color: var(--fg-bright); }
+.libfilter.dropon { background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--accent); color: var(--fg-bright); }
+.read input[data-task] { cursor: pointer; margin-right: .4em; }
+/* a task item is a list item, but show only its checkbox — drop the bullet, like GitHub/Obsidian */
+.read li:has(> input[data-task]) { list-style: none; margin-left: -1.1em; }
 .libfilter .ct { font-family: var(--mono); font-size: 11px; color: var(--fg-faint); }
 .libbtn { width: 100%; font-family: var(--sans); font-size: 13px; padding: .5rem; border: 1px solid var(--line-strong); background: none; color: var(--fg-bright); border-radius: 4px; cursor: pointer; margin-top: .5rem; }
 .libbtn.pri { background: var(--accent); color: var(--canvas); border-color: var(--accent); }

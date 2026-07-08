@@ -15,7 +15,7 @@
 
   const IS_MAC = /Mac|iPhone|iPad|iPod/.test((navigator.platform || '') + ' ' + (navigator.userAgent || ''));
   const MOD = IS_MAC ? '⌘' : 'Ctrl';
-  const APP_VERSION = '1.3.2';
+  const APP_VERSION = '1.4.0';
 
   let notes = $state(loadNotes());
   let refs = $state(loadRefs());        // shared reference library (also used by [@citekey] citations)
@@ -86,11 +86,31 @@
   const idx = $derived(buildIndex(notes));
   const current = $derived(notes.find((n) => n.id === currentId) ?? null);
   const backlinks = $derived((idx.back[currentId] || []).map((id) => idx.byId[id]).filter(Boolean));
+  // disambiguate same-first-author + same-year references with a/b/c suffixes, so their in-text
+  // citations read "Guth 1981a" / "Guth 1981b" instead of two identical "Guth 1981"
+  const citeDisambig = $derived.by(() => {
+    const groups = new Map();
+    for (const r of refs) {
+      const who = (r.authors && r.authors[0] && r.authors[0].f ? r.authors[0].f : '').toLowerCase();
+      if (!who && !r.year) continue;
+      const key = who + '|' + (r.year || '');
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(r);
+    }
+    const m = new Map();
+    for (const list of groups.values()) {
+      if (list.length < 2) continue;
+      list.sort((a, b) => (a.citekey || '').localeCompare(b.citekey || ''));
+      list.forEach((r, i) => m.set(r.id, String.fromCharCode(97 + i)));
+    }
+    return m;
+  });
+  function citeResolver(k) { const r = refs.find((x) => x.citekey === k); return r ? { ...r, _suffix: citeDisambig.get(r.id) || '' } : null; }
   const readHTML = $derived.by(() => {
     const byTitle = idx.byTitle;                 // depend on the title index
     setLinkResolver((t) => byTitle[t] || null);  // resolve wikilinks before parsing
-    const rmap = refs;                           // depend on refs so citations re-render
-    setCiteResolver((k) => rmap.find((r) => r.citekey === k) || null);
+    citeDisambig;                                // depend on refs/disambiguation so citations re-render
+    setCiteResolver(citeResolver);
     return current ? renderMarkdown(current.body) : '';
   });
   // optional end-of-note bibliography: the references this note cites via [@key], in the chosen style
@@ -527,7 +547,7 @@
     // export may be triggered from write mode, where the read-view derived never ran — set the
     // resolvers here so [[wikilinks]] and [@citations] resolve in the standalone document
     setLinkResolver((t) => idx.byTitle[t] || null);
-    setCiteResolver((k) => refs.find((r) => r.citekey === k) || null);
+    setCiteResolver(citeResolver);
     const title = o.title ? '<h1>' + esc(n.title || 'Untitled') + '</h1>' : '';
     return '<!doctype html><html><head><meta charset="utf-8"><title>' + esc(n.title || 'Untitled') + '</title><style>' + katexCss + '</style><style>' + css + bibCss + '</style></head><body>' + title + renderMarkdown(n.body) + buildBibHTML(n) + '</body></html>';
   }
@@ -866,40 +886,93 @@
   function pick(s, n) { let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0; return ((h % n) + n) % n; }
   // A natural connecting sentence built from the titles and the shared terms — MiniLM gives
   // the similarity, the shared terms give the *why*. Varied phrasing, chosen stably per pair.
+  // Detect the note's own language from its text, so an inserted connecting sentence matches the
+  // note (not the UI language). Scored by language-distinctive function words + diacritics; the
+  // highest scorer above a floor wins, else 'other' (a neutral, grammar-free connector).
+  // [regex, weight] hint sets of language-distinctive function words / diacritics; the highest
+  // scorer (≥3, and ahead of the runner-up) wins, else 'other' → the neutral connector.
+  const LANG_HINTS = {
+    tr: [[/[ğışİı]/g, 2], [/\b(ve|bir|için|ile|değil|çok|daha|gibi|olarak|arasında|üzerine|ancak|kadar)\b/g, 1]],
+    de: [[/[äöüß]/g, 2], [/\b(und|der|die|das|ist|nicht|mit|für|auch|eine|zwischen|über|sich|werden|wird|dass|den|dem)\b/g, 1]],
+    fr: [[/\b(les|des|une|dans|pour|avec|est|entre|cette|sont|qui|aux|ne|pas|ce|ces|leur)\b/g, 1], [/(qu'|d'|l'|c'est|n')/g, 1]],
+    es: [[/[ñ]/g, 2], [/\b(el|los|las|del|que|como|para|con|entre|sobre|porque|pero|más|esta|este|una|por)\b/g, 1]],
+    it: [[/\b(il|lo|gli|della|delle|degli|nel|nella|nello|sono|che|perché|anche|questo|questa|più|tra|fra|come|una|per)\b/g, 1], [/\bè\b/g, 1]],
+    en: [[/\b(the|and|of|to|in|is|for|with|that|this|are|be|on|as|it|by|an|or|from|which|at|was)\b/g, 1]],
+  };
+  function noteLang(n) {
+    const t = ((n.title || '') + ' ' + (n.body || '')).toLowerCase();
+    if (!t.trim()) return 'en';
+    let best = 'other', bestS = 0, second = 0;
+    for (const [lang, hints] of Object.entries(LANG_HINTS)) {
+      let s = 0; for (const [re, w] of hints) s += (t.match(re) || []).length * w;
+      if (s > bestS) { second = bestS; bestS = s; best = lang; } else if (s > second) second = s;
+    }
+    return (bestS >= 3 && bestS > second) ? best : 'other';
+  }
+  const LANG_AND = { en: ' and ', tr: ' ve ', de: ' und ', fr: ' et ', es: ' y ', it: ' e ' };
+  // per-language connecting-sentence templates. cap = capitalize; A = source title, bl = [[target]],
+  // list = shared terms joined in-language, lead = first shared term.
+  const REL_TPL = {
+    en: {
+      no: (A, bl) => [A + ' and ' + bl + ' develop the same idea from different sides.', 'A through-line runs from ' + A + ' to ' + bl + '.', A + ' and ' + bl + ' belong to one line of thought.', A + ' sets up a question that ' + bl + ' answers.'],
+      yes: (A, bl, list, lead, cap) => [A + ' and ' + bl + ' both turn on ' + list + '.', cap(list) + ' runs through both ' + A + ' and ' + bl + '.', 'Where ' + A + ' works out ' + lead + ', ' + bl + ' carries it further.', A + ' leans on ' + list + ', and ' + bl + ' returns to the same ground.', 'Two takes on ' + list + ': ' + A + ' and ' + bl + '.'],
+    },
+    tr: {
+      no: (A, bl) => [A + ' ve ' + bl + ' aynı fikri farklı yönlerden geliştiriyor.', A + ' ile ' + bl + ' arasında bir düşünce hattı uzanıyor.', A + ' ve ' + bl + ' aynı düşünce çizgisine ait.'],
+      yes: (A, bl, list, lead, cap) => [A + ' ve ' + bl + ' ikisi de ' + list + ' üzerine kurulu.', cap(list) + ', hem ' + A + ' hem de ' + bl + ' boyunca işleniyor.', A + ', ' + lead + ' konusunu ele alıyor; ' + bl + ' bunu ileri taşıyor.', list + ' üzerine iki bakış: ' + A + ' ve ' + bl + '.'],
+    },
+    de: {
+      no: (A, bl) => [A + ' und ' + bl + ' entwickeln denselben Gedanken aus verschiedenen Richtungen.', 'Zwischen ' + A + ' und ' + bl + ' verläuft ein gemeinsamer Gedanke.', A + ' und ' + bl + ' gehören zu einem Gedankengang.'],
+      yes: (A, bl, list, lead, cap) => [A + ' und ' + bl + ' beruhen beide auf ' + list + '.', cap(list) + ' verbindet ' + A + ' und ' + bl + '.', A + ' behandelt ' + lead + '; ' + bl + ' führt es weiter.'],
+    },
+    fr: {
+      no: (A, bl) => [A + ' et ' + bl + ' développent la même idée sous des angles différents.', 'Un fil conducteur relie ' + A + ' à ' + bl + '.', A + ' et ' + bl + ' relèvent d’une même ligne de pensée.'],
+      yes: (A, bl, list, lead, cap) => [A + ' et ' + bl + ' reposent tous deux sur ' + list + '.', cap(list) + ' relie ' + A + ' et ' + bl + '.', A + ' aborde ' + lead + ' ; ' + bl + ' le prolonge.'],
+    },
+    es: {
+      no: (A, bl) => [A + ' y ' + bl + ' desarrollan la misma idea desde ángulos distintos.', 'Un hilo conductor enlaza ' + A + ' con ' + bl + '.', A + ' y ' + bl + ' pertenecen a una misma línea de pensamiento.'],
+      yes: (A, bl, list, lead, cap) => [A + ' y ' + bl + ' se basan ambos en ' + list + '.', cap(list) + ' conecta ' + A + ' y ' + bl + '.', A + ' aborda ' + lead + '; ' + bl + ' lo lleva más allá.'],
+    },
+    it: {
+      no: (A, bl) => [A + ' e ' + bl + ' sviluppano la stessa idea da angolazioni diverse.', 'Un filo conduttore collega ' + A + ' a ' + bl + '.', A + ' e ' + bl + ' appartengono a una stessa linea di pensiero.'],
+      yes: (A, bl, list, lead, cap) => [A + ' e ' + bl + ' si fondano entrambi su ' + list + '.', cap(list) + ' collega ' + A + ' e ' + bl + '.', A + ' affronta ' + lead + '; ' + bl + ' lo porta oltre.'],
+    },
+  };
   function suggestRelation(a, b, terms) {
     const bl = '[[' + b.title + ']]';
     const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
     const t = (terms || []).filter((x) => x.length > 3).slice(0, 3);
-    if (!t.length) {
-      const g = [
-        a.title + ' and ' + bl + ' develop the same idea from different sides.',
-        'A through-line runs from ' + a.title + ' to ' + bl + '.',
-        a.title + ' and ' + bl + ' belong to one line of thought.',
-        a.title + ' sets up a question that ' + bl + ' answers.',
-        'Kept apart for now, ' + a.title + ' and ' + bl + ' read as one thought.',
-      ];
-      return g[pick(a.id + b.id, g.length)];
-    }
-    const list = t.length === 1 ? t[0] : t.slice(0, -1).join(', ') + ' and ' + t[t.length - 1];
-    const lead = t[0];
-    const forms = [
-      a.title + ' and ' + bl + ' both turn on ' + list + '.',
-      cap(list) + ' runs through both ' + a.title + ' and ' + bl + '.',
-      'Where ' + a.title + ' works out ' + lead + ', ' + bl + ' carries it further.',
-      a.title + ' leans on ' + list + ', and ' + bl + ' returns to the same ground.',
-      'Read ' + bl + ' next — it picks up the thread of ' + list + '.',
-      'Two takes on ' + list + ': ' + a.title + ' and ' + bl + '.',
-      a.title + ' and ' + bl + ' meet on ' + list + ', from opposite ends.',
-      cap(lead) + ' is the hinge between ' + a.title + ' and ' + bl + '.',
-    ];
+    const lang = noteLang(a);
+    const tpl = REL_TPL[lang];
+    // a language we don't have prose for → neutral connector: link + shared key terms (in the
+    // note's own words), punctuation only, no verbs to conjugate wrong
+    if (!tpl) return t.length ? a.title + ' ↔ ' + bl + ' · ' + t.join(', ') : a.title + ' ↔ ' + bl;
+    if (!t.length) { const g = tpl.no(a.title, bl); return g[pick(a.id + b.id, g.length)]; }
+    const join = LANG_AND[lang];
+    const list = t.length === 1 ? t[0] : t.slice(0, -1).join(', ') + join + t[t.length - 1];
+    const forms = tpl.yes(a.title, bl, list, t[0], cap);
     return forms[pick(a.id + b.id + list, forms.length)];
   }
 
   // read-view delegation
   function readClick(e) {
+    const task = e.target.closest && e.target.closest('input[data-task]');
+    if (task) { e.preventDefault(); const boxes = [...e.currentTarget.querySelectorAll('input[data-task]')]; toggleTaskAt(boxes.indexOf(task)); return; }
     const nav = e.target.closest('[data-nav]'); if (nav) { e.preventDefault(); open(nav.getAttribute('data-nav')); return; }
     const tg = e.target.closest('[data-tag]'); if (tg) { e.preventDefault(); tagFilter = tg.getAttribute('data-tag'); return; }
     const ck = e.target.closest('[data-cite]'); if (ck) { e.preventDefault(); openReference(ck.getAttribute('data-cite')); return; }
+  }
+  // toggle the i-th `- [ ]` / `- [x]` task line in the current note (clicked in the read view)
+  function toggleTaskAt(i) {
+    if (i < 0) return; const n = current; if (!n) return;
+    let count = -1;
+    const lines = (n.body || '').split('\n').map((line) => {
+      const m = line.match(/^(\s*[-*+] +)\[([ xX])\](.*)$/);
+      if (!m) return line;
+      count++; if (count !== i) return line;
+      return m[1] + '[' + (m[2] === ' ' ? 'x' : ' ') + ']' + m[3];
+    });
+    n.body = lines.join('\n'); n.updated = new Date().toISOString(); markDirty(n.id); persist();
   }
   // a [@citekey] citation opens the Library on that reference's detail
   function openReference(key) {

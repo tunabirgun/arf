@@ -11,6 +11,8 @@
 
   let filter = $state('all');
   let folderFilter = $state(null);   // null = all folders; '' = unfiled; else a folder path (matches it + subfolders)
+  let dragRef = $state(null);        // id of the reference row being dragged onto a folder
+  let dropFolder = $state(undefined);// folder currently hovered as a drop target ('' = unfiled)
   let selId = $state(refs[0]?.id ?? null);
   // jump to a reference when a [@citekey] citation is clicked — one-shot, so a later refs change
   // (e.g. deleting or adding a ref) doesn't keep snapping the selection back to the cited one
@@ -154,13 +156,19 @@
         <button class="libfilter" class:on={filter === f.k} onclick={() => (filter = f.k)}><span>{f.l}</span><span class="ct">{count(f.k)}</span></button>
       {/if}
     {/each}
-    {#if refFolders.length || hasUnfiled}
+    {#if refFolders.length || hasUnfiled || dragRef}
       <div class="libhead" style="margin-top:.9rem">Folders</div>
       <button class="libfilter" class:on={folderFilter === null} onclick={() => (folderFilter = null)}><span>All folders</span></button>
       {#each refFolders as fp}
-        <button class="libfilter" class:on={folderFilter === fp} onclick={() => (folderFilter = fp)}><span>{fp}</span><span class="ct">{folderCount(fp)}</span></button>
+        <button class="libfilter" class:on={folderFilter === fp} class:dropon={dropFolder === fp}
+          ondragover={(e) => { if (dragRef) { e.preventDefault(); dropFolder = fp; } }} ondragleave={() => { if (dropFolder === fp) dropFolder = undefined; }}
+          ondrop={() => { if (dragRef) { assignFolder(dragRef, fp); dragRef = null; dropFolder = undefined; } }}
+          onclick={() => (folderFilter = fp)}><span>{fp}</span><span class="ct">{folderCount(fp)}</span></button>
       {/each}
-      {#if hasUnfiled}<button class="libfilter" class:on={folderFilter === ''} onclick={() => (folderFilter = '')}><span>Unfiled</span></button>{/if}
+      <button class="libfilter" class:on={folderFilter === ''} class:dropon={dropFolder === ''}
+        ondragover={(e) => { if (dragRef) { e.preventDefault(); dropFolder = ''; } }} ondragleave={() => { if (dropFolder === '') dropFolder = undefined; }}
+        ondrop={() => { if (dragRef) { assignFolder(dragRef, ''); dragRef = null; dropFolder = undefined; } }}
+        onclick={() => (folderFilter = '')}><span>Unfiled</span></button>
     {/if}
     <button class="libbtn pri" style="margin-top:.9rem" onclick={() => { adding = true; addResult = undefined; addInput = ''; addError = ''; addBusy = false; fetchToken++; }}>＋ Add reference</button>
     <button class="libbtn" onclick={() => { exportScope = 'all'; }}>⇩ Export library</button>
@@ -168,7 +176,8 @@
 
   <div class="libcol refs">
     {#each filtered as r (r.id)}
-      <button class="refrow" class:on={r.id === selId} data-ref={r.id} onclick={() => (selId = r.id)}>
+      <button class="refrow" class:on={r.id === selId} data-ref={r.id} draggable="true"
+        ondragstart={() => (dragRef = r.id)} ondragend={() => { dragRef = null; dropFolder = undefined; }} onclick={() => (selId = r.id)}>
         <div class="rtitle"><span class="rtype">{TYPELABEL[r.type] || r.type}</span>{r.title}</div>
         <div class="rmeta">{shortAuth(r.authors)} · {r.year}{r.container ? ' · ' + r.container : r.publisher ? ' · ' + r.publisher : ''}</div>
         <div class="rsrc">{#each r.sources || [] as s}<span class="sb">{s}</span>{/each}</div>

@@ -65,7 +65,8 @@ const cite = {
     const r = resolveCite(t.key);
     if (r) {
       const who = r.authors && r.authors[0] ? r.authors[0].f : t.key;
-      const label = who + (r.year ? ' ' + r.year : '');
+      // _suffix disambiguates same-author/same-year works: Guth 1981a, Guth 1981b
+      const label = who + (r.year ? ' ' + r.year + (r._suffix || '') : '');
       return '<a class="cite" data-cite="' + t.key + '" href="#" title="' + esc(r.title || '') + '">' + esc(label) + '</a>';
     }
     return '<span class="cite dangling" title="unknown reference — add it in the Library">@' + esc(t.key) + '</span>';
@@ -76,8 +77,13 @@ marked.use({ gfm: true, breaks: false, extensions: [mathBlock, mathInline, wikil
 
 export function renderMarkdown(md) {
   try {
+    let html = marked.parse(md || '');
+    // make GFM task checkboxes interactive: drop `disabled` and tag them so the read view
+    // can toggle the matching `- [ ]` line in the source when one is clicked
+    html = html.replace(/<input\b([^>]*)>/g, (m, attrs) => /type=["']?checkbox/i.test(attrs)
+      ? '<input' + attrs.replace(/\s*disabled(=(["'])[^"']*\2|=[^\s>]+)?/gi, '') + ' data-task>' : m);
     // sanitize: a note may come from an external .md file in the vault, so strip
     // scripts/handlers while keeping wikilink data-attrs and KaTeX's spans/styles
-    return DOMPurify.sanitize(marked.parse(md || ''), { ADD_ATTR: ['data-nav', 'data-tag', 'data-cite'] });
+    return DOMPurify.sanitize(html, { ADD_ATTR: ['data-nav', 'data-tag', 'data-cite', 'data-task'] });
   } catch (e) { return '<p>' + esc(md || '') + '</p>'; }
 }
