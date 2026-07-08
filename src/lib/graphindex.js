@@ -84,7 +84,11 @@ export function buildVectorizer(notes) {
   };
   const vecs = {};
   docs.forEach((d) => (vecs[d.id] = vecOf(d.terms)));
-  return { vecs, vectorize: (text) => vecOf(tokenize(text)) };
+  // inverse document frequency of a token: high for words unique to a few notes,
+  // ~1 for words spread across the whole vault. Lets callers rank a pair's overlap
+  // by what actually distinguishes it, not by vault-wide filler.
+  const idf = (t) => Math.log((N + 1) / ((df[t] || 0) + 1)) + 1;
+  return { vecs, idf, vectorize: (text) => vecOf(tokenize(text)) };
 }
 export function buildVectors(notes) { return buildVectorizer(notes).vecs; }
 
@@ -125,12 +129,22 @@ export function digestPairs(notes, vecs, idx, { min = 0.14, max = 6 } = {}) {
 
 // The distinctive content words two notes share — the "why" behind a suggested connection,
 // so the digest can point at the overlap instead of asking you to find it yourself.
-export function sharedTerms(a, b, max = 5) {
+export function sharedTerms(a, b, max = 5, idf = null) {
   if (!a || !b) return [];
   const fa = new Map();
   tokenize((a.title || '') + ' ' + (a.body || '')).forEach((t) => fa.set(t, (fa.get(t) || 0) + 1));
-  const sb = new Set(tokenize((b.title || '') + ' ' + (b.body || '')));
-  const shared = [...fa.keys()].filter((t) => t.length > 3 && sb.has(t));
-  shared.sort((x, y) => (fa.get(y) - fa.get(x)) || (y.length - x.length));
-  return shared.slice(0, max);
+  const fb = new Map();
+  tokenize((b.title || '') + ' ' + (b.body || '')).forEach((t) => fb.set(t, (fb.get(t) || 0) + 1));
+  const shared = [...fa.keys()].filter((t) => t.length > 3 && fb.has(t));
+  if (!idf) { // legacy path: rank by raw frequency in A
+    shared.sort((x, y) => (fa.get(y) - fa.get(x)) || (y.length - x.length));
+    return shared.slice(0, max);
+  }
+  // distinctiveness: a term that recurs in both notes but is rare across the vault
+  // says more about the pair than a word every note happens to carry.
+  const score = (t) => Math.min(fa.get(t), fb.get(t)) * idf(t);
+  shared.sort((x, y) => (score(y) - score(x)) || (idf(y) - idf(x)) || (y.length - x.length));
+  // if the vault has genuinely distinctive overlap, drop the near-ubiquitous filler
+  const strong = shared.filter((t) => idf(t) > 1.05);
+  return (strong.length ? strong : shared).slice(0, max);
 }

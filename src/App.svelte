@@ -685,7 +685,7 @@
   // Link the note being viewed to a Resonance suggestion on the right rail.
   function linkResonance(bId) {
     if (!currentId) return;
-    linkPair(currentId, bId, sharedTerms(idx.byId[currentId], idx.byId[bId], 5));
+    linkPair(currentId, bId, sharedTerms(idx.byId[currentId], idx.byId[bId], 5, vectorizer.idf));
   }
   function confirmConnect() {
     if (!connect) return;
@@ -703,22 +703,29 @@
   // the similarity, the shared terms give the *why*. Varied phrasing, chosen stably per pair.
   function suggestRelation(a, b, terms) {
     const bl = '[[' + b.title + ']]';
+    const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
     const t = (terms || []).filter((x) => x.length > 3).slice(0, 3);
     if (!t.length) {
       const g = [
         a.title + ' and ' + bl + ' develop the same idea from different sides.',
         'A through-line runs from ' + a.title + ' to ' + bl + '.',
         a.title + ' and ' + bl + ' belong to one line of thought.',
+        a.title + ' sets up a question that ' + bl + ' answers.',
+        'Kept apart for now, ' + a.title + ' and ' + bl + ' read as one thought.',
       ];
       return g[pick(a.id + b.id, g.length)];
     }
     const list = t.length === 1 ? t[0] : t.slice(0, -1).join(', ') + ' and ' + t[t.length - 1];
+    const lead = t[0];
     const forms = [
-      a.title + ' and ' + bl + ' both hinge on ' + list + '.',
-      'The idea of ' + list + ' ties ' + a.title + ' to ' + bl + '.',
-      a.title + ' picks up ' + list + ' where ' + bl + ' leaves off.',
-      'Read alongside ' + bl + ' — both trace ' + list + '.',
-      a.title + ' and ' + bl + ' converge on ' + list + '.',
+      a.title + ' and ' + bl + ' both turn on ' + list + '.',
+      cap(list) + ' runs through both ' + a.title + ' and ' + bl + '.',
+      'Where ' + a.title + ' works out ' + lead + ', ' + bl + ' carries it further.',
+      a.title + ' leans on ' + list + ', and ' + bl + ' returns to the same ground.',
+      'Read ' + bl + ' next — it picks up the thread of ' + list + '.',
+      'Two takes on ' + list + ': ' + a.title + ' and ' + bl + '.',
+      a.title + ' and ' + bl + ' meet on ' + list + ', from opposite ends.',
+      cap(lead) + ' is the hinge between ' + a.title + ' and ' + bl + '.',
     ];
     return forms[pick(a.id + b.id + list, forms.length)];
   }
@@ -788,7 +795,7 @@
       pairs = pairs.sort((x, y) => y.s - x.s).slice(0, 6);
     } else pairs = digestPairs(notes, vecs, idx, { max: 6 });
     // attach the words each pair shares, so the digest shows *why* they connect
-    return pairs.map((p) => ({ ...p, terms: sharedTerms(idx.byId[p.a], idx.byId[p.b], 5) }));
+    return pairs.map((p) => ({ ...p, terms: sharedTerms(idx.byId[p.a], idx.byId[p.b], 5, vectorizer.idf) }));
   });
 
   const editable = (t) => !!(t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable || (t.closest && t.closest('.cm-editor'))));
