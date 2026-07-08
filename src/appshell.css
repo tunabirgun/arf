@@ -275,6 +275,9 @@
 .libbtn:hover { opacity: .9; }
 .refrow { display: block; width: 100%; text-align: left; padding: .7rem .2rem; border-bottom: 1px solid var(--line); cursor: pointer; background: none; border-left: 0; border-right: 0; border-top: 0; }
 .refrow:hover, .refrow.on { background: var(--accent-soft); }
+.refrow.sel { box-shadow: inset 2px 0 0 var(--accent); }
+.refrow .refsel { float: right; margin-left: .5rem; color: var(--fg-faint); cursor: pointer; font-size: 15px; line-height: 1; }
+.refrow.sel .refsel, .refrow .refsel:hover { color: var(--accent); }
 .refrow .rtitle { font-family: var(--serif); font-size: 17px; color: var(--fg-bright); line-height: 1.25; }
 .refrow .rmeta { font-size: 13px; color: var(--fg-muted); margin-top: .15rem; }
 .rtype { font-family: var(--mono); font-size: 10px; letter-spacing: .05em; text-transform: uppercase; color: var(--accent); border: 1px solid var(--accent-soft); border-radius: 3px; padding: 0 .3rem; margin-right: .4rem; }

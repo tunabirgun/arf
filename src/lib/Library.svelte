@@ -33,7 +33,9 @@
     onrefsdelete && onrefsdelete();   // flush references.json now so the delete can't be resurrected from disk on next launch
   }
   function copyCite(r) { try { navigator.clipboard.writeText('[@' + r.citekey + ']'); } catch (e) {} }
-  let exportScope = $state(null); // refId | 'all' | null
+  let exportScope = $state(null); // refId | 'all' | 'selected' | null
+  let selected = $state(new Set()); // ids ticked for bulk export
+  function toggleSel(id) { const s = new Set(selected); s.has(id) ? s.delete(id) : s.add(id); selected = s; }
   let expFmt = $state('BibTeX');
   let adding = $state(false);
   let addInput = $state('');
@@ -59,7 +61,7 @@
     refs = refs.map((r) => r.id === id ? { ...r, folder: path } : r);
   }
   function folderCount(p) { return refs.filter((r) => { const f = canonFolder(r.folder); return f === p || f.startsWith(p + '/'); }).length; }
-  const exportRefs = $derived(exportScope === 'all' ? refs : refs.filter((r) => r.id === exportScope));
+  const exportRefs = $derived(exportScope === 'all' ? refs : exportScope === 'selected' ? refs.filter((r) => selected.has(r.id)) : refs.filter((r) => r.id === exportScope));
   const exportText = $derived(joinRefs(exportRefs, expFmt));
 
   function count(k) { return k === 'all' ? refs.length : refs.filter((r) => r.type === k).length; }
@@ -172,12 +174,18 @@
     {/if}
     <button class="libbtn pri" style="margin-top:.9rem" onclick={() => { adding = true; addResult = undefined; addInput = ''; addError = ''; addBusy = false; fetchToken++; }}>＋ Add reference</button>
     <button class="libbtn" onclick={() => { exportScope = 'all'; }}>⇩ Export library</button>
+    {#if selected.size}
+      <button class="libbtn pri" onclick={() => { exportScope = 'selected'; }}>⇩ Export selected ({selected.size})</button>
+      <button class="libbtn" onclick={() => (selected = new Set())}>Clear selection</button>
+    {/if}
   </div>
 
   <div class="libcol refs">
     {#each filtered as r (r.id)}
-      <button class="refrow" class:on={r.id === selId} data-ref={r.id} draggable="true"
+      <button class="refrow" class:on={r.id === selId} class:sel={selected.has(r.id)} data-ref={r.id} draggable="true"
         ondragstart={() => (dragRef = r.id)} ondragend={() => { dragRef = null; dropFolder = undefined; }} onclick={() => (selId = r.id)}>
+        <span class="refsel" role="checkbox" tabindex="-1" aria-checked={selected.has(r.id)} title="Select for bulk export"
+          onclick={(e) => { e.stopPropagation(); toggleSel(r.id); }}>{selected.has(r.id) ? '☑' : '☐'}</span>
         <div class="rtitle"><span class="rtype">{TYPELABEL[r.type] || r.type}</span>{r.title}</div>
         <div class="rmeta">{shortAuth(r.authors)} · {r.year}{r.container ? ' · ' + r.container : r.publisher ? ' · ' + r.publisher : ''}</div>
         <div class="rsrc">{#each r.sources || [] as s}<span class="sb">{s}</span>{/each}</div>
