@@ -48,12 +48,13 @@ const wikilink = {
 };
 const tag = {
   name: 'tag', level: 'inline',
-  start(src) { const m = /(^|\s)#[a-z0-9]/i.exec(src); return m ? m.index : undefined; },
+  start(src) { const m = /(^|\s)#[\p{L}\p{N}]/u.exec(src); return m ? m.index : undefined; },
   tokenizer(src, tokens) {
     // don't tag a mid-word '#' (C#, A#m7, x#y): require a left boundary, matching start()
     const p = tokens && tokens[tokens.length - 1];
-    if (p && p.type === 'text' && /[A-Za-z0-9/]$/.test(p.raw)) return;
-    const m = /^#([a-z0-9][a-z0-9/-]*)/i.exec(src); if (m) return { type: 'tag', raw: m[0], tag: m[1] };
+    if (p && p.type === 'text' && /[\p{L}\p{N}/]$/u.test(p.raw)) return;
+    // \p{L}: allow Unicode letters in tags (#düşünce, #proteine), not just ASCII
+    const m = /^#([\p{L}\p{N}][\p{L}\p{N}/_-]*)/u.exec(src); if (m) return { type: 'tag', raw: m[0], tag: m[1] };
   },
   renderer(t) { return '<a class="ht" data-tag="' + t.tag.toLowerCase() + '" href="#">#' + esc(t.tag) + '</a>'; },
 };

@@ -17,7 +17,7 @@ function stripCode(body) {
 }
 export function parseInlineTags(body) {
   const text = stripCode(body);
-  const out = new Set(); const re = /(^|\s)#([a-z0-9][a-z0-9/-]*)/gi; let m;
+  const out = new Set(); const re = /(^|\s)#([\p{L}\p{N}][\p{L}\p{N}/_-]*)/gu; let m; // \p{L}: keep Unicode letters (ğ ş ü é ñ …)
   while ((m = re.exec(text))) out.add(m[2].toLowerCase());
   return [...out];
 }
@@ -62,7 +62,9 @@ const STOP = new Set(('the a an and or of to in is are was were on for with as b
   .split(/\s+/));
 
 function tokenize(text) {
-  return (stripCode(text).toLowerCase().match(/[a-z][a-z0-9']{2,}/g) || [])
+  // Unicode-aware: a word is any run of letters/digits (ğ ş ü é ñ … all count), so search,
+  // resonance, and shared-term extraction work on Turkish/European text, not just ASCII
+  return (stripCode(text).toLowerCase().match(/[\p{L}][\p{L}\p{N}']{2,}/gu) || [])
     .filter((w) => !STOP.has(w));
 }
 

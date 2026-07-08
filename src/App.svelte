@@ -15,7 +15,7 @@
 
   const IS_MAC = /Mac|iPhone|iPad|iPod/.test((navigator.platform || '') + ' ' + (navigator.userAgent || ''));
   const MOD = IS_MAC ? '⌘' : 'Ctrl';
-  const APP_VERSION = '1.4.0';
+  const APP_VERSION = '1.4.1';
 
   let notes = $state(loadNotes());
   let refs = $state(loadRefs());        // shared reference library (also used by [@citekey] citations)
@@ -459,7 +459,7 @@
   function editTitle(v) { const n = notes.find((x) => x.id === currentId); if (!n) return; n.title = v; n.updated = new Date().toISOString(); markDirty(currentId); persist(); }
   // edit the note's own tags (the chips above the title) — separate from the #tags typed in the body
   function addNoteTag(v) {
-    const t = (v || '').trim().replace(/^#/, '').toLowerCase().replace(/[^a-z0-9/_-]/g, '');
+    const t = (v || '').trim().replace(/^#/, '').toLowerCase().replace(/[^\p{L}\p{N}/_-]/gu, '');   // keep Unicode letters (ğ ş ü …)
     const n = current; if (!t || !n) return;
     if (!Array.isArray(n.tags)) n.tags = [];
     if (!n.tags.includes(t)) { n.tags = [...n.tags, t]; n.updated = new Date().toISOString(); markDirty(n.id); persist(); }

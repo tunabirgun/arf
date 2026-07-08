@@ -67,7 +67,10 @@
   function count(k) { return k === 'all' ? refs.length : refs.filter((r) => r.type === k).length; }
 
   function mkCitekey(authors, year) {
-    const base = (authors && authors[0] && authors[0].f ? authors[0].f : 'ref').toLowerCase().replace(/[^a-z0-9]/g, '') || 'ref';
+    // citekeys are conventionally ASCII: fold diacritics (Şahin→sahin, Müller→muller) rather than
+    // dropping the accented letters outright (which would eat the first letter of the name)
+    const raw = (authors && authors[0] && authors[0].f ? authors[0].f : 'ref');
+    const base = raw.normalize('NFKD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]/g, '') || 'ref';
     return base + (year || '');
   }
   async function fetchDOI(doi) {
