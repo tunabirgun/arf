@@ -13,7 +13,7 @@
 
   const IS_MAC = /Mac|iPhone|iPad|iPod/.test((navigator.platform || '') + ' ' + (navigator.userAgent || ''));
   const MOD = IS_MAC ? '⌘' : 'Ctrl';
-  const APP_VERSION = '1.3.0';
+  const APP_VERSION = '1.3.1';
 
   let notes = $state(loadNotes());
   let refs = $state(loadRefs());        // shared reference library (also used by [@citekey] citations)
@@ -276,12 +276,14 @@
       const kept = disk.length ? notes.filter((n) => !n._path || diskIds.has(n.id) || dirty.has(n.id) || n.id === protectedId) : notes;
       // 4) if the note being edited also changed on another device, keep that remote version as a
       //    conflict copy instead of silently losing it under the local edit (once per remote version).
+      //    updated must be STRICTLY newer: a self-flush round-trips `updated` byte-for-byte while the
+      //    serializer rewrites body whitespace, so `>=` would flag our own write as a phantom conflict.
       const extra = [];
       if (protectedId) {
         const remote = live.find((n) => n.id === protectedId);
         const localCur = notes.find((n) => n.id === protectedId);
         const key = remote && protectedId + '@' + (remote.updated || '');
-        if (remote && localCur && (remote.body || '') !== (localCur.body || '') && (remote.updated || '') >= (localCur.updated || '') && !_conflicts.has(key)) {
+        if (remote && localCur && (remote.body || '') !== (localCur.body || '') && (remote.updated || '') > (localCur.updated || '') && !_conflicts.has(key)) {
           _conflicts.add(key);
           const cid = 'conflict_' + Date.now().toString(36);
           extra.push({ ...remote, id: cid, title: (remote.title || 'Note') + ' (conflict copy)', _path: undefined });
