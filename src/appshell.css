@@ -43,6 +43,10 @@
 .item .txt { min-width: 0; display: flex; flex-direction: column; }
 .item .t { font-family: var(--serif); font-size: 16px; color: var(--fg-bright); }
 .item .s { font-size: 12px; color: var(--fg-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* sidebar drag & drop: drag a note into a folder, nest a folder under a folder, drop on "Vault" for top level */
+.item.dragging, .frow.dragging { opacity: .4; }
+.frow.dropon, .lhrow.dropon { background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--accent); border-radius: 6px; }
+.lhrow.dropon .lh { color: var(--accent); }
 .tags { display: flex; flex-wrap: wrap; gap: .3rem; }
 .tag { font-family: var(--mono); font-size: 11px; color: var(--accent); background: var(--accent-soft); border: 1px solid transparent; border-radius: 3px; padding: .08rem .38rem; cursor: pointer; }
 .tag:hover { border-color: var(--accent); }

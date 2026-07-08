@@ -56,19 +56,12 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: 'Arf ${{ github.ref_name }}'
           releaseBody: |
-            **Arf 1.2** — a reliability release. A codebase-wide audit turned up correctness, data-safety, and cross-platform bugs across the vault, the on-device machine, and the Library; this ships the verified fixes.
+            **Arf 1.3** — organize by dragging.
 
-            **Fixed**
-            - **Safer saves.** Renaming or moving a note now writes the new file before removing the old one, so an interrupted write — a sync client's lock, a Windows reserved name, a too-long path — can never leave a note on neither path.
-            - **A vault always loads.** One unreadable or locked `.md` no longer aborts the whole load; the rest of your notes still open.
-            - **Non-Latin titles work.** Titles in Turkish and other scripts keep their letters in the filename instead of collapsing to `untitled`, and Windows device names (CON, NUL, …) are handled.
-            - **Truer suggestions.** A note containing the word "constructor" no longer corrupts the on-device similarity math — which had been silently hiding related notes and inventing false pairs. Duplicate titles now resolve the same way on every OS.
-            - **Keyboard fixes.** Ctrl/⌘-Backspace no longer deletes the open note while you type in a search box; on macOS, Ctrl is left free for caret shortcuts (⌘ is the app key); editor shortcuts no longer collide with the global ones.
-            - **Big vaults stay responsive.** First-run embedding is chunked so it can't exhaust memory, and the full-graph layout is bounded so it won't freeze the window.
-            - **Library robustness.** References with no authors no longer crash the list or the BibTeX/RIS/CSL/Nature/Zenodo exporters; arXiv IDs resolve through DataCite; page ranges and empty years export cleanly.
-            - Imported `.arf` notes write to the vault immediately; a wiped cache no longer re-injects sample notes; folders with unusual path strings stay visible; and `C#` / `A#m7` are no longer mistaken for tags.
+            **New**
+            - **Drag & drop in the sidebar.** Drag a note onto a folder to file it there; drag a folder onto another to **nest** it — its notes and subfolders come along; and drop onto **Vault** to move something back to the top level. A circular move (a folder into its own descendant) is refused, and moving a folder renames every path underneath it in one step.
 
-            Local-first as ever — everything still runs on your device.
+            Everything is still local-first — plain Markdown on your disk, and every move is written straight to the files.
 
             **Installing** — these builds are unsigned (no paid certificate yet):
             - **Windows** — SmartScreen may warn: *More info → Run anyway*.

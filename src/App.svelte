@@ -1,6 +1,6 @@
 <script>
   import { loadNotes, seedNotes, saveNotes, newNote, toMarkdown, loadFolders, saveFolders, corruptBackupKey, ulid } from './lib/vault.js';
-  import { buildFolderRows, folderList } from './lib/folders.js';
+  import { buildFolderRows, folderList, canonFolder } from './lib/folders.js';
   import { buildIndex, buildVectorizer, related, hasLinks, digestPairs, cosine, sharedTerms } from './lib/graphindex.js';
   import { renderMarkdown, setLinkResolver, setCiteResolver } from './lib/markdown.js';
   import { loadRefs, saveRefs } from './lib/references.js';
@@ -13,7 +13,7 @@
 
   const IS_MAC = /Mac|iPhone|iPad|iPod/.test((navigator.platform || '') + ' ' + (navigator.userAgent || ''));
   const MOD = IS_MAC ? '⌘' : 'Ctrl';
-  const APP_VERSION = '1.2.0';
+  const APP_VERSION = '1.3.0';
 
   let notes = $state(loadNotes());
   let refs = $state(loadRefs());        // shared reference library (also used by [@citekey] citations)
@@ -60,6 +60,8 @@
   let collapsed = $state({});
   let activeFolder = $state('');
   let newFolderName = $state(null);
+  let dragItem = $state(null);   // { type:'note'|'folder', id?, path? } — a sidebar drag in progress
+  let dropOn = $state(null);     // folder path (or '__root__') currently hovered as a drop target
   let docExport = $state(false);
   let deFmt = $state('PDF');
   let dePage = $state('A4');
@@ -380,7 +382,50 @@
     saveFolders(folders); collapsed[activeFolder] = false;
   }
   function toggleFolder(path) { collapsed[path] = !collapsed[path]; }
-  function moveNote(id, folder) { const n = notes.find((x) => x.id === id); if (n) { n.folder = folder; n.updated = new Date().toISOString(); markDirty(id); persist(); } }
+  function moveNote(id, folder) {
+    const n = notes.find((x) => x.id === id); if (!n) return;
+    const dest = canonFolder(folder);
+    if (canonFolder(n.folder) === dest) return; // already there — no churn
+    n.folder = dest; n.updated = new Date().toISOString(); markDirty(id); persist();
+  }
+  // move/nest a folder subtree under destParent ('' = vault root); reparents its subfolders and notes
+  function moveFolder(src, destParent) {
+    src = canonFolder(src); destParent = canonFolder(destParent);
+    if (!src) return;
+    if (destParent === src || destParent.startsWith(src + '/')) return; // can't drop a folder into itself or a descendant
+    const leaf = src.slice(src.lastIndexOf('/') + 1);
+    const newPath = destParent ? destParent + '/' + leaf : leaf;
+    if (newPath === src) return;
+    const reparent = (p) => p === src ? newPath : (p.startsWith(src + '/') ? newPath + p.slice(src.length) : p);
+    folders = [...new Set(folders.map(reparent))];
+    for (const n of notes) {
+      const f = canonFolder(n.folder);
+      if (f === src || f.startsWith(src + '/')) { n.folder = reparent(f); n.updated = new Date().toISOString(); markDirty(n.id); }
+    }
+    if (collapsed[src] != null) { collapsed[newPath] = collapsed[src]; delete collapsed[src]; }
+    if (activeFolder === src || activeFolder.startsWith(src + '/')) activeFolder = reparent(activeFolder);
+    saveFolders(folders); persist();
+  }
+  // --- sidebar drag & drop: move notes into folders, nest folders under folders ---
+  function onDragStart(e, item) {
+    dragItem = item;
+    try { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', item.type + ':' + (item.id || item.path)); } catch (x) {}
+  }
+  function onDragEnd() { dragItem = null; dropOn = null; }
+  function dragAllowed(target) { // '' or a folder path
+    if (!dragItem) return false;
+    if (dragItem.type === 'folder') { const s = canonFolder(dragItem.path), t = canonFolder(target); if (t === s || t.startsWith(s + '/')) return false; }
+    return true;
+  }
+  function onDragOver(e, target) { if (!dragAllowed(target)) return; e.preventDefault(); try { e.dataTransfer.dropEffect = 'move'; } catch (x) {} dropOn = target === '' ? '__root__' : target; }
+  function onDrop(e, target) {
+    e.preventDefault();
+    const d = dragItem, ok = dragAllowed(target);
+    dragItem = null; dropOn = null;
+    if (!d || !ok) return;
+    if (d.type === 'note') moveNote(d.id, target);
+    else moveFolder(d.path, target);
+  }
 
   function esc(s) { return (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
   function exportHTML(n) {
@@ -828,7 +873,8 @@
           {/if}
           {#if vaultErr}<span class="verr" title="A file write failed">⚠</span>{/if}
         </div>
-        <div class="lhrow"><span class="lh">Vault · {notes.length}</span>
+        <div class="lhrow" class:dropon={dropOn === '__root__'} ondragover={(e) => onDragOver(e, '')} ondragleave={() => { if (dropOn === '__root__') dropOn = null; }} ondrop={(e) => onDrop(e, '')} role="group">
+          <span class="lh">{dropOn === '__root__' ? 'Move to top level' : 'Vault · ' + notes.length}</span>
           <button class="mini" title="New folder" onclick={() => (newFolderName = '')}>+ Folder</button></div>
         {#if newFolderName !== null}
           <!-- svelte-ignore a11y_autofocus -->
@@ -839,7 +885,8 @@
         {#if tagFilter}
           <button class="clearfilter" onclick={() => (tagFilter = null)}>← clear #{tagFilter}</button>
           {#each listNotes as n (n.id)}
-            <button class="item" class:on={n.id === currentId} data-nid={n.id} onclick={() => open(n.id)}>
+            <button class="item" class:on={n.id === currentId} data-nid={n.id} draggable="true"
+              ondragstart={(e) => onDragStart(e, { type: 'note', id: n.id })} ondragend={onDragEnd} onclick={() => open(n.id)}>
               <span class="dot2" class:orphan={invDot(n.id) === '○'}>{invDot(n.id)}</span>
               <span class="txt"><span class="t">{n.title || 'Untitled'}</span></span>
             </button>
@@ -847,11 +894,17 @@
         {:else}
           {#each folderRows as r}
             {#if r.type === 'folder'}
-              <button class="frow" class:active={activeFolder === r.path} data-folder={r.path} style="padding-left:{6 + r.depth * 12}px" onclick={() => { toggleFolder(r.path); activeFolder = r.path; }}>
+              <button class="frow" class:active={activeFolder === r.path} class:dropon={dropOn === r.path} class:dragging={dragItem && dragItem.type === 'folder' && dragItem.path === r.path}
+                data-folder={r.path} style="padding-left:{6 + r.depth * 12}px" draggable="true"
+                ondragstart={(e) => onDragStart(e, { type: 'folder', path: r.path })} ondragend={onDragEnd}
+                ondragover={(e) => onDragOver(e, r.path)} ondragleave={() => { if (dropOn === r.path) dropOn = null; }} ondrop={(e) => onDrop(e, r.path)}
+                onclick={() => { toggleFolder(r.path); activeFolder = r.path; }}>
                 <span class="caret">{r.hasChildren ? (r.collapsed ? '▸' : '▾') : '·'}</span><span class="fn">{r.name}</span>{#if r.count}<span class="fcount">{r.count}</span>{/if}
               </button>
             {:else}
-              <button class="item" class:on={r.note.id === currentId} data-nid={r.note.id} style="padding-left:{6 + r.depth * 12}px" onclick={() => open(r.note.id)}>
+              <button class="item" class:on={r.note.id === currentId} class:dragging={dragItem && dragItem.type === 'note' && dragItem.id === r.note.id}
+                data-nid={r.note.id} style="padding-left:{6 + r.depth * 12}px" draggable="true"
+                ondragstart={(e) => onDragStart(e, { type: 'note', id: r.note.id })} ondragend={onDragEnd} onclick={() => open(r.note.id)}>
                 <span class="dot2" class:orphan={invDot(r.note.id) === '○'} title={dotTitle(r.note.id)}>{invDot(r.note.id)}</span>
                 <span class="txt"><span class="t">{r.note.title || 'Untitled'}</span></span>
               </button>
