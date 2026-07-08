@@ -18,12 +18,12 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/tunabirgun/arf/releases/latest"><b>Download</b></a>&nbsp;&nbsp;·&nbsp;&nbsp;<a href="https://tunabirgun.github.io/arf/"><b>Documentation</b></a>&nbsp;&nbsp;·&nbsp;&nbsp;<a href="https://youtu.be/0ClY352euog"><b>Watch the demo</b></a>
+  <a href="https://github.com/tunabirgun/arf/releases/latest"><b>Download</b></a>&nbsp;&nbsp;·&nbsp;&nbsp;<a href="https://tunabirgun.github.io/arf/"><b>Documentation</b></a>&nbsp;&nbsp;·&nbsp;&nbsp;<a href="https://youtu.be/0ClY352euog"><b>Teaser</b></a>
 </p>
 
 <p align="center">
-  <a href="https://youtu.be/0ClY352euog" title="Watch the Arf demo">
-    <img src="https://img.youtube.com/vi/0ClY352euog/maxresdefault.jpg" alt="Arf demo video" width="900">
+  <a href="https://youtu.be/0ClY352euog" title="Arf — teaser animation">
+    <img src="https://img.youtube.com/vi/0ClY352euog/maxresdefault.jpg" alt="Arf teaser animation" width="900">
   </a>
 </p>
 
