@@ -32,11 +32,18 @@ const mathInline = {
 const wikilink = {
   name: 'wikilink', level: 'inline',
   start(src) { const i = src.indexOf('[['); return i < 0 ? undefined : i; },
-  tokenizer(src) { const m = /^\[\[([^\]]+?)\]\]/.exec(src); if (m) return { type: 'wikilink', raw: m[0], title: m[1].trim() }; },
+  // support the standard alias form [[Target|Display]] — resolve on Target, show Display
+  tokenizer(src) {
+    const m = /^\[\[([^\]]+?)\]\]/.exec(src); if (!m) return;
+    const raw = m[1].trim(), bar = raw.indexOf('|');
+    const title = (bar < 0 ? raw : raw.slice(0, bar)).trim();
+    const display = (bar < 0 ? raw : raw.slice(bar + 1).trim()) || title;
+    return { type: 'wikilink', raw: m[0], title, display };
+  },
   renderer(t) {
     const n = resolveTitle(t.title.toLowerCase());
-    if (n) return '<a class="wl" data-nav="' + n.id + '" href="#">' + esc(t.title) + '</a>';
-    return '<span class="wl dangling" title="unresolved link">' + esc(t.title) + '</span>';
+    if (n) return '<a class="wl" data-nav="' + n.id + '" href="#">' + esc(t.display) + '</a>';
+    return '<span class="wl dangling" title="unresolved link">' + esc(t.display) + '</span>';
   },
 };
 const tag = {

@@ -1,7 +1,7 @@
 ﻿/* Arf app shell — global styles (single App, class-based). */
 .shell { position: fixed; inset: 0; display: flex; flex-direction: column; overflow: hidden; }
 
-.top { display: flex; align-items: center; gap: .7rem; flex: none; padding: .5rem clamp(.7rem, 2vw, 1.2rem); border-bottom: 1px solid var(--line); }
+.top { display: flex; align-items: center; gap: .7rem; flex: none; flex-wrap: wrap; row-gap: .4rem; padding: .5rem clamp(.7rem, 2vw, 1.2rem); border-bottom: 1px solid var(--line); }
 .wm { font-family: var(--serif); font-weight: 600; font-size: 23px; color: var(--fg-bright); background: none; border: 0; cursor: pointer; padding: 0 .2rem 0 0; letter-spacing: .01em; }
 .wm .dot { color: var(--accent); }
 .top .sp { flex: 1; }
@@ -38,6 +38,8 @@
 .lh { font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: var(--fg-faint); margin: .2rem .3rem .5rem; }
 .item { display: flex; gap: .4rem; align-items: flex-start; width: 100%; text-align: left; background: none; border: 0; border-radius: 5px; padding: .4rem .4rem; cursor: pointer; }
 .item:hover, .item.on { background: var(--accent-soft); }
+.item.on { box-shadow: inset 2px 0 0 var(--accent); }
+.item.dropon { background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--accent); border-radius: 6px; }
 .item .dot2 { font-size: 9px; color: var(--accent); line-height: 1.7; flex: none; }
 .item .dot2.orphan { color: var(--fg-faint); }
 .item .txt { min-width: 0; display: flex; flex-direction: column; }
@@ -69,6 +71,7 @@
 .nfinput { width: 100%; font-family: var(--sans); font-size: 13px; padding: .32rem .5rem; border: 1px solid var(--accent); border-radius: 4px; background: var(--surface); color: var(--fg-bright); margin-bottom: .4rem; outline: none; }
 .frow { display: flex; align-items: center; gap: .3rem; width: 100%; text-align: left; background: none; border: 0; border-radius: 4px; padding: .28rem .3rem; cursor: pointer; color: var(--fg-bright); font-family: var(--sans); font-size: 13px; font-weight: 600; }
 .frow:hover, .frow.active { background: var(--accent-soft); }
+.frow.active { box-shadow: inset 2px 0 0 var(--accent); }
 .frow .caret { font-size: 9px; color: var(--fg-faint); width: .8em; flex: none; }
 .frow .fn { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .frow .fcount { font-family: var(--mono); font-size: 10px; color: var(--fg-faint); }

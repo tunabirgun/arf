@@ -3,9 +3,12 @@
 // are implied. buildFolderRows flattens the tree into rows (with depth) for the
 // sidebar, respecting collapsed state — recursion-free rendering.
 
+// Win32 strips a trailing dot/space from a directory name and forbids reserved device
+// names — normalize each segment so the keyed path equals what the filesystem stores.
+const sanSeg = (s) => { s = s.replace(/[. ]+$/, ''); return /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i.test(s) ? s + '-' : s; };
 // canonical folder path: split on BOTH separators so a backslash folder ("a\\b") matches the
 // tree, drop empty / "." / ".." segments, join with "/". Used everywhere a folder is keyed.
-export const canonFolder = (p) => (p || '').split(/[\\/]/).filter((seg) => seg && seg !== '.' && seg !== '..').join('/');
+export const canonFolder = (p) => (p || '').split(/[\\/]/).filter((seg) => seg && seg !== '.' && seg !== '..').map(sanSeg).filter(Boolean).join('/');
 
 export function allFolderPaths(folders, notes) {
   const set = new Set();

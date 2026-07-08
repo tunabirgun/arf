@@ -54,8 +54,9 @@
     const cls = nd.center ? 'eg-center' : 'eg-node' + (orphan ? ' orphan' : '');
     let s = '<g class="eg-node-g' + (nd.center ? ' c' : '') + '" data-i="' + i + '" transform="translate(' + nd.x.toFixed(1) + ',' + nd.y.toFixed(1) + ')">';
     if (nd.center) s += '<circle class="eg-ring" r="' + (r + 5) + '"/>';
-    s += '<circle class="' + cls + '" r="' + r + '"><title>' + esc(idx.byId[nd.id].title) + '</title></circle>';
-    s += '<text class="eg-label' + (nd.center ? ' c' : '') + '" y="' + (r + 12) + '">' + esc(idx.byId[nd.id].title.slice(0, mode === 'full' ? 24 : 15)) + '</text></g>';
+    const ndTitle = idx.byId[nd.id] && idx.byId[nd.id].title || 'Untitled';   // a note with no title must not crash the whole graph
+    s += '<circle class="' + cls + '" r="' + r + '"><title>' + esc(ndTitle) + '</title></circle>';
+    s += '<text class="eg-label' + (nd.center ? ' c' : '') + '" y="' + (r + 12) + '">' + esc(ndTitle.slice(0, mode === 'full' ? 24 : 15)) + '</text></g>';
     return s;
   }
 

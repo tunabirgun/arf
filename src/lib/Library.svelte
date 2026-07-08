@@ -1,5 +1,5 @@
 <script>
-  let { notes, idx, onopen, refs = $bindable([]), jumpTo = null } = $props();
+  let { notes, idx, onopen, refs = $bindable([]), jumpTo = null, onjumped = null, onrefsdelete = null } = $props();
 
   const TYPELABEL = { 'article-journal': 'Article', 'article-magazine': 'Magazine', book: 'Book', preprint: 'Preprint', dataset: 'Dataset', webpage: 'Web' };
   const FILTERS = [
@@ -9,10 +9,25 @@
 
   let filter = $state('all');
   let selId = $state(refs[0]?.id ?? null);
-  // jump to a specific reference when a [@citekey] citation is clicked in a note
+  // jump to a reference when a [@citekey] citation is clicked — one-shot, so a later refs change
+  // (e.g. deleting or adding a ref) doesn't keep snapping the selection back to the cited one
+  let lastJump;
   $effect(() => {
-    if (jumpTo && jumpTo.key) { const r = refs.find((x) => x.citekey === jumpTo.key); if (r) { selId = r.id; filter = 'all'; } }
+    if (jumpTo && jumpTo !== lastJump) {
+      lastJump = jumpTo;
+      const r = refs.find((x) => x.citekey === jumpTo.key); if (r) { selId = r.id; filter = 'all'; }
+      onjumped && onjumped();
+    }
   });
+  function deleteRef() {
+    if (!sel) return;
+    if (!confirm('Delete the reference “' + (sel.title || sel.citekey) + '”?\n\nCitations to it in your notes will show as unknown until you re-add it.')) return;
+    const id = sel.id;
+    refs = refs.filter((r) => r.id !== id);
+    selId = refs[0]?.id ?? null;
+    onrefsdelete && onrefsdelete();   // flush references.json now so the delete can't be resurrected from disk on next launch
+  }
+  function copyCite(r) { try { navigator.clipboard.writeText('[@' + r.citekey + ']'); } catch (e) {} }
   let exportScope = $state(null); // refId | 'all' | null
   let expFmt = $state('BibTeX');
   let adding = $state(false);
@@ -173,14 +188,14 @@
       {#if addResult}
         <div class="dfield" style="margin-top:.8rem"><div class="rsrc">{#each addResult.sources as s}<span class="sb">{s}</span>{/each}</div>
           <div style="font-size:16px;color:var(--fg-bright);margin-top:.3rem">{addResult.title}</div>
-          <div class="rmeta">{addResult.authors.map((a) => a.g + ' ' + a.f).join(', ')} · {addResult.year}</div>
+          <div class="rmeta">{(addResult.authors || []).map((a) => a.g + ' ' + a.f).join(', ')} · {addResult.year}</div>
           <button class="libbtn pri" onclick={addFetched}>Add to Library</button></div>
       {/if}
       <button class="libbtn" onclick={() => { adding = false; addBusy = false; addError = ''; fetchToken++; }}>Cancel</button>
     {:else if sel}
       <div class="libhead">Reference detail</div>
       <div class="dfield"><div class="dl">Title</div><div class="dv" style="font-size:18px;color:var(--fg-bright)">{sel.title}</div></div>
-      <div class="dfield"><div class="dl">Authors</div><div class="dv">{sel.authors.map((a) => a.g + ' ' + a.f).join(', ')}</div></div>
+      <div class="dfield"><div class="dl">Authors</div><div class="dv">{(sel.authors || []).map((a) => a.g + ' ' + a.f).join(', ')}</div></div>
       <div class="dfield"><div class="dl">Type · Year</div><div class="dv">{TYPELABEL[sel.type] || sel.type} · {sel.year}</div></div>
       {#if sel.container}<div class="dfield"><div class="dl">{sel.type === 'webpage' || sel.type === 'article-magazine' ? 'Site' : 'Published in'}</div><div class="dv">{sel.container}{sel.volume ? ' ' + sel.volume : ''}{sel.pages ? ', ' + sel.pages : ''}</div></div>{/if}
       {#if sel.publisher}<div class="dfield"><div class="dl">Publisher</div><div class="dv">{sel.publisher}</div></div>{/if}
@@ -188,8 +203,10 @@
       {#if sel.isbn}<div class="dfield"><div class="dl">ISBN</div><div class="dv">{sel.isbn}</div></div>{/if}
       {#if sel.archived}<div class="dfield"><div class="dl">Archived snapshot · Wayback Machine</div><div class="dv"><a href={sel.archived} target="_blank" rel="noopener">web.archive.org/{sel.archivedDate}</a><br>captured {sel.archivedDate} · accessed {sel.accessed || '—'}</div></div>{/if}
       {#if sel.abstract}<div class="dfield"><div class="dl">Abstract</div><div class="dv" style="font-size:14px;color:var(--fg-muted)">{sel.abstract}</div></div>{/if}
-      <div class="dfield"><div class="dl">Fetched from</div><div class="rsrc">{#each sel.sources as s}<span class="sb">{s}</span>{/each}</div></div>
+      <div class="dfield"><div class="dl">Fetched from</div><div class="rsrc">{#each sel.sources || [] as s}<span class="sb">{s}</span>{/each}</div></div>
+      <div class="dfield"><div class="dl">Cite in a note</div><div class="dv"><button class="libbtn" style="width:auto;padding:.35rem .8rem" onclick={() => copyCite(sel)}>Copy [@{sel.citekey}]</button></div></div>
       <button class="libbtn pri" onclick={() => (exportScope = sel.id)}>⇩ Export this reference</button>
+      <button class="libbtn" style="margin-top:.5rem;color:var(--danger,#c0392b)" onclick={deleteRef}>Delete reference</button>
     {:else}<div class="rempty">Select a reference.</div>{/if}
   </div>
 </div>

@@ -7,7 +7,8 @@
 export function parseWikilinks(body) {
   const out = []; const re = /\[\[([^\]]+?)\]\]/g; let m;
   const text = stripCode(body); // ignore [[links]] inside code fences, matching the rendered view
-  while ((m = re.exec(text))) out.push(m[1].trim());
+  // edge is built from the target (before a '|' alias), so [[Target|Display]] still links
+  while ((m = re.exec(text))) { const raw = m[1].trim(), bar = raw.indexOf('|'); out.push((bar < 0 ? raw : raw.slice(0, bar)).trim()); }
   return out;
 }
 // strip fenced (``` and ~~~) and inline code so their contents don't leak into tags/tokens

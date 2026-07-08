@@ -16,14 +16,17 @@ export function slug(title) {
 
 function yamlStr(s) { return '"' + String(s == null ? '' : s).replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"'; }
 
+// strip CR/LF from any scalar so a crafted title/id/tag can't inject extra
+// frontmatter lines (a newline in the value would parse as a new YAML key)
+const clean = (v) => String(v == null ? '' : v).replace(/[\r\n]+/g, ' ');
 export function serialize(note) {
   const fm = [
     '---',
-    'id: ' + note.id,
-    'title: ' + yamlStr(note.title || 'Untitled'),
-    'tags: [' + (note.tags || []).join(', ') + ']',
-    'created: ' + (note.created || new Date().toISOString()),
-    'updated: ' + (note.updated || new Date().toISOString()),
+    'id: ' + clean(note.id),
+    'title: ' + yamlStr(clean(note.title || 'Untitled')),
+    'tags: [' + (note.tags || []).map((t) => clean(t).replace(/[,\]]/g, ' ').trim()).filter(Boolean).join(', ') + ']',
+    'created: ' + clean(note.created || new Date().toISOString()),
+    'updated: ' + clean(note.updated || new Date().toISOString()),
     '---',
     '',
   ].join('\n');
@@ -57,9 +60,18 @@ export function parse(text, opts = {}) {
 }
 
 function hash(s) { let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0; return h; }
+// Win32 silently strips a trailing dot/space from a directory name, and reserved
+// device names can't be folders — mirror that here so the in-memory folder path
+// always equals what the filesystem actually stores (else the note hops folders
+// on every sync tick). Kept in sync with canonFolder() in folders.js.
+function sanSeg(s) {
+  s = s.replace(/[. ]+$/, '');
+  if (/^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i.test(s)) s += '-';
+  return s;
+}
 function relPath(note, suffix) {
   // drop empty / "." / ".." segments so a folder name can never escape the vault root
-  const dir = (note.folder || '').split(/[\\/]/).filter((seg) => seg && seg !== '.' && seg !== '..').join('/');
+  const dir = (note.folder || '').split(/[\\/]/).filter((seg) => seg && seg !== '.' && seg !== '..').map(sanSeg).filter(Boolean).join('/');
   return (dir ? dir + '/' : '') + slug(note.title) + (suffix ? '-' + suffix : '') + '.md';
 }
 // dedupe loaded notes by id (a stale duplicate file must not shadow the real note)

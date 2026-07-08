@@ -8,7 +8,10 @@
   import { syntaxHighlighting, HighlightStyle } from '@codemirror/language';
   import { tags as hlTags } from '@lezer/highlight';
 
-  let { value = '', onchange, resemble = null } = $props();
+  let { value = '', onchange, resemble = null, oncite = null } = $props();
+  // markers this editor treats as interchangeable list/quote prefixes, so a toolbar
+  // button converts one into another instead of stacking or half-stripping it
+  const LIST_MARKER = /^(- \[[ xX]\] |[-*+] |\d+\. |> )/;
   let el;      // the CodeMirror host
   let wrapEl;  // the positioning context for the margin mark
   let view;
@@ -148,8 +151,11 @@
     if (!view) return;
     const doc = view.state.doc, sel = view.state.selection.main;
     const lines = []; for (let n = doc.lineAt(sel.from).number; n <= doc.lineAt(sel.to).number; n++) lines.push(doc.line(n));
-    const allHave = lines.every((l) => l.text.startsWith(p));
-    view.dispatch({ changes: lines.map((l) => allHave ? { from: l.from, to: l.from + p.length, insert: '' } : { from: l.from, insert: p }) });
+    const markerOf = (l) => (l.text.match(LIST_MARKER) || [''])[0];
+    // toggle off only when every line's marker is exactly p; otherwise replace whatever
+    // sibling marker is there (task↔bullet↔quote) rather than half-stripping or stacking it
+    const allHave = lines.every((l) => markerOf(l) === p);
+    view.dispatch({ changes: lines.map((l) => { const cur = markerOf(l); return { from: l.from, to: l.from + cur.length, insert: allHave ? '' : p }; }) });
     view.dispatch({ selection: { anchor: view.state.doc.lineAt(view.state.selection.main.head).to } });
     view.focus();
   }
@@ -157,8 +163,9 @@
     if (!view) return;
     const doc = view.state.doc, sel = view.state.selection.main;
     const a = doc.lineAt(sel.from).number, b = doc.lineAt(sel.to).number;
-    let i = 1; const changes = [];
-    for (let n = a; n <= b; n++) { const l = doc.line(n); const m = l.text.match(/^\d+\.\s/); changes.push(m ? { from: l.from, to: l.from + m[0].length, insert: '' } : { from: l.from, insert: (i++) + '. ' }); }
+    const lines = []; for (let n = a; n <= b; n++) lines.push(doc.line(n));
+    const allNum = lines.every((l) => /^\d+\.\s/.test(l.text));
+    let i = 1; const changes = lines.map((l) => { const cur = (l.text.match(LIST_MARKER) || [''])[0]; return { from: l.from, to: l.from + cur.length, insert: allNum ? '' : (i++) + '. ' }; });
     view.dispatch({ changes });
     view.dispatch({ selection: { anchor: view.state.doc.lineAt(view.state.selection.main.head).to } });
     view.focus();
@@ -225,6 +232,7 @@
     <button type="button" class="fm" title="Inline code" onclick={() => wrap('`')}>{'</>'}</button>
     <span class="fsep"></span>
     <button type="button" title="Link" onclick={link}>Link</button>
+    {#if oncite}<button type="button" class="fsym" title="Insert citation" onclick={() => oncite()}>@</button>{/if}
     <span class="fsep"></span>
     <button type="button" class="fsym" title="Bullet list" onclick={() => togglePrefix('- ')}>•</button>
     <button type="button" class="fsym" title="Numbered list" onclick={orderedList}>1.</button>

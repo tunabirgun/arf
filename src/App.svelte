@@ -3,6 +3,7 @@
   import { buildFolderRows, folderList, canonFolder } from './lib/folders.js';
   import { buildIndex, buildVectorizer, related, hasLinks, digestPairs, cosine, sharedTerms } from './lib/graphindex.js';
   import { renderMarkdown, setLinkResolver, setCiteResolver } from './lib/markdown.js';
+  import katexCss from 'katex/dist/katex.min.css?inline';   // inlined into exports so math positions correctly outside the app
   import { loadRefs, saveRefs } from './lib/references.js';
   import { initEmbedder, embedNotes, cosine as mlCosine, resetEmbedder } from './lib/ml.js';
   const ML_MODELS = { en: 'Xenova/all-MiniLM-L6-v2', multi: 'Xenova/paraphrase-multilingual-MiniLM-L12-v2' };
@@ -13,7 +14,7 @@
 
   const IS_MAC = /Mac|iPhone|iPad|iPod/.test((navigator.platform || '') + ' ' + (navigator.userAgent || ''));
   const MOD = IS_MAC ? '⌘' : 'Ctrl';
-  const APP_VERSION = '1.3.1';
+  const APP_VERSION = '1.3.2';
 
   let notes = $state(loadNotes());
   let refs = $state(loadRefs());        // shared reference library (also used by [@citekey] citations)
@@ -38,8 +39,12 @@
   let lastSync = $state(0);         // timestamp of the last successful folder sync
   let syncing = false;              // guard so polls don't overlap
   let dirty = new Set();           // note ids changed since the last file flush
-  let pendingDelete = new Set();   // note ids deleted locally whose file removal isn't confirmed yet (tombstones)
+  // note ids deleted locally whose file removal isn't confirmed yet (tombstones). Persisted so a
+  // delete that failed (locked file) before quit doesn't resurrect the note on the next launch.
+  let pendingDelete = new Set((() => { try { const r = localStorage.getItem('arf-tombstones'); const a = r ? JSON.parse(r) : []; return Array.isArray(a) ? a.filter((x) => typeof x === 'string') : []; } catch (e) { return []; } })());
+  function saveTombstones() { try { localStorage.setItem('arf-tombstones', JSON.stringify([...pendingDelete])); } catch (e) {} }
   let refsLoading = false;         // true while loading a vault's references.json — suppresses the debounced write-back
+  let refsLoaded = false;          // don't write refs to a vault until its references.json has been read once (else an empty startup list overwrites a real one)
   let reconnected = false;
   let leftW = $state(loadNum('arf-leftw', 220));   // resizable sidebar widths
   let rightW = $state(loadNum('arf-rightw', 268));
@@ -60,6 +65,10 @@
   let collapsed = $state({});
   let activeFolder = $state('');
   let newFolderName = $state(null);
+  let newFolderParent = $state('');   // where a new folder lands: '' = vault root, or a folder path for a subfolder
+  let uiMsg = $state('');             // transient sidebar notice (e.g. a rejected folder move)
+  let uiMsgTimer;
+  function notify(m) { uiMsg = m; clearTimeout(uiMsgTimer); uiMsgTimer = setTimeout(() => (uiMsg = ''), 2600); }
   let dragItem = $state(null);   // { type:'note'|'folder', id?, path? } — a sidebar drag in progress
   let dropOn = $state(null);     // folder path (or '__root__') currently hovered as a drop target
   let docExport = $state(false);
@@ -87,11 +96,11 @@
   // localStorage stays as the cache. Reads happen at connect, writes on every change (debounced).
   let refsTimer;
   $effect(() => { saveRefs(refs); clearTimeout(refsTimer); refsTimer = setTimeout(refsToVault, 500); return () => clearTimeout(refsTimer); });
-  async function refsToVault() { if (!vaultBackend || refsLoading) return; try { await vaultBackend.writeAux('references.json', JSON.stringify(refs, null, 2)); } catch (e) {} }
+  async function refsToVault() { if (!vaultBackend || refsLoading || !refsLoaded) return; try { await vaultBackend.writeAux('references.json', JSON.stringify(refs, null, 2)); } catch (e) {} }
   // replace=true on a vault switch: adopt only the new vault's references (no old-vault carry-over);
   // guarded by refsLoading so the debounced write-back can't clobber references.json before this read finishes
   async function refsFromVault(b, replace = false) {
-    refsLoading = true;
+    refsLoading = true; refsLoaded = false;
     try {
       const raw = await b.readAux('references.json');
       if (raw) {
@@ -102,9 +111,22 @@
           else { const m = new Map(refs.map((r) => [r.id, r])); for (const r of disk) m.set(r.id, r); refs = [...m.values()]; }
         } else if (replace) refs = [];
       } else if (replace) refs = [];   // new vault has no references.json yet → start clean
-    } catch (e) { if (replace) refs = []; } finally { refsLoading = false; }
+    } catch (e) { if (replace) refs = []; } finally { refsLoading = false; refsLoaded = true; }
   }
   const allFolders = $derived(folderList(folders, notes));
+
+  // one-time cleanup for installs upgraded from before 1.3.2: drop the old demo seed folders
+  // (Concepts/Methods) if no note actually lives in them, now that a fresh vault seeds none
+  (() => {
+    try {
+      if (localStorage.getItem('arf-seedfolders-cleaned')) return;
+      const legacy = ['Concepts', 'Concepts/Decoherence', 'Methods'];
+      const used = (p) => notes.some((n) => { const f = canonFolder(n.folder); return f === p || f.startsWith(p + '/'); });
+      const next = folders.filter((f) => !(legacy.includes(f) && !used(f)));
+      if (next.length !== folders.length) { folders = next; saveFolders(folders); }
+      localStorage.setItem('arf-seedfolders-cleaned', '1');
+    } catch (e) {}
+  })();
 
   const resonance = $derived.by(() => {
     if (!current) return [];
@@ -131,7 +153,8 @@
 
   // on-device MiniLM embeddings (opt-in; TF-IDF above serves instantly meanwhile)
   function mlText(n) { return (n.title || '') + '\n' + (n.body || '').replace(/```[\s\S]*?```/g, ' '); }
-  async function recomputeML() { if (mlStatus !== 'ready') return; try { mlVecs = await embedNotes(notes, mlText); } catch (e) {} }
+  let _mlRun = 0;
+  async function recomputeML() { if (mlStatus !== 'ready') return; const run = ++_mlRun; try { const v = await embedNotes(notes, mlText); if (run === _mlRun) mlVecs = v; } catch (e) {} } // drop a stale result if a newer recompute started
   function startML() {
     if (mlStatus !== 'off') return;
     mlStatus = 'loading';
@@ -159,6 +182,8 @@
   });
 
   let saveError = $state(false);
+  let exportError = $state('');   // a file export/save-dialog failure — distinct from the localStorage cache error
+  let exportErrTimer;
   let vaultCorrupt = $state(!!corruptBackupKey()); // saved notes couldn't be parsed on load
   let flashTimer, saveTimer;
   function writeNow() {
@@ -202,7 +227,7 @@
           // the new vault's notes already live on disk — adopt them straight away so the
           // sidebar repaints instantly; do NOT re-save them (that would churn/rename files
           // in the folder we just opened). Clear all old-vault state for a clean slate.
-          refsLoading = true; _conflicts.clear(); pendingDelete.clear(); activeFolder = ''; tagFilter = null;
+          refsLoading = true; _conflicts.clear(); pendingDelete.clear(); saveTombstones(); activeFolder = ''; tagFilter = null;
           adopt(existing);
           folders = [...new Set(existing.map((n) => n.folder).filter(Boolean))]; saveFolders(folders);
         } else {
@@ -219,7 +244,7 @@
             try { await b.saveNote(n); } catch (e) { vaultErr = true; dirty.add(n.id); } // a failed write stays dirty and retries on the next sync tick
           }
           adopt(merged);
-          folders = [...new Set(merged.map((n) => n.folder).filter(Boolean))]; saveFolders(folders);
+          folders = [...new Set([...folders, ...merged.map((n) => n.folder).filter(Boolean)])]; saveFolders(folders); // merge — keep empty user folders through the migration
         }
         vaultBackend = b;
         needVault = false; vaultMissing = null;
@@ -265,11 +290,13 @@
       const disk = await vaultBackend.loadAll();            // 2) read the folder's current state
       const diskIds = new Set(disk.map((n) => n.id));
       // tombstones: retry a delete whose file removal never confirmed, and never resurrect a note the user deleted
+      const reaped = new Set(); // ids whose file we removed THIS tick — `disk` still lists them, so exclude explicitly or they resurrect
       if (pendingDelete.size) {
-        for (const dn of disk) if (pendingDelete.has(dn.id)) { if (await vaultBackend.removeByPath(dn._path)) pendingDelete.delete(dn.id); } // retry; drop tombstone on confirmed removal
-        for (const id of [...pendingDelete]) if (!diskIds.has(id)) pendingDelete.delete(id); // already gone from disk → tombstone resolved
+        for (const dn of disk) if (pendingDelete.has(dn.id)) { if (await vaultBackend.removeByPath(dn._path)) { pendingDelete.delete(dn.id); reaped.add(dn.id); } } // retry; drop tombstone on confirmed removal
+        for (const id of [...pendingDelete]) if (!diskIds.has(id)) { pendingDelete.delete(id); reaped.add(id); } // already gone from disk → tombstone resolved
+        saveTombstones();
       }
-      const live = pendingDelete.size ? disk.filter((n) => !pendingDelete.has(n.id)) : disk;
+      const live = (pendingDelete.size || reaped.size) ? disk.filter((n) => !pendingDelete.has(n.id) && !reaped.has(n.id)) : disk;
       const protectedId = mode === 'write' && current ? currentId : null;
       // 3) honour deletions from another device: a note that had a file, is gone from a non-empty
       //    folder, has no unsaved edit, and isn't the note open for editing → drop it.
@@ -319,6 +346,7 @@
   // --- whole-workspace backup: one portable .arf file (notes + folders + references) ---
   let fileInput = $state();
   let importMsg = $state('');
+  let importMsgTimer;
   async function exportWorkspace() {
     const data = { arf: 1, app: 'Arf', version: APP_VERSION, exported: new Date().toISOString(), notes, folders, refs };
     await saveText('arf-workspace-' + new Date().toISOString().slice(0, 10) + '.arf', 'application/json', JSON.stringify(data, null, 2));
@@ -330,13 +358,26 @@
     try {
       const data = JSON.parse(await file.text());
       if (!data || !Array.isArray(data.notes)) throw new Error('Not an Arf workspace (.arf) file');
-      adopt(mergeByUpdated(notes, data.notes)); // merge so nothing already here is lost
-      if (vaultBackend) for (const n of data.notes) dirty.add(n.id); // write imported notes to the vault now, not next launch
-      if (Array.isArray(data.folders)) { folders = [...new Set([...folders, ...data.folders])]; saveFolders(folders); }
-      if (Array.isArray(data.refs)) { const m = new Map(refs.map((r) => [r.id, r])); for (const r of data.refs) { if (r && !Array.isArray(r.authors)) r.authors = []; m.set(r.id, r); } refs = [...m.values()]; }
-      flushSave();
-      importMsg = '✓ Imported ' + data.notes.length + ' notes.';
+      // Normalize before merging. Critically, drop each imported note's _path: it points at a
+      // file in the *source* vault, and flushing it here would overwrite/delete the unrelated
+      // file that occupies that path in THIS vault. Keep only a same-id note's own local path.
+      const localPath = new Map(notes.map((n) => [n.id, n._path]));
+      const incoming = data.notes.filter((n) => n && typeof n === 'object').map((n) => ({
+        ...n,
+        id: (typeof n.id === 'string' && n.id.trim()) ? n.id : ulid(),   // backfill before the merge, or id-less notes collapse to one
+        title: typeof n.title === 'string' ? n.title : 'Untitled',
+        tags: Array.isArray(n.tags) ? n.tags.filter((t) => typeof t === 'string') : [],
+        body: typeof n.body === 'string' ? n.body : '',
+        folder: typeof n.folder === 'string' ? n.folder : '',
+        _path: localPath.get(n.id),
+      }));
+      adopt(mergeByUpdated(notes, incoming)); // merge so nothing already here is lost
+      if (vaultBackend) for (const n of incoming) dirty.add(n.id); // write imported notes to the vault now, not next launch
+      if (Array.isArray(data.folders)) { folders = [...new Set([...folders, ...data.folders.filter((f) => typeof f === 'string' && f)])]; saveFolders(folders); }
+      if (Array.isArray(data.refs)) { const m = new Map(refs.map((r) => [r.id, r])); for (const r of data.refs) { if (!r || typeof r !== 'object' || r.id == null) continue; if (!Array.isArray(r.authors)) r.authors = []; m.set(r.id, r); } refs = [...m.values()]; }
+      importMsg = '✓ Imported ' + incoming.length + ' notes.';
     } catch (err) { importMsg = '⚠ ' + (err.message || 'Could not read that file'); }
+    finally { flushSave(); clearTimeout(importMsgTimer); importMsgTimer = setTimeout(() => (importMsg = ''), 6000); }   // persist adopted notes even if the merge threw; don't let the status stick forever as the help text
   }
   // launch: reopen the vault folder this app is bound to. First run (no stored path) or a
   // path that can't be found → the welcome gate. The localStorage cache keeps the last
@@ -356,12 +397,19 @@
         const ex = await b.loadAll();
         vaultBackend = b;
         setWinTitle(b.name);
+        // a note whose local delete never confirmed must not resurrect from its lingering file;
+        // keep it tombstoned and let the sync loop reap the file through its tested path
+        const live = pendingDelete.size ? ex.filter((n) => !pendingDelete.has(n.id)) : ex;
         if (ex.length) {
-          const diskUpdated = new Map(ex.map((n) => [n.id, n.updated || '']));
-          adopt(mergeByUpdated(ex, notes));
+          const diskPath = new Map(ex.map((n) => [n.id, n._path]));
+          const diskUpdated = new Map(live.map((n) => [n.id, n.updated || '']));
+          adopt(mergeByUpdated(live, notes));
           // notes only in the cache, or newer there (e.g. a hard quit beat the file flush), must reach the folder
-          for (const n of notes) { const d = diskUpdated.get(n.id); if (d === undefined || (n.updated || '') > d) dirty.add(n.id); }
-          folders = [...new Set(notes.map((n) => n.folder).filter(Boolean))];
+          for (const n of notes) {
+            if (diskPath.has(n.id)) n._path = diskPath.get(n.id);   // reconcile a stale cached _path to the real on-disk path, or a rename recreates the old file
+            const d = diskUpdated.get(n.id); if (d === undefined || (n.updated || '') > d) dirty.add(n.id);
+          }
+          folders = [...new Set([...folders, ...notes.map((n) => n.folder).filter(Boolean)])];   // merge, never replace — an empty user-made folder must survive relaunch
           flushVault();
         } else { for (const n of notes) { try { await b.saveNote(n); } catch (e) {} } } // reconnected to an emptied folder → re-seed it
         refsFromVault(b);
@@ -374,14 +422,20 @@
   });
   function editBody(v) { const n = notes.find((x) => x.id === currentId); if (!n) return; n.body = v; n.updated = new Date().toISOString(); markDirty(currentId); persist(); }
   function editTitle(v) { const n = notes.find((x) => x.id === currentId); if (!n) return; n.title = v; n.updated = new Date().toISOString(); markDirty(currentId); persist(); }
-  function create() { const n = newNote(activeFolder); notes.unshift(n); currentId = n.id; mode = 'write'; view = 'notes'; markDirty(n.id); persist(); }
+  function create() {
+    tagFilter = null;                                  // a tag filter would hide the new note; clear it so it's visible
+    if (activeFolder) collapsed[activeFolder] = false;  // and expand the folder it lands in
+    const n = newNote(activeFolder); notes.unshift(n); currentId = n.id; mode = 'write'; view = 'notes'; markDirty(n.id); persist();
+  }
   function addFolder() {
     const raw = (newFolderName || '').trim(); newFolderName = null;
     if (!raw) return;
-    const name = raw.replace(/[\/\\]/g, '-');   // strip both separators so a name can never become nested dirs on Windows
-    const path = activeFolder ? activeFolder + '/' + name : name;
-    if (!folders.includes(path)) folders.push(path);
-    saveFolders(folders); collapsed[activeFolder] = false;
+    const name = canonFolder(raw.replace(/[\/\\]/g, '-'));   // one segment; canonFolder strips trailing dot/space + reserved names so it matches disk
+    if (!name) return;
+    const parent = canonFolder(newFolderParent);
+    const path = parent ? parent + '/' + name : name;
+    if (!folders.includes(path)) folders = [...folders, path];
+    saveFolders(folders); if (parent) collapsed[parent] = false;
   }
   function toggleFolder(path) { collapsed[path] = !collapsed[path]; }
   function moveNote(id, folder) {
@@ -398,6 +452,12 @@
     const leaf = src.slice(src.lastIndexOf('/') + 1);
     const newPath = destParent ? destParent + '/' + leaf : leaf;
     if (newPath === src) return;
+    // refuse to merge into an unrelated folder that already owns this leaf name — a silent
+    // Set-dedup merge would fuse two subtrees and reassign every note under them, unrecoverably
+    if (folders.some((p) => (p === newPath || p.startsWith(newPath + '/')) && !(p === src || p.startsWith(src + '/'))) ||
+        notes.some((n) => { const f = canonFolder(n.folder); return (f === newPath || f.startsWith(newPath + '/')) && !(f === src || f.startsWith(src + '/')); })) {
+      notify('A folder named “' + leaf + '” already exists there.'); return;
+    }
     const reparent = (p) => p === src ? newPath : (p.startsWith(src + '/') ? newPath + p.slice(src.length) : p);
     folders = [...new Set(folders.map(reparent))];
     for (const n of notes) {
@@ -440,10 +500,12 @@
       + 'blockquote{border-left:2px solid #ccc;padding-left:1em;color:#555;font-style:italic}'
       + '.katex{font-size:1em}'
       + (o.numberHeadings ? 'body{counter-reset:h2}h2{counter-increment:h2}h2::before{content:counter(h2)". "}' : '');
-    const katexHref = [...document.styleSheets].map((s) => s.href).find((h) => h && /katex/i.test(h)) || '';
-    const katexLink = katexHref ? '<link rel="stylesheet" href="' + katexHref + '">' : '';
-    const title = o.title ? '<h1>' + esc(n.title) + '</h1>' : '';
-    return '<!doctype html><html><head><meta charset="utf-8"><title>' + esc(n.title) + '</title>' + katexLink + '<style>' + css + '</style></head><body>' + title + renderMarkdown(n.body) + '</body></html>';
+    // export may be triggered from write mode, where the read-view derived never ran — set the
+    // resolvers here so [[wikilinks]] and [@citations] resolve in the standalone document
+    setLinkResolver((t) => idx.byTitle[t] || null);
+    setCiteResolver((k) => refs.find((r) => r.citekey === k) || null);
+    const title = o.title ? '<h1>' + esc(n.title || 'Untitled') + '</h1>' : '';
+    return '<!doctype html><html><head><meta charset="utf-8"><title>' + esc(n.title || 'Untitled') + '</title><style>' + katexCss + '</style><style>' + css + '</style></head><body>' + title + renderMarkdown(n.body) + '</body></html>';
   }
   async function saveText(name, mime, text) {
     if (isTauri) { // desktop: browser download APIs don't work in the webview — use the native save dialog
@@ -451,7 +513,7 @@
         const [{ save }, { writeTextFile }] = await Promise.all([import('@tauri-apps/plugin-dialog'), import('@tauri-apps/plugin-fs')]);
         const path = await save({ defaultPath: name });
         if (path) await writeTextFile(path, text);
-      } catch (e) { saveError = true; }
+      } catch (e) { exportError = 'Couldn’t save the file — the save was cancelled or the folder isn’t writable.'; clearTimeout(exportErrTimer); exportErrTimer = setTimeout(() => (exportError = ''), 4000); }
       return;
     }
     const url = URL.createObjectURL(new Blob([text], { type: mime })); // web: Blob is robust for any size
@@ -518,6 +580,7 @@
       { label: 'Open & edit', run: () => { open(id); mode = 'write'; } },
       { label: 'Rename', run: () => renameFromCtx(id) },
       { label: 'Duplicate', run: () => dupNote(id) },
+      { label: 'Move to…', run: () => { movePick = { kind: 'note', id }; closeCtx(); } },
       { sep: true },
       { label: 'Copy wikilink', run: () => copyWikilink(id) },
       { label: 'Copy as Markdown', run: () => copyMd(id) },
@@ -543,9 +606,13 @@
   function folderMenu(path) {
     return [
       { label: 'New note here', run: () => { activeFolder = path; create(); } },
-      { label: 'New subfolder', run: () => { activeFolder = path; newFolderName = ''; } },
+      { label: 'New subfolder', run: () => { newFolderParent = path; renameFolderPath = null; newFolderName = ''; collapsed[path] = false; } },
+      { label: 'Rename…', run: () => { renameFolderPath = path; newFolderName = path.slice(path.lastIndexOf('/') + 1); } },
+      { label: 'Move to…', run: () => { movePick = { kind: 'folder', src: path }; closeCtx(); } },
       { sep: true },
       { label: collapsed[path] ? 'Expand' : 'Collapse', run: () => toggleFolder(path) },
+      { sep: true },
+      { label: 'Delete folder', danger: true, run: () => deleteFolder(path) },
     ];
   }
   function editorMenu() {
@@ -600,7 +667,7 @@
     if (needVault || vaultMissing) return [{ label: vaultMissing ? 'Locate vault folder…' : 'Choose vault folder…', run: connectFolder }];
     return [
       { label: 'New note', run: create },
-      { label: 'New folder', run: () => (newFolderName = '') },
+      { label: 'New folder', run: () => { newFolderParent = ''; renameFolderPath = null; newFolderName = ''; } },
       { sep: true },
       { label: 'Search…', run: () => { paletteOpen = true; query = ''; } },
       { label: 'Knowledge graph', run: () => (graphFull = true) },
@@ -636,16 +703,16 @@
   }
   async function deleteNote(id) {
     const n = idx.byId[id]; if (!n) return;
-    if (!window.confirm('Delete “' + (n.title || 'Untitled') + '”?\n\nThis removes the file from your vault folder.')) return;
+    if (!window.confirm('Delete “' + (n.title || 'Untitled') + '”?' + (vaultBackend ? '\n\nThis removes the file from your vault folder.' : ''))) return;
     const note = n;
     notes = notes.filter((x) => x.id !== id);
     if (currentId === id) currentId = notes[0]?.id ?? null;
     dirty.delete(id);
-    if (vaultBackend) pendingDelete.add(id);     // tombstone first: an in-flight first-save (no _path yet) must not resurrect the note
+    if (vaultBackend) { pendingDelete.add(id); saveTombstones(); }   // tombstone first: an in-flight first-save (no _path yet) must not resurrect the note
     closeCtx();
     writeNow();
     if (vaultBackend && note._path) {
-      if (await vaultBackend.removeNote(note)) pendingDelete.delete(id); // confirmed gone → clear it
+      if (await vaultBackend.removeNote(note)) { pendingDelete.delete(id); saveTombstones(); } // confirmed gone → clear it
       else vaultErr = true;                      // still on disk → stays tombstoned; syncFromFolder retries the removal
     }
   }
@@ -653,6 +720,64 @@
     moveNote(id, folder);
     closeCtx();
   }
+  // rename / delete a folder (delete moves its notes and subfolders up to the parent — no note is lost)
+  let renameFolderPath = $state(null);
+  function commitFolderInput() { if (renameFolderPath != null) commitRename(); else addFolder(); }
+  function folderCollision(src, newPath, leaf) {
+    if (folders.some((p) => (p === newPath || p.startsWith(newPath + '/')) && !(p === src || p.startsWith(src + '/'))) ||
+        notes.some((n) => { const f = canonFolder(n.folder); return (f === newPath || f.startsWith(newPath + '/')) && !(f === src || f.startsWith(src + '/')); })) {
+      notify('A folder named “' + leaf + '” already exists there.'); return true;
+    }
+    return false;
+  }
+  function commitRename() {
+    const raw = (newFolderName || '').trim(); const src = canonFolder(renameFolderPath); newFolderName = null; renameFolderPath = null;
+    if (!raw || !src) return;
+    const name = canonFolder(raw.replace(/[\/\\]/g, '-')); if (!name) return;
+    const parent = src.includes('/') ? src.slice(0, src.lastIndexOf('/')) : '';
+    const newPath = parent ? parent + '/' + name : name;
+    if (newPath === src || folderCollision(src, newPath, name)) return;
+    const re = (p) => p === src ? newPath : (p.startsWith(src + '/') ? newPath + p.slice(src.length) : p);
+    folders = [...new Set(folders.map(re))];
+    for (const n of notes) { const f = canonFolder(n.folder); if (f === src || f.startsWith(src + '/')) { n.folder = re(f); n.updated = new Date().toISOString(); markDirty(n.id); } }
+    if (collapsed[src] != null) { collapsed[newPath] = collapsed[src]; delete collapsed[src]; }
+    if (activeFolder === src || activeFolder.startsWith(src + '/')) activeFolder = re(activeFolder);
+    saveFolders(folders); persist();
+  }
+  function deleteFolder(path) {
+    path = canonFolder(path); if (!path) return;
+    const parent = path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '';
+    const reDesc = (p) => { const suf = p.slice(path.length + 1); return parent ? parent + '/' + suf : suf; };
+    folders = [...new Set(folders.flatMap((p) => p === path ? [] : (p.startsWith(path + '/') ? [reDesc(p)] : [p])))];
+    for (const n of notes) { const f = canonFolder(n.folder); if (f === path) { n.folder = parent; n.updated = new Date().toISOString(); markDirty(n.id); } else if (f.startsWith(path + '/')) { n.folder = reDesc(f); n.updated = new Date().toISOString(); markDirty(n.id); } }
+    if (activeFolder === path) activeFolder = parent; else if (activeFolder.startsWith(path + '/')) activeFolder = reDesc(activeFolder);
+    if (collapsed[path] != null) delete collapsed[path];
+    saveFolders(folders); persist(); closeCtx();
+  }
+  // "Move to…" picker (menu path parallel to drag & drop): { kind, id?/src? }
+  let movePick = $state(null);
+  function moveDestinations(src) {
+    const tops = ['']; // '' = top level
+    const all = allFolders.filter((f) => src == null || (f !== src && !f.startsWith(src + '/'))); // a folder can't move into itself/descendant
+    return tops.concat(all);
+  }
+  function doMovePick(dest) {
+    const p = movePick; movePick = null; if (!p) return;
+    if (p.kind === 'note') moveNote(p.id, dest);
+    else if (p.kind === 'folder') moveFolder(p.src, dest);
+  }
+  // insert-citation picker: filter the reference library, insert [@citekey] at the cursor
+  let citePick = $state(false);
+  let citeQuery = $state('');
+  const citeMatches = $derived.by(() => {
+    const all = refs.filter((r) => r && r.citekey);
+    const q = citeQuery.trim().toLowerCase();
+    if (!q) return all.slice(0, 40);
+    return all.filter((r) => (r.citekey || '').toLowerCase().includes(q) || (r.title || '').toLowerCase().includes(q)
+      || (r.authors || []).some((a) => (a.f || '').toLowerCase().includes(q)) || String(r.year || '').includes(q)).slice(0, 40);
+  });
+  function openCitePicker() { citeQuery = ''; citePick = true; }
+  function insertCite(r) { citePick = false; citeQuery = ''; if (r && editorRef) editorRef.edPaste('[@' + r.citekey + '] '); }
   function firstLine(b) { const l = (b || '').split('\n').find((x) => x.trim()); return l ? l.replace(/[#>*`\[\]]/g, '').slice(0, 52) : 'Empty note'; }
   function invDot(id) { return hasLinks(id, idx) ? '●' : '○'; }
   function dotTitle(id) { return hasLinks(id, idx) ? 'Linked to other notes' : 'Orphan — not linked to any note yet'; }
@@ -801,16 +926,20 @@
   const editable = (t) => !!(t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable || (t.closest && t.closest('.cm-editor'))));
   function onKey(e) {
     if (e.defaultPrevented) return; // let the editor/inputs claim a key before the global shortcuts run
+    // Escape always closes whatever is open, then stops
+    if (e.key === 'Escape') { paletteOpen = false; digestOpen = false; connect = null; graphFull = false; docExport = false; settingsOpen = false; focus = false; movePick = null; citePick = null; closeCtx(); return; }
+    // an open overlay owns the keyboard — don't let a global shortcut mutate hidden state behind it
+    if (paletteOpen || settingsOpen || digestOpen || connect || graphFull || docExport || movePick || citePick) return;
     const mod = IS_MAC ? e.metaKey : e.ctrlKey; // ⌘ on macOS, Ctrl elsewhere — leaves Ctrl free for caret shortcuts on Mac
+    const inField = editable(e.target); // view/edit chords must not fire while typing a title/body
     if (mod && e.key.toLowerCase() === 'k') { e.preventDefault(); paletteOpen = true; query = ''; }
-    else if (mod && e.key.toLowerCase() === 'e') { e.preventDefault(); if (view === 'notes') mode = mode === 'read' ? 'write' : 'read'; }
-    else if (mod && e.key.toLowerCase() === 'g') { e.preventDefault(); graphFull = !graphFull; }
-    else if (mod && e.key.toLowerCase() === 'n') { e.preventDefault(); if (view === 'library') view = 'notes'; create(); }
+    else if (mod && e.key.toLowerCase() === 'e') { if (inField) return; e.preventDefault(); if (view === 'notes') mode = mode === 'read' ? 'write' : 'read'; }
+    else if (mod && e.key.toLowerCase() === 'g') { if (inField) return; e.preventDefault(); graphFull = !graphFull; }
+    else if (mod && e.key.toLowerCase() === 'n') { if (inField) return; e.preventDefault(); if (view === 'library') view = 'notes'; create(); }
     else if (mod && e.key.toLowerCase() === 's') { e.preventDefault(); flushSave(); }
-    else if (mod && e.key.toLowerCase() === 'b') { e.preventDefault(); view = view === 'library' ? 'notes' : 'library'; }
+    else if (mod && e.key.toLowerCase() === 'b') { if (inField) return; e.preventDefault(); view = view === 'library' ? 'notes' : 'library'; }
     else if (mod && e.key.toLowerCase() === 'r') { e.preventDefault(); flushSave(); syncFromFolder(); }
-    else if (mod && e.key === 'Backspace' && current && mode === 'read' && !editable(e.target)) { e.preventDefault(); deleteNote(currentId); }
-    else if (e.key === 'Escape') { paletteOpen = false; digestOpen = false; connect = null; graphFull = false; docExport = false; settingsOpen = false; focus = false; closeCtx(); }
+    else if (mod && e.key === 'Backspace' && current && mode === 'read' && !inField) { e.preventDefault(); deleteNote(currentId); }
   }
 </script>
 
@@ -827,7 +956,7 @@
       {:else}
         <p class="wp">Your notes live in a folder of plain Markdown files on your disk — yours to read, move, back up, and keep. Choose an empty folder to start a new vault, or point Arf at an existing one.</p>
         <button class="wbtn" onclick={connectFolder}>{vaultBusy ? 'Opening…' : 'Choose your vault folder…'}</button>
-        <p class="wsub">A new vault starts with a few sample notes that show links, math, and the graph. Everything stays on this machine.</p>
+        <p class="wsub">A new vault starts with three short notes on linking and Markdown — delete them whenever you like. Everything stays on this machine.</p>
       {/if}
     </div>
   </div>
@@ -862,16 +991,22 @@
   {#if vaultCorrupt}
     <div class="savebanner">⚠ Your saved notes couldn’t be read and were backed up (<span class="mono">{corruptBackupKey()}</span>). Starting with an empty vault. <button class="bnrbtn" onclick={() => (vaultCorrupt = false)}>Dismiss</button></div>
   {/if}
+  {#if exportError}
+    <div class="savebanner">⚠ {exportError}</div>
+  {/if}
+  {#if uiMsg}
+    <div class="savebanner">{uiMsg}</div>
+  {/if}
 
   {#if view === 'library'}
-    <Library {notes} {idx} onopen={open} bind:refs jumpTo={refJump} />
+    <Library {notes} {idx} onopen={open} bind:refs jumpTo={refJump} onjumped={() => (refJump = null)} onrefsdelete={() => queueMicrotask(refsToVault)} />
   {:else}
     <div class="ws" style="--leftw:{leftW}px; --rightw:{rightW}px">
       <button type="button" class="resizer rz-l" aria-label="Resize left sidebar"
         style="left:{leftW - 5}px" onpointerdown={(e) => startResize('l', e)} onpointermove={onResizeMove} onpointerup={endResize} onpointercancel={endResize} onkeydown={(e) => nudgeResize('l', e)}></button>
       <button type="button" class="resizer rz-r" aria-label="Resize right sidebar"
         style="right:{rightW - 5}px" onpointerdown={(e) => startResize('r', e)} onpointermove={onResizeMove} onpointerup={endResize} onpointercancel={endResize} onkeydown={(e) => nudgeResize('r', e)}></button>
-      <aside class="list">
+      <aside class="list" ondragover={(e) => { if (e.target === e.currentTarget) onDragOver(e, ''); }} ondrop={(e) => { if (e.target === e.currentTarget) onDrop(e, ''); }} role="group">
         <div class="vaultbar">
           {#if vaultBackend}
             <span class="vlabel on" title="Writing Markdown files in “{vaultBackend.name}”. Keep this folder in Dropbox, iCloud, OneDrive, Syncthing, or a Git repo to sync it across machines."><span class="syncdot"></span>{vaultBackend.name}</span>
@@ -884,11 +1019,11 @@
         </div>
         <div class="lhrow" class:dropon={dropOn === '__root__'} ondragover={(e) => onDragOver(e, '')} ondragleave={() => { if (dropOn === '__root__') dropOn = null; }} ondrop={(e) => onDrop(e, '')} role="group">
           <span class="lh">{dropOn === '__root__' ? 'Move to top level' : 'Vault · ' + notes.length}</span>
-          <button class="mini" title="New folder" onclick={() => (newFolderName = '')}>+ Folder</button></div>
+          <button class="mini" title="New folder" onclick={() => { newFolderParent = ''; renameFolderPath = null; newFolderName = ''; }}>+ Folder</button></div>
         {#if newFolderName !== null}
           <!-- svelte-ignore a11y_autofocus -->
-          <input class="nfinput" autofocus placeholder={activeFolder ? 'Subfolder of' + ' ' + activeFolder : 'Folder name'} bind:value={newFolderName}
-            onkeydown={(e) => { if (e.key === 'Enter') addFolder(); else if (e.key === 'Escape') newFolderName = null; }} onblur={addFolder} />
+          <input class="nfinput" autofocus placeholder={renameFolderPath != null ? 'Rename folder' : (newFolderParent ? 'Subfolder of ' + newFolderParent : 'Folder name')} bind:value={newFolderName}
+            onkeydown={(e) => { if (e.key === 'Enter') commitFolderInput(); else if (e.key === 'Escape') { newFolderName = null; renameFolderPath = null; } }} onblur={commitFolderInput} />
         {/if}
 
         {#if tagFilter}
@@ -907,13 +1042,17 @@
                 data-folder={r.path} style="padding-left:{6 + r.depth * 12}px" draggable="true"
                 ondragstart={(e) => onDragStart(e, { type: 'folder', path: r.path })} ondragend={onDragEnd}
                 ondragover={(e) => onDragOver(e, r.path)} ondragleave={() => { if (dropOn === r.path) dropOn = null; }} ondrop={(e) => onDrop(e, r.path)}
-                onclick={() => { toggleFolder(r.path); activeFolder = r.path; }}>
-                <span class="caret">{r.hasChildren ? (r.collapsed ? '▸' : '▾') : '·'}</span><span class="fn">{r.name}</span>{#if r.count}<span class="fcount">{r.count}</span>{/if}
+                onclick={() => { if (activeFolder === r.path) toggleFolder(r.path); else { activeFolder = r.path; collapsed[r.path] = false; } }}>
+                <span class="caret" role="button" tabindex="-1" onclick={(e) => { e.stopPropagation(); toggleFolder(r.path); }}>{r.hasChildren ? (r.collapsed ? '▸' : '▾') : '·'}</span><span class="fn">{r.name}</span>{#if r.count}<span class="fcount">{r.count}</span>{/if}
               </button>
             {:else}
-              <button class="item" class:on={r.note.id === currentId} class:dragging={dragItem && dragItem.type === 'note' && dragItem.id === r.note.id}
+              <button class="item" class:on={r.note.id === currentId} class:dropon={dropOn === '__note__' + r.note.id} class:dragging={dragItem && dragItem.type === 'note' && dragItem.id === r.note.id}
                 data-nid={r.note.id} style="padding-left:{6 + r.depth * 12}px" draggable="true"
-                ondragstart={(e) => onDragStart(e, { type: 'note', id: r.note.id })} ondragend={onDragEnd} onclick={() => open(r.note.id)}>
+                ondragstart={(e) => onDragStart(e, { type: 'note', id: r.note.id })} ondragend={onDragEnd}
+                ondragover={(e) => { if (dragAllowed(canonFolder(r.note.folder))) { e.preventDefault(); try { e.dataTransfer.dropEffect = 'move'; } catch (x) {} dropOn = '__note__' + r.note.id; } }}
+                ondragleave={() => { if (dropOn === '__note__' + r.note.id) dropOn = null; }}
+                ondrop={(e) => onDrop(e, canonFolder(r.note.folder))}
+                onclick={() => open(r.note.id)}>
                 <span class="dot2" class:orphan={invDot(r.note.id) === '○'} title={dotTitle(r.note.id)}>{invDot(r.note.id)}</span>
                 <span class="txt"><span class="t">{r.note.title || 'Untitled'}</span></span>
               </button>
@@ -956,7 +1095,7 @@
             </div>
           </div>
           {#if mode === 'write'}
-            {#key currentId}<div class="editor"><Editor bind:this={editorRef} value={current.body} onchange={editBody} resemble={resembleParagraph} /></div>{/key}
+            {#key currentId}<div class="editor"><Editor bind:this={editorRef} value={current.body} onchange={editBody} resemble={resembleParagraph} oncite={openCitePicker} /></div>{/key}
           {:else}
             <div class="read" onclick={readClick}>{@html readHTML}</div>
           {/if}
@@ -1021,6 +1160,37 @@
           <div class="pg sem">Related · on-device</div>
           {#each palItems.sem as s}<button class="prow" onclick={() => open(s.id)}><span class="pt i">{idx.byId[s.id].title}</span><span class="psim">{s.s.toFixed(2)}</span></button>{/each}
         {/if}
+      </div>
+    </div>
+  </div>
+{/if}
+
+{#if citePick}
+  <div class="scrim" onclick={(e) => { if (e.target === e.currentTarget) citePick = false; }}>
+    <div class="palette">
+      <!-- svelte-ignore a11y_autofocus -->
+      <input autofocus placeholder="Insert citation — filter by author, title, year, or key…" bind:value={citeQuery}
+        onkeydown={(e) => { if (e.key === 'Enter' && citeMatches[0]) insertCite(citeMatches[0]); else if (e.key === 'Escape') citePick = false; }} />
+      <div class="presults">
+        <div class="pg">References</div>
+        {#each citeMatches as r (r.id)}
+          <button class="prow" onclick={() => insertCite(r)}><span class="pt">{(r.authors && r.authors[0] ? r.authors[0].f : r.citekey)}{r.year ? ' ' + r.year : ''} — {r.title || 'Untitled'}</span><span class="pm">[@{r.citekey}]</span></button>
+        {:else}
+          <div class="prow none">{refs.length ? 'No matching reference' : 'No references yet — add one in the Library first.'}</div>
+        {/each}
+      </div>
+    </div>
+  </div>
+{/if}
+
+{#if movePick}
+  <div class="scrim" onclick={(e) => { if (e.target === e.currentTarget) movePick = null; }}>
+    <div class="palette">
+      <div class="pg" style="padding:.7rem .9rem .3rem">Move {movePick.kind === 'folder' ? 'folder' : 'note'} to…</div>
+      <div class="presults">
+        {#each moveDestinations(movePick.kind === 'folder' ? movePick.src : null) as dest}
+          <button class="prow" onclick={() => doMovePick(dest)}><span class="pt">{dest === '' ? '↑ Top level' : dest}</span></button>
+        {/each}
       </div>
     </div>
   </div>
