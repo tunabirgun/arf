@@ -14,7 +14,7 @@
   <a href="https://github.com/tunabirgun/arf/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/tunabirgun/arf?label=release&color=2c4a6e"></a>
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-2c4a6e.svg"></a>
   <img alt="Desktop: Windows, macOS, Linux" src="https://img.shields.io/badge/desktop-Windows%20%C2%B7%20macOS%20%C2%B7%20Linux-555">
-  <img alt="On-device ML" src="https://img.shields.io/badge/ML-on--device-555">
+  <a href="https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2"><img alt="AI assist: MiniLM, on-device" src="https://img.shields.io/badge/AI%20assist-MiniLM%20(on--device)-555"></a>
 </p>
 
 <p align="center">
