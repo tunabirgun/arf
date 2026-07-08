@@ -5,6 +5,7 @@
   import { renderMarkdown, setLinkResolver, setCiteResolver } from './lib/markdown.js';
   import katexCss from 'katex/dist/katex.min.css?inline';   // inlined into exports so math positions correctly outside the app
   import { loadRefs, saveRefs } from './lib/references.js';
+  import { formatRef, CITE_STYLES } from './lib/cite.js';
   import { initEmbedder, embedNotes, cosine as mlCosine, resetEmbedder } from './lib/ml.js';
   const ML_MODELS = { en: 'Xenova/all-MiniLM-L6-v2', multi: 'Xenova/paraphrase-multilingual-MiniLM-L12-v2' };
   import { connectVault, reconnectVault, lastKnownVaultPath, isTauri } from './lib/vaultadapter.js';
@@ -19,6 +20,8 @@
   let notes = $state(loadNotes());
   let refs = $state(loadRefs());        // shared reference library (also used by [@citekey] citations)
   let refJump = $state(null);           // { key } → Library selects that reference
+  let bibEnabled = $state((() => { try { return localStorage.getItem('arf-bib') === '1'; } catch (e) { return false; } })());   // append a reference list to notes
+  let bibStyle = $state((() => { try { return localStorage.getItem('arf-bibstyle') || 'APA'; } catch (e) { return 'APA'; } })());
   let currentId = $state(notes[0]?.id ?? null);
   let mode = $state('read');            // 'read' | 'write'
   let theme = $state(document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light');
@@ -61,6 +64,7 @@
   let ctxSub = $state(null);    // reserved for future submenus
   let editorRef = $state(null); // Editor.svelte instance, for clipboard/format from the ctx menu
   let query = $state('');
+  let tagInput = $state('');   // the "+ tag" field in the crumbs bar
   let folders = $state(loadFolders());
   let collapsed = $state({});
   let activeFolder = $state('');
@@ -89,6 +93,17 @@
     setCiteResolver((k) => rmap.find((r) => r.citekey === k) || null);
     return current ? renderMarkdown(current.body) : '';
   });
+  // optional end-of-note bibliography: the references this note cites via [@key], in the chosen style
+  function buildBibHTML(n) {
+    if (!bibEnabled || !n) return '';
+    const seen = new Set(), keys = []; const re = /\[@([A-Za-z0-9_:.-]+)\]/g; let m;
+    while ((m = re.exec(n.body || ''))) if (!seen.has(m[1])) { seen.add(m[1]); keys.push(m[1]); }
+    const cited = keys.map((k) => refs.find((r) => r.citekey === k)).filter(Boolean);
+    if (!cited.length) return '';
+    return '<div class="bib"><h2>References</h2><ol>' + cited.map((r) => '<li>' + esc(formatRef(r, bibStyle)) + '</li>').join('') + '</ol></div>';
+  }
+  const bibHTML = $derived(buildBibHTML(current));
+  $effect(() => { try { localStorage.setItem('arf-bib', bibEnabled ? '1' : '0'); localStorage.setItem('arf-bibstyle', bibStyle); } catch (e) {} });
   const allTags = $derived(Object.keys(idx.tagIndex).sort());
   const listNotes = $derived(tagFilter ? notes.filter((n) => (idx.noteTags[n.id] || []).includes(tagFilter)) : notes);
   const folderRows = $derived(buildFolderRows(folders, notes, collapsed));
@@ -422,6 +437,14 @@
   });
   function editBody(v) { const n = notes.find((x) => x.id === currentId); if (!n) return; n.body = v; n.updated = new Date().toISOString(); markDirty(currentId); persist(); }
   function editTitle(v) { const n = notes.find((x) => x.id === currentId); if (!n) return; n.title = v; n.updated = new Date().toISOString(); markDirty(currentId); persist(); }
+  // edit the note's own tags (the chips above the title) — separate from the #tags typed in the body
+  function addNoteTag(v) {
+    const t = (v || '').trim().replace(/^#/, '').toLowerCase().replace(/[^a-z0-9/_-]/g, '');
+    const n = current; if (!t || !n) return;
+    if (!Array.isArray(n.tags)) n.tags = [];
+    if (!n.tags.includes(t)) { n.tags = [...n.tags, t]; n.updated = new Date().toISOString(); markDirty(n.id); persist(); }
+  }
+  function removeNoteTag(t) { const n = current; if (!n) return; n.tags = (n.tags || []).filter((x) => x !== t); n.updated = new Date().toISOString(); markDirty(n.id); persist(); }
   function create() {
     tagFilter = null;                                  // a tag filter would hide the new note; clear it so it's visible
     if (activeFolder) collapsed[activeFolder] = false;  // and expand the folder it lands in
@@ -500,12 +523,13 @@
       + 'blockquote{border-left:2px solid #ccc;padding-left:1em;color:#555;font-style:italic}'
       + '.katex{font-size:1em}'
       + (o.numberHeadings ? 'body{counter-reset:h2}h2{counter-increment:h2}h2::before{content:counter(h2)". "}' : '');
+    const bibCss = '.bib{margin-top:2em;border-top:1px solid #ddd;padding-top:1em}.bib h2{font-size:14pt}.bib ol{padding-left:1.4em}.bib li{margin:.35em 0;font-size:11pt}';
     // export may be triggered from write mode, where the read-view derived never ran — set the
     // resolvers here so [[wikilinks]] and [@citations] resolve in the standalone document
     setLinkResolver((t) => idx.byTitle[t] || null);
     setCiteResolver((k) => refs.find((r) => r.citekey === k) || null);
     const title = o.title ? '<h1>' + esc(n.title || 'Untitled') + '</h1>' : '';
-    return '<!doctype html><html><head><meta charset="utf-8"><title>' + esc(n.title || 'Untitled') + '</title><style>' + katexCss + '</style><style>' + css + '</style></head><body>' + title + renderMarkdown(n.body) + '</body></html>';
+    return '<!doctype html><html><head><meta charset="utf-8"><title>' + esc(n.title || 'Untitled') + '</title><style>' + katexCss + '</style><style>' + css + bibCss + '</style></head><body>' + title + renderMarkdown(n.body) + buildBibHTML(n) + '</body></html>';
   }
   async function saveText(name, mime, text) {
     if (isTauri) { // desktop: browser download APIs don't work in the webview — use the native save dialog
@@ -564,6 +588,7 @@
   function buildCtxItems(t) {
     if (!t || !t.closest) return generalMenu();
     const cite = t.closest('[data-cite]'); if (cite) return [{ label: 'Open reference', run: () => openReference(cite.getAttribute('data-cite')) }];
+    const rref = t.closest('[data-ref]'); if (rref) return refMenu(rref.getAttribute('data-ref'));
     const nav = t.closest('[data-nav]'); if (nav) return linkMenu(nav.getAttribute('data-nav'));
     const tag = t.closest('[data-tag]'); if (tag) return tagMenu(tag.getAttribute('data-tag'));
     const nid = t.closest('[data-nid]'); if (nid) return noteMenu(nid.getAttribute('data-nid'));
@@ -602,6 +627,21 @@
       { label: tagFilter === tag ? 'Clear filter' : 'Filter by #' + tag, run: () => (tagFilter = tagFilter === tag ? null : tag) },
       { label: 'Copy #' + tag, run: () => copyText('#' + tag) },
     ];
+  }
+  function refMenu(id) {
+    const r = refs.find((x) => x.id === id); if (!r) return generalMenu();
+    return [
+      { label: 'Copy citation [@' + r.citekey + ']', run: () => copyText('[@' + r.citekey + ']') },
+      { label: 'Open reference', run: () => { refJump = { key: r.citekey }; } },
+      { sep: true },
+      { label: 'Delete reference', danger: true, run: () => deleteRefById(id) },
+    ];
+  }
+  function deleteRefById(id) {
+    const r = refs.find((x) => x.id === id); if (!r) return;
+    if (!window.confirm('Delete the reference “' + (r.title || r.citekey) + '”?\n\nCitations to it in your notes will show as unknown until you re-add it.')) return;
+    refs = refs.filter((x) => x.id !== id);
+    queueMicrotask(refsToVault);   // flush references.json now so it can't resurrect on next launch
   }
   function folderMenu(path) {
     return [
@@ -1077,7 +1117,12 @@
               <option value="">No folder</option>
               {#each allFolders as f}<option value={f}>{f}</option>{/each}
             </select>
-            {#if (current.tags || []).length}<span class="ctags"> · #{current.tags.join('  #')}</span>{/if}
+            <span class="ctags">
+              {#each (current.tags || []) as tg}<span class="ctag" data-tag={tg}>#{tg}<button class="ctagx" title="Remove tag" aria-label={'Remove tag ' + tg} onclick={() => removeNoteTag(tg)}>×</button></span>{/each}
+              <input class="ctaginput" placeholder="+ tag" bind:value={tagInput}
+                onkeydown={(e) => { if (e.key === 'Enter' || e.key === ',') { e.preventDefault(); addNoteTag(tagInput); tagInput = ''; } else if (e.key === 'Backspace' && !tagInput && (current.tags || []).length) removeNoteTag(current.tags[current.tags.length - 1]); }}
+                onblur={() => { if (tagInput.trim()) { addNoteTag(tagInput); tagInput = ''; } }} />
+            </span>
             <span class="saved">{saved ? 'saved' : ''}</span>
           </div>
           <div class="titlebar">
@@ -1097,7 +1142,7 @@
           {#if mode === 'write'}
             {#key currentId}<div class="editor"><Editor bind:this={editorRef} value={current.body} onchange={editBody} resemble={resembleParagraph} oncite={openCitePicker} /></div>{/key}
           {:else}
-            <div class="read" onclick={readClick}>{@html readHTML}</div>
+            <div class="read" onclick={readClick}>{@html readHTML}{@html bibHTML}</div>
           {/if}
         {:else}
           <p class="empty">No note selected. Create one with “＋ New”.</p>
@@ -1279,6 +1324,16 @@
       <div class="setrow"><span class="sk">Model <span class="sh">English is smaller and faster; Multilingual understands 50+ languages, including Turkish</span></span>
         <div class="seg"><button class:on={mlModel === 'en'} onclick={() => setModel('en')}>English</button><button class:on={mlModel === 'multi'} onclick={() => setModel('multi')}>Multilingual</button></div>
       </div>
+
+      <div class="setlabel">Citations</div>
+      <div class="setrow"><span class="sk">Reference list <span class="sh">Append a formatted bibliography of the works a note cites with [@key] — shown at the end of the note and included in exports</span></span>
+        <input type="checkbox" bind:checked={bibEnabled} aria-label="Append a reference list to notes" />
+      </div>
+      {#if bibEnabled}
+        <div class="setrow"><span class="sk">Citation style</span>
+          <select class="expsel" bind:value={bibStyle}>{#each CITE_STYLES as s}<option>{s}</option>{/each}</select>
+        </div>
+      {/if}
 
       <div class="setlabel">Your data</div>
       <div class="setrow"><span class="sk">Vault <span class="sh">{vaultBackend ? 'Markdown files in' + ' “' + vaultBackend.name + '” — ' + 'plain files on your disk, yours to keep' : 'No folder connected'}</span></span>

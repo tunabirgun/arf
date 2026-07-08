@@ -63,7 +63,11 @@
             if (u.docChanged && onchange && !u.transactions.some((tr) => tr.annotation(syncAnno))) onchange(u.state.doc.toString());
             if (resemble && (u.docChanged || u.selectionSet)) { clearTimeout(hintTimer); hintTimer = setTimeout(checkResemble, 500); }
           }),
-          EditorView.domEventHandlers({ scroll() { if (hint) hint = null; return false; } }), // don't let the mark drift from its paragraph
+          EditorView.domEventHandlers({
+            scroll() { if (hint) hint = null; return false; }, // don't let the mark drift from its paragraph
+            paste(e) { const fs = e.clipboardData && e.clipboardData.files; if (fs) for (const f of fs) if (/^image\//.test(f.type)) { insertImage(f); e.preventDefault(); return true; } return false; },
+            drop(e) { const fs = e.dataTransfer && e.dataTransfer.files; if (fs && fs.length) { let hit = false; for (const f of fs) if (/^image\//.test(f.type)) { insertImage(f); hit = true; } if (hit) { e.preventDefault(); return true; } } return false; },
+          }),
         ],
       }),
     });
@@ -88,6 +92,20 @@
       hintTop = Math.max(2, coords.top - host.top);
       hint = m;
     } else hint = null;
+  }
+  // paste/drop an image → embed it inline as a data URI so the .md stays self-contained and portable
+  function insertImage(file) {
+    if (!file || !/^image\//.test(file.type) || !view) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (!view) return;
+      const alt = (file.name || 'image').replace(/\.[a-z0-9]+$/i, '').replace(/[[\]()]/g, '');
+      const md = '![' + alt + '](' + reader.result + ')';
+      const s = view.state.selection.main;
+      view.dispatch({ changes: { from: s.from, to: s.to, insert: md }, selection: { anchor: s.from + md.length } });
+      view.focus();
+    };
+    reader.readAsDataURL(file);
   }
   function placeLink() {
     if (!view || !hint || !hint.title || hint.title.includes(']')) { hint = null; return; } // unlinkable title

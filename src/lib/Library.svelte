@@ -1,4 +1,6 @@
 <script>
+  import { shortAuth, joinRefs } from './cite.js';
+  import { folderList, canonFolder } from './folders.js';
   let { notes, idx, onopen, refs = $bindable([]), jumpTo = null, onjumped = null, onrefsdelete = null } = $props();
 
   const TYPELABEL = { 'article-journal': 'Article', 'article-magazine': 'Magazine', book: 'Book', preprint: 'Preprint', dataset: 'Dataset', webpage: 'Web' };
@@ -8,6 +10,7 @@
   ];
 
   let filter = $state('all');
+  let folderFilter = $state(null);   // null = all folders; '' = unfiled; else a folder path (matches it + subfolders)
   let selId = $state(refs[0]?.id ?? null);
   // jump to a reference when a [@citekey] citation is clicked — one-shot, so a later refs change
   // (e.g. deleting or adding a ref) doesn't keep snapping the selection back to the cited one
@@ -43,19 +46,20 @@
     '10.1103/physrevd.23.347': { type: 'article-journal', citekey: 'guth1981', title: 'Inflationary universe: A possible solution to the horizon and flatness problems', authors: [{ f: 'Guth', g: 'Alan H.' }], year: 1981, container: 'Physical Review D', volume: '23', pages: '347–356', doi: '10.1103/PhysRevD.23.347', sources: ['Crossref', 'OpenAlex'] },
   };
 
-  const filtered = $derived(refs.filter((r) => filter === 'all' || r.type === filter));
+  const refFolders = $derived(folderList([], refs));   // folder paths implied by the refs' folder fields
+  const hasUnfiled = $derived(refs.some((r) => !canonFolder(r.folder)));
+  const inFolder = (r) => { if (folderFilter == null) return true; const f = canonFolder(r.folder); return folderFilter === '' ? !f : (f === folderFilter || f.startsWith(folderFilter + '/')); };
+  const filtered = $derived(refs.filter((r) => (filter === 'all' || r.type === filter) && inFolder(r)));
   const sel = $derived(refs.find((r) => r.id === selId) ?? null);
+  // assign the selected reference to a folder (creates the folder by naming it; '' = unfiled)
+  function assignFolder(id, v) {
+    const path = canonFolder(v);
+    refs = refs.map((r) => r.id === id ? { ...r, folder: path } : r);
+  }
+  function folderCount(p) { return refs.filter((r) => { const f = canonFolder(r.folder); return f === p || f.startsWith(p + '/'); }).length; }
   const exportRefs = $derived(exportScope === 'all' ? refs : refs.filter((r) => r.id === exportScope));
-  const exportText = $derived.by(() => {
-    const list = exportRefs;
-    const j = (expFmt === 'CSL-JSON' || expFmt === 'Zenodo') ? ',\n' : '\n\n';
-    let t = list.map((r) => exportOne(r, expFmt)).join(j);
-    if (expFmt === 'CSL-JSON' || expFmt === 'Zenodo') t = '[\n' + t + '\n]';
-    return t;
-  });
+  const exportText = $derived(joinRefs(exportRefs, expFmt));
 
-  function shortAuth(a) { if (!Array.isArray(a) || !a.length) return ''; return a.length === 1 ? a[0].f : a.length === 2 ? a[0].f + ' & ' + a[1].f : a[0].f + ' et al.'; }
-  function initials(g) { return g ? g.split(/\s+/).filter(Boolean).map((x) => x[0] + '.').join(' ') : ''; }
   function count(k) { return k === 'all' ? refs.length : refs.filter((r) => r.type === k).length; }
 
   function mkCitekey(authors, year) {
@@ -139,19 +143,6 @@
     adding = false; addResult = undefined; addInput = ''; addError = '';
   }
 
-  // export generators
-  function bibType(t) { return t === 'book' ? 'book' : t === 'preprint' ? 'misc' : (t === 'webpage' || t === 'article-magazine') ? 'online' : 'article'; }
-  function escBib(s) { return String(s == null ? '' : s).replace(/([%&#_${}])/g, '\\$1').replace(/\^/g, '\\^{}').replace(/~/g, '\\~{}'); }
-  function toBibTeX(r) { const f = []; if (r.authors && r.authors.length) f.push('  author = {' + r.authors.map((a) => escBib(a.f) + ', ' + escBib(a.g)).join(' and ') + '}'); f.push('  title = {' + escBib(r.title) + '}'); f.push('  year = {' + r.year + '}'); if (r.container) f.push('  ' + (r.type === 'book' ? 'publisher' : 'journal') + ' = {' + escBib(r.container) + '}'); if (r.publisher && !r.container) f.push('  publisher = {' + escBib(r.publisher) + '}'); if (r.volume) f.push('  volume = {' + r.volume + '}'); if (r.pages) f.push('  pages = {' + String(r.pages).replace(/[–—-]+/g, '--') + '}'); if (r.doi) f.push('  doi = {' + escBib(r.doi) + '}'); if (r.isbn) f.push('  isbn = {' + escBib(r.isbn) + '}'); if (r.url) f.push('  url = {' + escBib(r.archived || r.url) + '}'); return '@' + bibType(r.type) + '{' + r.citekey + ',\n' + f.join(',\n') + '\n}'; }
-  function risType(t) { return t === 'book' ? 'BOOK' : t === 'webpage' ? 'ELEC' : t === 'article-magazine' ? 'MGZN' : t === 'preprint' ? 'GEN' : 'JOUR'; }
-  function toRIS(r) { const L = ['TY  - ' + risType(r.type)]; (r.authors || []).forEach((a) => L.push('AU  - ' + a.f + ', ' + a.g)); L.push('TI  - ' + r.title); L.push('PY  - ' + r.year); if (r.container) L.push((r.type === 'book' ? 'PB  - ' : 'JO  - ') + r.container); if (r.publisher && r.type === 'book') L.push('PB  - ' + r.publisher); if (r.volume) L.push('VL  - ' + r.volume); if (r.pages) { const p = r.pages.split(/[–-]/); L.push('SP  - ' + p[0]); if (p[1]) L.push('EP  - ' + p[1]); } if (r.doi) L.push('DO  - ' + r.doi); if (r.isbn) L.push('SN  - ' + r.isbn); if (r.url) L.push('UR  - ' + (r.archived || r.url)); if (r.accessed) L.push('Y2  - ' + r.accessed); L.push('ER  - '); return L.join('\n'); }
-  function toCSL(r) { const o = { id: r.citekey, type: r.type, title: r.title, author: (r.authors || []).map((a) => ({ family: a.f, given: a.g })) }; if (r.year) o.issued = { 'date-parts': [[r.year]] }; if (r.container) o['container-title'] = r.container; if (r.publisher) o.publisher = r.publisher; if (r.volume) o.volume = r.volume; if (r.pages) o.page = r.pages; if (r.doi) o.DOI = r.doi; if (r.isbn) o.ISBN = r.isbn; if (r.url) o.URL = r.archived || r.url; return '  ' + JSON.stringify(o); }
-  function apaAuth(as) { if (!as || !as.length) return ''; const s = as.map((a) => a.f + ', ' + initials(a.g)); return s.length > 1 ? s.slice(0, -1).join(', ') + ', & ' + s[s.length - 1] : s[0]; }
-  function toAPA(r) { const au = apaAuth(r.authors); let s = (au ? au + ' ' : '') + '(' + r.year + '). ' + r.title + '.'; if (r.container) s += ' ' + r.container + (r.volume ? ', ' + r.volume : '') + (r.pages ? ', ' + r.pages : '') + '.'; else if (r.publisher) s += ' ' + r.publisher + '.'; if (r.doi) s += ' https://doi.org/' + r.doi; else if (r.url) s += ' Retrieved ' + (r.accessed || '') + ', from ' + (r.archived || r.url); return s; }
-  function toNature(r) { const a = (r.authors || []).map((x) => x.f + ', ' + initials(x.g)).join(', '); let s = (a ? a + ' ' : '') + r.title + '.'; if (r.container) s += ' ' + r.container + (r.volume ? ' ' + r.volume : '') + (r.pages ? ', ' + r.pages : '') + ' (' + r.year + ').'; else s += ' (' + (r.publisher || '') + ', ' + r.year + ').'; return s; }
-  function zenType(t) { return t === 'book' ? 'book' : t === 'preprint' ? 'preprint' : (t === 'webpage' || t === 'article-magazine') ? 'other' : 'article'; }
-  function toZenodo(r) { const m = { upload_type: 'publication', publication_type: zenType(r.type), title: r.title, creators: (r.authors || []).map((a) => ({ name: a.f + ', ' + a.g })), description: r.abstract || r.title }; if (r.year) m.publication_date = r.year + '-01-01'; if (r.doi) m.doi = r.doi; if (r.container && r.type !== 'book') m.journal_title = r.container; if (r.publisher || r.type === 'book') m.imprint_publisher = r.publisher || r.container; return '  ' + JSON.stringify(m); }
-  function exportOne(r, f) { return ({ 'BibTeX': toBibTeX, 'RIS (EndNote)': toRIS, 'CSL-JSON': toCSL, 'APA': toAPA, 'Nature': toNature, 'Zenodo': toZenodo }[f] || (() => ''))(r); }
   function copy() { try { navigator.clipboard.writeText(exportText); } catch (e) {} }
 </script>
 
@@ -163,16 +154,24 @@
         <button class="libfilter" class:on={filter === f.k} onclick={() => (filter = f.k)}><span>{f.l}</span><span class="ct">{count(f.k)}</span></button>
       {/if}
     {/each}
-    <button class="libbtn pri" onclick={() => { adding = true; addResult = undefined; addInput = ''; addError = ''; addBusy = false; fetchToken++; }}>＋ Add reference</button>
+    {#if refFolders.length || hasUnfiled}
+      <div class="libhead" style="margin-top:.9rem">Folders</div>
+      <button class="libfilter" class:on={folderFilter === null} onclick={() => (folderFilter = null)}><span>All folders</span></button>
+      {#each refFolders as fp}
+        <button class="libfilter" class:on={folderFilter === fp} onclick={() => (folderFilter = fp)}><span>{fp}</span><span class="ct">{folderCount(fp)}</span></button>
+      {/each}
+      {#if hasUnfiled}<button class="libfilter" class:on={folderFilter === ''} onclick={() => (folderFilter = '')}><span>Unfiled</span></button>{/if}
+    {/if}
+    <button class="libbtn pri" style="margin-top:.9rem" onclick={() => { adding = true; addResult = undefined; addInput = ''; addError = ''; addBusy = false; fetchToken++; }}>＋ Add reference</button>
     <button class="libbtn" onclick={() => { exportScope = 'all'; }}>⇩ Export library</button>
   </div>
 
   <div class="libcol refs">
     {#each filtered as r (r.id)}
-      <button class="refrow" class:on={r.id === selId} onclick={() => (selId = r.id)}>
+      <button class="refrow" class:on={r.id === selId} data-ref={r.id} onclick={() => (selId = r.id)}>
         <div class="rtitle"><span class="rtype">{TYPELABEL[r.type] || r.type}</span>{r.title}</div>
         <div class="rmeta">{shortAuth(r.authors)} · {r.year}{r.container ? ' · ' + r.container : r.publisher ? ' · ' + r.publisher : ''}</div>
-        <div class="rsrc">{#each r.sources as s}<span class="sb">{s}</span>{/each}</div>
+        <div class="rsrc">{#each r.sources || [] as s}<span class="sb">{s}</span>{/each}</div>
       </button>
     {/each}
   </div>
@@ -197,6 +196,10 @@
       <div class="dfield"><div class="dl">Title</div><div class="dv" style="font-size:18px;color:var(--fg-bright)">{sel.title}</div></div>
       <div class="dfield"><div class="dl">Authors</div><div class="dv">{(sel.authors || []).map((a) => a.g + ' ' + a.f).join(', ')}</div></div>
       <div class="dfield"><div class="dl">Type · Year</div><div class="dv">{TYPELABEL[sel.type] || sel.type} · {sel.year}</div></div>
+      <div class="dfield"><div class="dl">Folder</div><div class="dv">
+        <input class="expsel" style="width:100%" list="reffolders" placeholder="Unfiled — type a name, e.g. Physics/Quantum" value={sel.folder || ''} onchange={(e) => assignFolder(sel.id, e.currentTarget.value)} />
+        <datalist id="reffolders">{#each refFolders as fp}<option value={fp}></option>{/each}</datalist>
+      </div></div>
       {#if sel.container}<div class="dfield"><div class="dl">{sel.type === 'webpage' || sel.type === 'article-magazine' ? 'Site' : 'Published in'}</div><div class="dv">{sel.container}{sel.volume ? ' ' + sel.volume : ''}{sel.pages ? ', ' + sel.pages : ''}</div></div>{/if}
       {#if sel.publisher}<div class="dfield"><div class="dl">Publisher</div><div class="dv">{sel.publisher}</div></div>{/if}
       {#if sel.doi}<div class="dfield"><div class="dl">DOI</div><div class="dv"><a href={'https://doi.org/' + sel.doi} target="_blank" rel="noopener">{sel.doi}</a></div></div>{/if}
