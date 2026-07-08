@@ -12,6 +12,7 @@
 
 <p align="center">
   <a href="https://github.com/tunabirgun/arf/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/tunabirgun/arf?label=release&color=2c4a6e"></a>
+  <a href="https://github.com/tunabirgun/arf/actions/workflows/test.yml"><img alt="Tests" src="https://img.shields.io/github/actions/workflow/status/tunabirgun/arf/test.yml?branch=master&label=tests&color=2c4a6e"></a>
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-2c4a6e.svg"></a>
   <img alt="Desktop: Windows, macOS, Linux" src="https://img.shields.io/badge/desktop-Windows%20%C2%B7%20macOS%20%C2%B7%20Linux-555">
   <a href="https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2"><img alt="AI assist: MiniLM, on-device" src="https://img.shields.io/badge/AI%20assist-MiniLM%20(on--device)-555"></a>
@@ -67,6 +68,18 @@ Arf is free and MIT-licensed, and its privacy is not a promise — it is somethi
 
 The model runs on your device — through the GPU where there is one, the CPU otherwise. Your notes are never uploaded, there is no account, and there is no server that could read them. Only the public model file (~23 MB, or ~120 MB for the multilingual option) is fetched once and cached. Privacy here is not a policy you have to trust; it is the architecture.
 
+## Data safety
+
+Your notes are the thing you cannot afford to lose, so every operation that touches a file is written to be safe rather than fast.
+
+- **Rename or move a note.** Arf writes the new file first and removes the old one only after the write succeeds, so a note can never end up on neither path. If the write fails — a sync client holds the file, a reserved name, a path too long — the note stays where it was and Arf retries on the next sync tick. Each note is identified by a stable id in its frontmatter, not by its filename, so renaming or moving the `.md` file yourself never loses the note.
+- **Move a folder.** Moving a folder rewrites the paths of its notes and subfolders in one step. A circular move (into its own descendant) and a move onto a name another subtree already owns are both refused, so two folders can never be silently merged into one.
+- **Sync conflict.** When the vault folder is kept in Dropbox, iCloud, OneDrive, Syncthing, or Git, Arf reconciles by keeping the newer copy of each note. If the note you are editing also changed on another device, the remote version is kept beside yours as a `(conflict copy)` rather than overwritten — you choose which to keep. A note deleted on another device is tombstoned so it is not resurrected, and a delete that could not complete is retried.
+- **Back up.** Export the whole workspace — every note, folder, and reference — as one portable `.arf` file. Import merges by id and never overwrites a note you already have; imported notes are written into your current vault, not tied back to the file they came from.
+- **Export a note.** Exporting to Markdown, HTML, or PDF writes a separate file and never touches the note in your vault. If the save is cancelled or the target is not writable, Arf tells you and leaves everything as it was.
+
+If the local cache ever becomes unreadable, Arf backs it up under a separate key instead of overwriting it, then rebuilds from the files on disk. The full account is on the [Your data](https://tunabirgun.github.io/arf/data.html) page.
+
 ## Build from source
 
 Arf is a [Tauri 2](https://tauri.app) desktop app. You need [Node.js](https://nodejs.org) 18+, the [Rust toolchain](https://rustup.rs), and, on Windows, the MSVC C++ build tools.
@@ -75,9 +88,16 @@ Arf is a [Tauri 2](https://tauri.app) desktop app. You need [Node.js](https://no
 npm install
 npm run tauri dev      # run the desktop app against the Vite dev server
 npm run tauri build    # installers → src-tauri/target/release/bundle/
+
+npm test               # unit tests (Vitest)
+npm run test:e2e       # end-to-end smoke test (Playwright)
 ```
 
-Pushing a `v*` tag builds Windows, macOS, and Linux installers automatically and attaches them to a GitHub Release.
+Pushing a `v*` tag builds Windows, macOS, and Linux installers automatically and attaches them to a GitHub Release, with notes taken from [`CHANGELOG.md`](CHANGELOG.md). Every push and pull request runs the build and the test suite in CI.
+
+## Contributing
+
+Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for the development setup and how to run the tests, [SECURITY.md](SECURITY.md) to report a vulnerability, and [ROADMAP.md](ROADMAP.md) for where Arf is going. Release history is in [CHANGELOG.md](CHANGELOG.md).
 
 ## Built with
 

@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Documentation
+    url: https://tunabirgun.github.io/arf/
+    about: How Arf works — writing, links, the on-device machine, the Library, and your data.
+  - name: Security report
+    url: https://github.com/tunabirgun/arf/security/advisories/new
+    about: Report a security issue privately (see SECURITY.md). Do not file it as a public issue.

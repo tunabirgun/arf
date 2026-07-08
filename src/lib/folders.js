@@ -58,3 +58,27 @@ export function buildFolderRows(folders, notes, collapsed) {
   (notesOf[''] || []).forEach((n) => rows.push({ type: 'note', note: n, depth: 0 }));
   return rows;
 }
+
+// Plan a folder move/nest under destParent ('' = vault root) without touching component
+// state, so the decision (and its refusals) can be unit tested. Returns {ok:false, reason}
+// for an invalid/circular/no-op/collision move, or {ok:true, ...} with the reparented
+// folder list, the per-note moves to apply, and the reparent fn (for activeFolder rewrite).
+export function planFolderMove(src, destParent, folders, notes) {
+  src = canonFolder(src); destParent = canonFolder(destParent);
+  if (!src) return { ok: false, reason: 'invalid' };
+  if (destParent === src || destParent.startsWith(src + '/')) return { ok: false, reason: 'circular' }; // into itself or a descendant
+  const leaf = src.slice(src.lastIndexOf('/') + 1);
+  const newPath = destParent ? destParent + '/' + leaf : leaf;
+  if (newPath === src) return { ok: false, reason: 'noop' };
+  // refuse to merge into an unrelated folder that already owns this leaf name — a silent
+  // Set-dedup merge would fuse two subtrees and reassign every note under them, unrecoverably
+  if (folders.some((p) => (p === newPath || p.startsWith(newPath + '/')) && !(p === src || p.startsWith(src + '/'))) ||
+      notes.some((n) => { const f = canonFolder(n.folder); return (f === newPath || f.startsWith(newPath + '/')) && !(f === src || f.startsWith(src + '/')); })) {
+    return { ok: false, reason: 'collision', leaf };
+  }
+  const reparent = (p) => p === src ? newPath : (p.startsWith(src + '/') ? newPath + p.slice(src.length) : p);
+  const newFolders = [...new Set(folders.map(reparent))];
+  const noteMoves = [];
+  for (const n of notes) { const f = canonFolder(n.folder); if (f === src || f.startsWith(src + '/')) noteMoves.push({ id: n.id, to: reparent(f) }); }
+  return { ok: true, src, newPath, leaf, reparent, newFolders, noteMoves };
+}

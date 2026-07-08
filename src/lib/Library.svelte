@@ -199,7 +199,7 @@
   <div class="libcol detail">
     {#if adding}
       <div class="libhead">Add reference</div>
-      <p class="rmeta">Paste a DOI, ISBN, arXiv ID, or URL — Arf fetches from open libraries.</p>
+      <p class="rmeta">Paste a DOI, ISBN, or arXiv ID (a DOI or arXiv link works too) — Arf fetches from open libraries.</p>
       <input class="expsel" style="width:100%;margin:.4rem 0" placeholder="10.1103/… · 9780262035613 · arXiv:1706.03762" bind:value={addInput} />
       <button class="libbtn pri" onclick={doFetch} disabled={addBusy}>{addBusy ? 'Looking up…' : 'Fetch from open libraries'}</button>
       <p class="rmeta" style="margin-top:.4rem;opacity:.7">Queries Crossref (DOI · arXiv) and Open Library (ISBN).</p>

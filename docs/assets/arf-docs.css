@@ -128,3 +128,16 @@ footer.site a{color:var(--fg-muted);}
 .cardnav a:hover{background:var(--accent-soft);}
 .cardnav a .t{display:block; font-size:19px; color:var(--fg-bright); font-weight:600; margin-bottom:.25rem;}
 .cardnav a .d{font-size:15px; color:var(--fg-muted);}
+
+/* narrow screens: keep the wordmark and theme toggle on one row and let the nav sit on its own
+   line as a single scrollable strip, instead of eight links wrapping into a crowded block */
+@media(max-width:760px){
+  .topbar{flex-wrap:wrap; gap:.5rem .9rem; padding:.6rem clamp(1rem,5vw,2.5rem);}
+  .topbar .wm{order:1; font-size:20px;}
+  .topbar .toggle{order:2; margin-left:auto;}
+  .topbar .sp{display:none;}
+  .topbar nav{order:3; flex-basis:100%; margin-left:0; gap:1.1rem; flex-wrap:nowrap;
+    overflow-x:auto; -webkit-overflow-scrolling:touch; padding-bottom:.1rem; scrollbar-width:none;}
+  .topbar nav::-webkit-scrollbar{display:none;}
+  .topbar nav a{white-space:nowrap;}
+}

@@ -48,6 +48,32 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      # Build the release body from the CHANGELOG section for this tag, so the notes always
+      # match the version instead of a hardcoded block that goes stale every release.
+      - name: Release notes from CHANGELOG
+        id: notes
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          {
+            echo 'body<<CHANGELOG_EOF'
+            awk -v hdr="## [$VERSION]" '
+              index($0, hdr)==1 {flag=1; next}
+              flag && substr($0,1,4)=="## [" {exit}
+              flag {print}
+            ' CHANGELOG.md
+            echo ''
+            echo '---'
+            echo ''
+            echo '**Installing** — these builds are unsigned (no paid certificate yet):'
+            echo '- **Windows** — SmartScreen may warn: *More info → Run anyway*.'
+            echo '- **macOS** — right-click the app → *Open* the first time (Gatekeeper).'
+            echo '- **Linux** — the `.AppImage` is portable: `chmod +x` and run.'
+            echo ''
+            echo 'Free and open source. Read the source, not the privacy policy.'
+            echo 'CHANGELOG_EOF'
+          } >> "$GITHUB_OUTPUT"
+
       - name: Build & release (Tauri)
         uses: tauri-apps/tauri-action@v0
         env:
@@ -55,20 +81,7 @@ jobs:
         with:
           tagName: ${{ github.ref_name }}
           releaseName: 'Arf ${{ github.ref_name }}'
-          releaseBody: |
-            **Arf 1.3** — organize by dragging.
-
-            **New**
-            - **Drag & drop in the sidebar.** Drag a note onto a folder to file it there; drag a folder onto another to **nest** it — its notes and subfolders come along; and drop onto **Vault** to move something back to the top level. A circular move (a folder into its own descendant) is refused, and moving a folder renames every path underneath it in one step.
-
-            Everything is still local-first — plain Markdown on your disk, and every move is written straight to the files.
-
-            **Installing** — these builds are unsigned (no paid certificate yet):
-            - **Windows** — SmartScreen may warn: *More info → Run anyway*.
-            - **macOS** — right-click the app → *Open* the first time (Gatekeeper).
-            - **Linux** — the `.AppImage` is portable: `chmod +x` and run.
-
-            Free and open source. Read the source, not the privacy policy.
+          releaseBody: ${{ steps.notes.outputs.body }}
           releaseDraft: false
           prerelease: false
           args: ${{ matrix.args }}

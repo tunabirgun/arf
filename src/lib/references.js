@@ -3,9 +3,16 @@
 // starts with an empty library — the user builds it from real DOIs/ISBNs.
 const KEY = 'arf-refs-v0';
 
-// tolerate a hand-edited or imported ref that lost its authors array / isn't an object,
-// so a click-through to its detail pane can't crash the Library
-function normRef(r) { return { ...r, authors: Array.isArray(r.authors) ? r.authors : [] }; }
+// tolerate a hand-edited or imported ref that lost its authors array / isn't an object, so a
+// click-through to its detail pane — or a note that cites it, which formats authors inside a
+// $derived — can't crash. Drop non-object author entries and default their name parts, so every
+// downstream a.f / a.g access is safe.
+function normRef(r) {
+  const authors = (Array.isArray(r.authors) ? r.authors : [])
+    .filter((a) => a && typeof a === 'object')
+    .map((a) => ({ ...a, f: a.f || '', g: a.g || '' }));
+  return { ...r, authors };
+}
 export function loadRefs() {
   try { const raw = localStorage.getItem(KEY); if (raw) { const p = JSON.parse(raw); if (Array.isArray(p)) return p.filter((r) => r && typeof r === 'object').map(normRef); } } catch (e) {}
   return [];

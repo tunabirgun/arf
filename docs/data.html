@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Your data — Arf</title>
-<meta name="description" content="The plain-file vault, the .arf bundle, continuous folder sync across devices, and document export to Markdown, HTML, DOCX, and PDF.">
+<meta name="description" content="The plain-file vault, the .arf bundle, continuous folder sync across devices, document export to Markdown, HTML, and PDF, and exactly what happens to your notes on rename, move, sync conflict, backup, and export.">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%23faf9f7'/%3E%3Ctext x='50' y='73' text-anchor='middle' font-family='Georgia,serif' font-size='74' font-weight='700' fill='%230a0a0a'%3EA%3C/text%3E%3Ccircle cx='79' cy='67' r='8' fill='%232c4a6e'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="assets/arf-docs.css">
 <script>(function(){try{var t=localStorage.getItem("arf-docs-theme");if(!t&&window.matchMedia&&matchMedia("(prefers-color-scheme: dark)").matches)t="dark";if(t)document.documentElement.setAttribute("data-theme",t);}catch(e){}})();</script>
@@ -33,11 +33,27 @@
   <h2>Sync across your devices</h2>
   <p>Because your vault is an ordinary folder of Markdown files, syncing it needs no account with Arf and no server of ours. Keep the vault folder you chose at first launch in a place your devices already sync — Dropbox, iCloud Drive, OneDrive, Google Drive, or Syncthing. Point Arf at the same folder on each machine and you are done.</p>
   <blockquote>Choose the folder once. Arf keeps it in step — both ways, automatically, while you work.<cite>The sync flow, in one sentence</cite></blockquote>
-  <p>Arf watches the folder continuously. An edit you make on your laptop appears on the desktop within seconds; a note you delete on one device is removed on the others. There is no button to press and no command line — the cloud service you already use moves the files, and Arf reconciles them by keeping the newer version of each note. The header at the top of the sidebar tells you plainly what it is doing: <span class="mono">Synced · your-folder</span>. Power users who prefer real version history can put that same folder in a git repository and commit underneath.</p>
+  <p>Arf watches the folder continuously. An edit you make on your laptop appears on the desktop within seconds; a note you delete on one device is removed on the others. There is no button to press and no command line — the cloud service you already use moves the files, and Arf reconciles them by keeping the newer version of each note. The header at the top of the sidebar shows the vault's folder name with a small live sync indicator beside it. Power users who prefer real version history can put that same folder in a git repository and commit underneath.</p>
   <div class="note"><span class="nlabel">A word on durability</span><p>Arf writes real files to your disk; nothing is kept in a private app database. The <code>.arf</code> bundle export is always available as a dated backup of the whole vault.</p></div>
 
+  <h2>What happens to your notes</h2>
+  <p>Notes are the thing you cannot afford to lose, so every operation that touches a file is written to be safe rather than fast. Concretely:</p>
+  <div class="tbl">
+  <table>
+    <thead><tr><th>When you…</th><th>What Arf does</th></tr></thead>
+    <tbody>
+      <tr><td>Rename or move a note</td><td>Writes the new file first and removes the old one only after the write succeeds — a note can never end up on neither path. A failed write (locked file, reserved name, path too long) leaves the note where it was and retries on the next sync tick. Notes are identified by a stable id in their header, not by filename, so renaming or moving the <code>.md</code> file yourself never loses it.</td></tr>
+      <tr><td>Move a folder</td><td>Rewrites the paths of its notes and subfolders in one step. A circular move into its own descendant, and a move onto a name another subtree already owns, are both refused — two folders are never silently merged.</td></tr>
+      <tr><td>Hit a sync conflict</td><td>Keeps the newer copy of each note. If the note open in the editor also changed on another device, the remote version is kept beside yours as a <span class="mono">(conflict copy)</span> rather than overwritten, so you choose which to keep. A note deleted elsewhere is tombstoned so it is not resurrected; a delete that could not complete is retried.</td></tr>
+      <tr><td>Back up or import</td><td>Exports every note, folder, and reference to one <code>.arf</code> file. Import merges by id and never overwrites a note you already have; imported notes are written into your current vault, not tied back to the file they came from.</td></tr>
+      <tr><td>Export a note</td><td>Writes a separate file and never touches the note in your vault. If the save is cancelled or the target is not writable, Arf tells you and leaves everything as it was.</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p>If the fast local cache ever becomes unreadable, Arf backs it up under a separate key instead of overwriting it, then rebuilds from the files on your disk.</p>
+
   <h2>Export your writing</h2>
-  <p>Notes leave as easily as they arrive. Any note exports to Markdown, HTML, DOCX, or PDF, and the document export is built to avoid the things that make an exported file look broken:</p>
+  <p>Notes leave as easily as they arrive. Any note exports to Markdown, HTML, or PDF, and the document export is built to avoid the things that make an exported file look broken:</p>
   <ul>
     <li><strong>No orphaned headings</strong> — a heading is kept with the paragraph that follows it, so none is ever stranded alone at the bottom of a page.</li>
     <li><strong>No out-scaling</strong> — images and code blocks are fit to the text width instead of spilling past the margin.</li>

@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Writing &amp; reading — Arf</title>
-<meta name="description" content="How you write in Arf: a plain rich-text editor for everyone, raw Markdown for those who want it, focus mode, code blocks, and LaTeX equations.">
+<meta name="description" content="How you write in Arf: a Markdown editor with an always-visible formatting toolbar that inserts real Markdown, a live reading view, focus mode, code blocks, and LaTeX equations.">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%23faf9f7'/%3E%3Ctext x='50' y='73' text-anchor='middle' font-family='Georgia,serif' font-size='74' font-weight='700' fill='%230a0a0a'%3EA%3C/text%3E%3Ccircle cx='79' cy='67' r='8' fill='%232c4a6e'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="assets/arf-docs.css">
 <script>(function(){try{var t=localStorage.getItem("arf-docs-theme");if(!t&&window.matchMedia&&matchMedia("(prefers-color-scheme: dark)").matches)t="dark";if(t)document.documentElement.setAttribute("data-theme",t);}catch(e){}})();</script>
@@ -31,19 +31,19 @@
   <h1>Writing &amp; reading</h1>
   <p class="lede">The note is the whole product. Everything else stays out of the way until you look for it.</p>
 
-  <p>A note in Arf is a page of text. It reads like paper — set in EB Garamond, in a column narrow enough to be comfortable, with your quotes, code, and equations in place. You can write in two ways, and you choose which without any penalty, because both save to the same plain Markdown file underneath.</p>
+  <p>A note in Arf is a page of text. It reads like paper — set in EB Garamond, in a column narrow enough to be comfortable, with your quotes, code, and equations in place. Each note has two views: <strong>Write</strong>, where you edit, and <strong>Read</strong>, where the same text renders with typeset math, resolved links, and ticked task boxes. Both are the one plain Markdown file underneath.</p>
 
-  <h2>Two ways to write, one file underneath</h2>
-  <p>Markdown is fast and precise once you know it, and it keeps your notes portable. But asking a working scientist to learn <code>**bold**</code> and <code>##&nbsp;heading</code> before they can take a note is a real barrier. So Arf offers both:</p>
+  <h2>Markdown, without having to memorise it</h2>
+  <p>Markdown is fast and precise once you know it, and it keeps your notes portable. But asking a working scientist to learn <code>**bold**</code> and <code>##&nbsp;heading</code> before they can take a note is a real barrier. So the write view is a Markdown editor with a formatting toolbar sitting above it: select some text and click <strong>B</strong>, or a heading, a list, a quote — the button inserts the real Markdown for you, and the syntax is there to see and edit. Lists continue when you press <span class="mono">Enter</span> and stop when you press it on an empty item, the way a word processor behaves.</p>
 
   <div class="grid grid2">
-    <div class="cell"><span class="k">Default</span><h3>Rich text</h3><p>A plain, familiar editor. Select text and a small toolbar appears; type <code>/</code> for an insert menu. Bold, headings, lists, tables, links, images — the things you already know from Word or Docs, with nothing to memorise.</p></div>
-    <div class="cell"><span class="k">Optional</span><h3>Markdown</h3><p>Prefer to type the syntax? Switch to raw Markdown and work in source. It is the same note; the toggle changes only how you edit it, never what is stored.</p></div>
+    <div class="cell"><span class="k">Write</span><h3>Toolbar or syntax</h3><p>Headings, bold, italic, strikethrough, inline code, links, bullet / numbered / task lists, quotes, code blocks, and dividers — from the toolbar or typed by hand. <code>Ctrl/⌘+B</code> and <code>Ctrl/⌘+I</code> work too.</p></div>
+    <div class="cell"><span class="k">Read</span><h3>Rendered page</h3><p>Switch to Read and the note renders: headings and emphasis, wikilinks and citations resolved, math typeset, and task boxes you can tick — the change is written straight back to the file.</p></div>
   </div>
 
-  <p>Whichever mode you use, the file on disk stays clean Markdown, so a note written in the rich-text editor opens perfectly in any other Markdown tool, and one written elsewhere opens perfectly here.</p>
+  <p>Because what you edit is Markdown, the file on disk is always clean Markdown: a note written here opens perfectly in any other Markdown tool, and one written elsewhere opens perfectly here.</p>
 
-  <div class="note"><span class="nlabel">Why this matters</span><p>The portability promise only holds if the file is honest Markdown. Formatting that Markdown cannot express is kept in a way that never corrupts the file — so you never open your vault in another editor and find it full of stray markup.</p></div>
+  <div class="note"><span class="nlabel">Why this matters</span><p>The portability promise holds because the file is nothing but Markdown — no proprietary wrapper, no hidden formatting. Open your vault in any other editor and you find exactly the text you wrote.</p></div>
 
   <h2>Tasks, images, and tags</h2>
   <p>Write a checklist with <code>- [ ]</code> and tick the boxes straight from the reading view — the change is written back to the file. Paste or drop an image and it is embedded inline, so the note stays one self-contained file. And every note carries tags you can add or remove above its title, alongside the <code>#tags</code> you write in the body.</p>

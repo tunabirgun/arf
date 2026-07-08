@@ -1,6 +1,8 @@
 <script>
   import { loadNotes, seedNotes, saveNotes, newNote, toMarkdown, loadFolders, saveFolders, corruptBackupKey, ulid } from './lib/vault.js';
-  import { buildFolderRows, folderList, canonFolder } from './lib/folders.js';
+  import { buildFolderRows, folderList, canonFolder, planFolderMove } from './lib/folders.js';
+  import { mergeByUpdated, syncChanged, conflictDecision } from './lib/sync.js';
+  import { buildBundle, readBundle, normalizeNotes, mergeFolders, mergeRefs } from './lib/workspace.js';
   import { buildIndex, buildVectorizer, related, hasLinks, digestPairs, cosine, sharedTerms } from './lib/graphindex.js';
   import { renderMarkdown, setLinkResolver, setCiteResolver } from './lib/markdown.js';
   import katexCss from 'katex/dist/katex.min.css?inline';   // inlined into exports so math positions correctly outside the app
@@ -15,7 +17,7 @@
 
   const IS_MAC = /Mac|iPhone|iPad|iPod/.test((navigator.platform || '') + ' ' + (navigator.userAgent || ''));
   const MOD = IS_MAC ? '⌘' : 'Ctrl';
-  const APP_VERSION = '1.4.1';
+  const APP_VERSION = '1.5.0';
 
   let notes = $state(loadNotes());
   let refs = $state(loadRefs());        // shared reference library (also used by [@citekey] citations)
@@ -295,22 +297,6 @@
       await getCurrentWindow().setTitle(name ? 'Arf — ' + name : 'Arf');
     } catch (e) {}
   }
-  // union by id, keeping the newer copy of each note — never blindly replace the array.
-  // On an equal timestamp with a different body, prefer the incoming copy: local edits always
-  // bump `updated`, so a same-timestamp difference means an external hand-edit we must not miss.
-  function mergeByUpdated(base, incoming) {
-    const m = new Map(); for (const n of base) m.set(n.id, n);
-    for (const n of incoming) {
-      const ex = m.get(n.id);
-      const newer = !ex || (n.updated || '') > (ex.updated || '');
-      // an external hand-edit (body, folder move, title, or tags) that didn't bump `updated` must still win
-      const sameTimeDiffMeta = ex && (n.updated || '') === (ex.updated || '') &&
-        ((n.body || '') !== (ex.body || '') || (n.folder || '') !== (ex.folder || '') ||
-         (n.title || '') !== (ex.title || '') || (n.tags || []).join(',') !== (ex.tags || []).join(','));
-      if (newer || sameTimeDiffMeta) m.set(n.id, n);
-    }
-    return [...m.values()];
-  }
   function adopt(list) { notes = list; if (!list.some((n) => n.id === currentId)) currentId = list[0]?.id ?? null; }
 
   // continuous two-way sync: push local edits out, pull external ones in, honour deletions.
@@ -344,8 +330,8 @@
       if (protectedId) {
         const remote = live.find((n) => n.id === protectedId);
         const localCur = notes.find((n) => n.id === protectedId);
-        const key = remote && protectedId + '@' + (remote.updated || '');
-        if (remote && localCur && (remote.body || '') !== (localCur.body || '') && (remote.updated || '') > (localCur.updated || '') && !_conflicts.has(key)) {
+        const { conflict, key } = conflictDecision(localCur, remote, _conflicts);
+        if (conflict) {
           _conflicts.add(key);
           const cid = 'conflict_' + Date.now().toString(36);
           extra.push({ ...remote, id: cid, title: (remote.title || 'Note') + ' (conflict copy)', _path: undefined });
@@ -362,13 +348,6 @@
       lastSync = Date.now();
     } catch (e) { /* transient (permission prompt, mid-sync file swap) — next tick retries */ } finally { syncing = false; }
   }
-  function syncChanged(a, b) {
-    if (a.length !== b.length) return true;
-    // include body length + a cheap checksum so an external body edit that kept the same `updated` still repaints the UI
-    const bsum = (s) => { let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0; return h; };
-    const sig = (arr) => arr.map((n) => n.id + ':' + (n.updated || '') + ':' + (n.folder || '') + ':' + (n.title || '') + ':' + (n.tags || []).join(',') + ':' + bsum(n.body || '')).sort().join('|');
-    return sig(a) !== sig(b);
-  }
   $effect(() => {
     if (!vaultBackend) return;
     const iv = setInterval(syncFromFolder, 4000);
@@ -383,7 +362,7 @@
   let importMsg = $state('');
   let importMsgTimer;
   async function exportWorkspace() {
-    const data = { arf: 1, app: 'Arf', version: APP_VERSION, exported: new Date().toISOString(), notes, folders, refs };
+    const data = buildBundle(notes, folders, refs, APP_VERSION, new Date().toISOString());
     await saveText('arf-workspace-' + new Date().toISOString().slice(0, 10) + '.arf', 'application/json', JSON.stringify(data, null, 2));
   }
   async function importWorkspace(e) {
@@ -391,25 +370,13 @@
     e.currentTarget.value = '';
     if (!file) return;
     try {
-      const data = JSON.parse(await file.text());
-      if (!data || !Array.isArray(data.notes)) throw new Error('Not an Arf workspace (.arf) file');
-      // Normalize before merging. Critically, drop each imported note's _path: it points at a
-      // file in the *source* vault, and flushing it here would overwrite/delete the unrelated
-      // file that occupies that path in THIS vault. Keep only a same-id note's own local path.
+      const data = readBundle(await file.text());
       const localPath = new Map(notes.map((n) => [n.id, n._path]));
-      const incoming = data.notes.filter((n) => n && typeof n === 'object').map((n) => ({
-        ...n,
-        id: (typeof n.id === 'string' && n.id.trim()) ? n.id : ulid(),   // backfill before the merge, or id-less notes collapse to one
-        title: typeof n.title === 'string' ? n.title : 'Untitled',
-        tags: Array.isArray(n.tags) ? n.tags.filter((t) => typeof t === 'string') : [],
-        body: typeof n.body === 'string' ? n.body : '',
-        folder: typeof n.folder === 'string' ? n.folder : '',
-        _path: localPath.get(n.id),
-      }));
+      const incoming = normalizeNotes(data.notes, localPath, ulid);
       adopt(mergeByUpdated(notes, incoming)); // merge so nothing already here is lost
       if (vaultBackend) for (const n of incoming) dirty.add(n.id); // write imported notes to the vault now, not next launch
-      if (Array.isArray(data.folders)) { folders = [...new Set([...folders, ...data.folders.filter((f) => typeof f === 'string' && f)])]; saveFolders(folders); }
-      if (Array.isArray(data.refs)) { const m = new Map(refs.map((r) => [r.id, r])); for (const r of data.refs) { if (!r || typeof r !== 'object' || r.id == null) continue; if (!Array.isArray(r.authors)) r.authors = []; m.set(r.id, r); } refs = [...m.values()]; }
+      if (Array.isArray(data.folders)) { folders = mergeFolders(folders, data.folders); saveFolders(folders); }
+      if (Array.isArray(data.refs)) refs = mergeRefs(refs, data.refs);
       importMsg = '✓ Imported ' + incoming.length + ' notes.';
     } catch (err) { importMsg = '⚠ ' + (err.message || 'Could not read that file'); }
     finally { flushSave(); clearTimeout(importMsgTimer); importMsgTimer = setTimeout(() => (importMsg = ''), 6000); }   // persist adopted notes even if the merge threw; don't let the status stick forever as the help text
@@ -489,26 +456,15 @@
   }
   // move/nest a folder subtree under destParent ('' = vault root); reparents its subfolders and notes
   function moveFolder(src, destParent) {
-    src = canonFolder(src); destParent = canonFolder(destParent);
-    if (!src) return;
-    if (destParent === src || destParent.startsWith(src + '/')) return; // can't drop a folder into itself or a descendant
-    const leaf = src.slice(src.lastIndexOf('/') + 1);
-    const newPath = destParent ? destParent + '/' + leaf : leaf;
-    if (newPath === src) return;
-    // refuse to merge into an unrelated folder that already owns this leaf name — a silent
-    // Set-dedup merge would fuse two subtrees and reassign every note under them, unrecoverably
-    if (folders.some((p) => (p === newPath || p.startsWith(newPath + '/')) && !(p === src || p.startsWith(src + '/'))) ||
-        notes.some((n) => { const f = canonFolder(n.folder); return (f === newPath || f.startsWith(newPath + '/')) && !(f === src || f.startsWith(src + '/')); })) {
-      notify('A folder named “' + leaf + '” already exists there.'); return;
+    const plan = planFolderMove(src, destParent, folders, notes);
+    if (!plan.ok) { if (plan.reason === 'collision') notify('A folder named “' + plan.leaf + '” already exists there.'); return; }
+    folders = plan.newFolders;
+    for (const m of plan.noteMoves) {
+      const n = notes.find((x) => x.id === m.id);
+      if (n) { n.folder = m.to; n.updated = new Date().toISOString(); markDirty(n.id); }
     }
-    const reparent = (p) => p === src ? newPath : (p.startsWith(src + '/') ? newPath + p.slice(src.length) : p);
-    folders = [...new Set(folders.map(reparent))];
-    for (const n of notes) {
-      const f = canonFolder(n.folder);
-      if (f === src || f.startsWith(src + '/')) { n.folder = reparent(f); n.updated = new Date().toISOString(); markDirty(n.id); }
-    }
-    if (collapsed[src] != null) { collapsed[newPath] = collapsed[src]; delete collapsed[src]; }
-    if (activeFolder === src || activeFolder.startsWith(src + '/')) activeFolder = reparent(activeFolder);
+    if (collapsed[plan.src] != null) { collapsed[plan.newPath] = collapsed[plan.src]; delete collapsed[plan.src]; }
+    if (activeFolder === plan.src || activeFolder.startsWith(plan.src + '/')) activeFolder = plan.reparent(activeFolder);
     saveFolders(folders); persist();
   }
   // --- sidebar drag & drop: move notes into folders, nest folders under folders ---
@@ -962,12 +918,14 @@
     const tg = e.target.closest('[data-tag]'); if (tg) { e.preventDefault(); tagFilter = tg.getAttribute('data-tag'); return; }
     const ck = e.target.closest('[data-cite]'); if (ck) { e.preventDefault(); openReference(ck.getAttribute('data-cite')); return; }
   }
-  // toggle the i-th `- [ ]` / `- [x]` task line in the current note (clicked in the read view)
+  // toggle the i-th task line in the current note (clicked in the read view). The marker set must
+  // match exactly what marked renders as a checkbox — bullets AND ordered items (1. / 1)) — or the
+  // DOM checkbox index and this line count diverge and a click toggles the wrong line.
   function toggleTaskAt(i) {
     if (i < 0) return; const n = current; if (!n) return;
     let count = -1;
     const lines = (n.body || '').split('\n').map((line) => {
-      const m = line.match(/^(\s*[-*+] +)\[([ xX])\](.*)$/);
+      const m = line.match(/^(\s*(?:[-*+]|\d+[.)]) +)\[([ xX])\](.*)$/);
       if (!m) return line;
       count++; if (count !== i) return line;
       return m[1] + '[' + (m[2] === ' ' ? 'x' : ' ') + ']' + m[3];

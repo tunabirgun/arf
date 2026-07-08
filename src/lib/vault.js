@@ -75,11 +75,14 @@ export function loadFolders() {
 }
 export function saveFolders(folders) { try { localStorage.setItem(FKEY, JSON.stringify(folders)); } catch (e) {} }
 
-// Serialize a note to the on-disk Markdown + frontmatter form (what the real
-// vault writes). Used by an export path and shown as proof of the format.
+// Serialize a note to Markdown + frontmatter for the "Export as Markdown" / copy path. Close to
+// the on-disk form the vault writes (vaultadapter serialize()) but not byte-identical — it does
+// not escape backslashes in the title. Tags are sanitized the same way, so a tag containing a
+// comma or ']' survives a round-trip through the exported file instead of splitting into several.
 export function toMarkdown(n) {
   const clean = (v) => String(v == null ? '' : v).replace(/[\r\n]+/g, ' ');
+  const tags = (n.tags || []).map((t) => clean(t).replace(/[,\]]/g, ' ').trim()).filter(Boolean);
   const fm = ['---', `id: ${clean(n.id)}`, `title: "${clean(n.title || 'Untitled').replace(/"/g, '\\"')}"`,
-    `created: ${clean(n.created)}`, `updated: ${clean(n.updated)}`, `tags: [${(n.tags || []).map(clean).join(', ')}]`, '---', ''].join('\n');
+    `created: ${clean(n.created)}`, `updated: ${clean(n.updated)}`, `tags: [${tags.join(', ')}]`, '---', ''].join('\n');
   return fm + '\n' + (n.body || '') + '\n';
 }

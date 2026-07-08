@@ -11,13 +11,17 @@ export function parseWikilinks(body) {
   while ((m = re.exec(text))) { const raw = m[1].trim(), bar = raw.indexOf('|'); out.push((bar < 0 ? raw : raw.slice(0, bar)).trim()); }
   return out;
 }
-// strip fenced (``` and ~~~) and inline code so their contents don't leak into tags/tokens
+// strip fenced (``` and ~~~) and inline code so their contents don't leak into tags/tokens.
+// coerce to a string first so a tampered cache with a non-string body can't throw here.
 function stripCode(body) {
-  return (body || '').replace(/(^|\n)(```|~~~)[\s\S]*?(\n\2|$)/g, ' ').replace(/`[^`]*`/g, ' ');
+  return String(body == null ? '' : body).replace(/(^|\n)(```|~~~)[\s\S]*?(\n\2|$)/g, ' ').replace(/`[^`]*`/g, ' ');
 }
 export function parseInlineTags(body) {
   const text = stripCode(body);
-  const out = new Set(); const re = /(^|\s)#([\p{L}\p{N}][\p{L}\p{N}/_-]*)/gu; let m; // \p{L}: keep Unicode letters (ğ ş ü é ñ …)
+  // accept '#' after start-of-string OR any non-word delimiter (space, '*', '[', '(', …) so a tag
+  // written as **#project**, [#tag], or (#tag) is indexed the same way the renderer makes it clickable;
+  // a '#' after a letter/digit/'/' (C#, x#y) is still not a tag. \p{L}: keep Unicode letters (ğ ş ü é ñ …)
+  const out = new Set(); const re = /(^|[^\p{L}\p{N}/])#([\p{L}\p{N}][\p{L}\p{N}/_-]*)/gu; let m;
   while ((m = re.exec(text))) out.add(m[2].toLowerCase());
   return [...out];
 }
@@ -29,8 +33,9 @@ export function buildIndex(notes) {
   notes.forEach((n) => {
     byId[n.id] = n;
     // on a duplicate title, resolve deterministically (lowest id) so [[links]] don't flip
-    // with the platform's directory-read order
-    const key = (n.title || '').trim().toLowerCase();
+    // with the platform's directory-read order. String(): a tampered cache with a numeric
+    // title must not throw and blank the whole index.
+    const key = String(n.title == null ? '' : n.title).trim().toLowerCase();
     if (key && (!byTitle[key] || n.id < byTitle[key].id)) byTitle[key] = n;
   });
   const fwd = Object.create(null), back = Object.create(null);
@@ -45,7 +50,7 @@ export function buildIndex(notes) {
   const backArr = Object.create(null); Object.keys(back).forEach((k) => (backArr[k] = [...back[k]]));
   const tagIndex = Object.create(null), noteTags = Object.create(null);
   notes.forEach((n) => {
-    const tags = new Set([...(n.tags || []), ...parseInlineTags(n.body)].map((t) => t.toLowerCase()));
+    const tags = new Set([...(Array.isArray(n.tags) ? n.tags : []), ...parseInlineTags(n.body)].filter((t) => typeof t === 'string').map((t) => t.toLowerCase()));
     noteTags[n.id] = [...tags];
     tags.forEach((t) => (tagIndex[t] = tagIndex[t] || []).push(n.id));
   });
