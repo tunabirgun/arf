@@ -6,5 +6,5 @@ import { svelte } from '@sveltejs/vite-plugin-svelte';
 export default defineConfig({
   base: '/',
   plugins: [svelte()],
-  server: { port: 5175 },
+  server: { port: 5175, strictPort: true }, // fail loudly on a busy port instead of drifting off the hardcoded devUrl
 });

@@ -98,9 +98,21 @@
   // guarded so the editor's own edits don't loop
   $effect(() => {
     const v = value;
-    if (view && v !== view.state.doc.toString()) {
-      view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: v }, annotations: syncAnno.of(true) });
-    }
+    if (!view) return;
+    const cur = view.state.doc.toString();
+    if (v === cur) return;
+    // minimal-diff replace (keep the common prefix/suffix) so an external edit — e.g. an auto-added
+    // link appended to the body — doesn't reset the caret to 0 and scroll the editor to the top
+    const alen = cur.length, blen = v.length;
+    let s = 0; while (s < alen && s < blen && cur.charCodeAt(s) === v.charCodeAt(s)) s++;
+    let e = 0; while (e < alen - s && e < blen - s && cur.charCodeAt(alen - 1 - e) === v.charCodeAt(blen - 1 - e)) e++;
+    view.dispatch({ changes: { from: s, to: alen - e, insert: v.slice(s, blen - e) }, annotations: syncAnno.of(true) });
+  });
+
+  // under prefers-reduced-motion the CSS fade is disabled, so dismiss the faint mark on a timer instead
+  const reduceMotion = typeof matchMedia !== 'undefined' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+  $effect(() => {
+    if (hint && reduceMotion) { const t = setTimeout(() => (hint = null), 6000); return () => clearTimeout(t); }
   });
 
   // --- formatting commands: markdown around the selection, with the cursor left where you'd type ---

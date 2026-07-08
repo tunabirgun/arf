@@ -79,17 +79,21 @@ export async function contentHash(text) {
 
 // Embed a set of notes, using the cache for unchanged ones. textOf(note) -> string.
 export async function embedNotes(notes, textOf) {
+  const model = currentModel; // snapshot: a mid-run model switch must not mix cache spaces
   const result = {}, toEmbed = [], meta = [];
   for (const n of notes) {
     const text = (textOf(n) || '').slice(0, 4000); // MiniLM truncates ~256 tokens anyway
-    const hash = await contentHash(currentModel + ':q8 ' + text);
+    const hash = await contentHash(model + ':q8 ' + text);
     const hit = await cacheGet(hash);
     if (hit) result[n.id] = hit;
     else { toEmbed.push(text); meta.push({ id: n.id, hash }); }
   }
-  if (toEmbed.length) {
-    const vecs = await embed(toEmbed);
-    for (let i = 0; i < meta.length; i++) { result[meta[i].id] = vecs[i]; cachePut(meta[i].hash, vecs[i]); }
+  // embed in bounded chunks so a large first-run vault can't OOM the worker in one forward pass;
+  // each chunk is cached as it lands, so partial progress survives a later failure
+  const CHUNK = 32;
+  for (let s = 0; s < toEmbed.length; s += CHUNK) {
+    const vecs = await embed(toEmbed.slice(s, s + CHUNK));
+    for (let i = 0; i < vecs.length; i++) { const mt = meta[s + i]; result[mt.id] = vecs[i]; cachePut(mt.hash, vecs[i]); }
   }
   return result;
 }

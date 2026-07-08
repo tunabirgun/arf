@@ -55,6 +55,13 @@ export function loadNotes() {
       return [];
     }
   }
+  // localStorage absent: return empty. Seeding is decided by the caller on a genuine first run,
+  // so a wiped cache over an existing vault repopulates from disk rather than adding phantom notes.
+  return [];
+}
+
+// The getting-started sample notes — seeded once, only on a true first run (no vault ever chosen).
+export function seedNotes() {
   const seeded = SEED.map((s) => ({ id: ulid(), folder: '', created: nowISO(), updated: nowISO(), ...s }));
   saveNotes(seeded);
   return seeded;

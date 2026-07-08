@@ -25,7 +25,13 @@ export function buildIndex(notes) {
   // Object.create(null): a note titled/tagged "__proto__" or "constructor" must
   // behave as an ordinary key, not crash index-building for the whole vault.
   const byId = Object.create(null), byTitle = Object.create(null);
-  notes.forEach((n) => { byId[n.id] = n; byTitle[(n.title || '').trim().toLowerCase()] = n; });
+  notes.forEach((n) => {
+    byId[n.id] = n;
+    // on a duplicate title, resolve deterministically (lowest id) so [[links]] don't flip
+    // with the platform's directory-read order
+    const key = (n.title || '').trim().toLowerCase();
+    if (key && (!byTitle[key] || n.id < byTitle[key].id)) byTitle[key] = n;
+  });
   const fwd = Object.create(null), back = Object.create(null);
   notes.forEach((n) => {
     const links = new Set();
@@ -68,8 +74,9 @@ export function buildVectorizer(notes) {
   // smoothed IDF (+1) so terms shared across all notes still carry weight —
   // otherwise a small vault scores cosine 0 and Resonance/Synthesis read empty
   const vecOf = (terms) => {
-    const tf = {}; terms.forEach((t) => (tf[t] = (tf[t] || 0) + 1));
-    const v = {}; let norm = 0;
+    // null-proto: a token like "constructor" must not read Object.prototype (→ NaN weights, broken cosine)
+    const tf = Object.create(null); terms.forEach((t) => (tf[t] = (tf[t] || 0) + 1));
+    const v = Object.create(null); let norm = 0;
     for (const t in tf) { const w = tf[t] * (Math.log((N + 1) / ((df[t] || 0) + 1)) + 1); v[t] = w; norm += w * w; }
     norm = Math.sqrt(norm) || 1;
     for (const t in v) v[t] /= norm;

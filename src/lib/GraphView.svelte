@@ -29,7 +29,9 @@
       const k = n.id < t ? n.id + t : t + n.id;
       if (!seen[k] && index[t] != null) { seen[k] = 1; edges.push({ from: index[n.id], to: index[t] }); }
     }));
-    layoutForce(nodes, edges, W, H, 160);
+    // bound the O(iters × n²) layout so opening the full graph on a large vault never freezes the UI
+    const iters = nodes.length <= 1 ? 0 : Math.max(8, Math.min(160, Math.floor(2500000 / (nodes.length * nodes.length))));
+    layoutForce(nodes, edges, W, H, iters);
     return { W, H, nodes, edges, index };
   }
 

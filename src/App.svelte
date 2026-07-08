@@ -1,5 +1,5 @@
 <script>
-  import { loadNotes, saveNotes, newNote, toMarkdown, loadFolders, saveFolders, corruptBackupKey, ulid } from './lib/vault.js';
+  import { loadNotes, seedNotes, saveNotes, newNote, toMarkdown, loadFolders, saveFolders, corruptBackupKey, ulid } from './lib/vault.js';
   import { buildFolderRows, folderList } from './lib/folders.js';
   import { buildIndex, buildVectorizer, related, hasLinks, digestPairs, cosine, sharedTerms } from './lib/graphindex.js';
   import { renderMarkdown, setLinkResolver, setCiteResolver } from './lib/markdown.js';
@@ -13,7 +13,7 @@
 
   const IS_MAC = /Mac|iPhone|iPad|iPod/.test((navigator.platform || '') + ' ' + (navigator.userAgent || ''));
   const MOD = IS_MAC ? '⌘' : 'Ctrl';
-  const APP_VERSION = '1.1.0';
+  const APP_VERSION = '1.2.0';
 
   let notes = $state(loadNotes());
   let refs = $state(loadRefs());        // shared reference library (also used by [@citekey] citations)
@@ -95,6 +95,7 @@
       if (raw) {
         const disk = JSON.parse(raw);
         if (Array.isArray(disk)) {
+          for (const r of disk) if (r && !Array.isArray(r.authors)) r.authors = []; // never let the Library see a ref with no authors array
           if (replace) refs = disk;
           else { const m = new Map(refs.map((r) => [r.id, r])); for (const r of disk) m.set(r.id, r); refs = [...m.values()]; }
         } else if (replace) refs = [];
@@ -326,8 +327,9 @@
       const data = JSON.parse(await file.text());
       if (!data || !Array.isArray(data.notes)) throw new Error('Not an Arf workspace (.arf) file');
       adopt(mergeByUpdated(notes, data.notes)); // merge so nothing already here is lost
+      if (vaultBackend) for (const n of data.notes) dirty.add(n.id); // write imported notes to the vault now, not next launch
       if (Array.isArray(data.folders)) { folders = [...new Set([...folders, ...data.folders])]; saveFolders(folders); }
-      if (Array.isArray(data.refs)) { const m = new Map(refs.map((r) => [r.id, r])); for (const r of data.refs) m.set(r.id, r); refs = [...m.values()]; }
+      if (Array.isArray(data.refs)) { const m = new Map(refs.map((r) => [r.id, r])); for (const r of data.refs) { if (r && !Array.isArray(r.authors)) r.authors = []; m.set(r.id, r); } refs = [...m.values()]; }
       flushSave();
       importMsg = '✓ Imported ' + data.notes.length + ' notes.';
     } catch (err) { importMsg = '⚠ ' + (err.message || 'Could not read that file'); }
@@ -342,6 +344,9 @@
         const b = await reconnectVault();
         if (!b) {
           if (isTauri) { vaultMissing = await lastKnownVaultPath(); needVault = true; }
+          // seed the getting-started notes only on a genuine first run (no vault ever chosen),
+          // never when the localStorage cache was merely wiped over an existing/known vault
+          if (!vaultMissing && !notes.length) adopt(seedNotes());
           return;
         }
         const ex = await b.loadAll();
@@ -589,10 +594,10 @@
     notes = notes.filter((x) => x.id !== id);
     if (currentId === id) currentId = notes[0]?.id ?? null;
     dirty.delete(id);
+    if (vaultBackend) pendingDelete.add(id);     // tombstone first: an in-flight first-save (no _path yet) must not resurrect the note
     closeCtx();
     writeNow();
     if (vaultBackend && note._path) {
-      pendingDelete.add(id);                     // tombstone: a slow/failed file removal must not resurrect the note on the next sync
       if (await vaultBackend.removeNote(note)) pendingDelete.delete(id); // confirmed gone → clear it
       else vaultErr = true;                      // still on disk → stays tombstoned; syncFromFolder retries the removal
     }
@@ -739,8 +744,10 @@
     return pairs.map((p) => ({ ...p, terms: sharedTerms(idx.byId[p.a], idx.byId[p.b], 5) }));
   });
 
+  const editable = (t) => !!(t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable || (t.closest && t.closest('.cm-editor'))));
   function onKey(e) {
-    const mod = e.metaKey || e.ctrlKey;
+    if (e.defaultPrevented) return; // let the editor/inputs claim a key before the global shortcuts run
+    const mod = IS_MAC ? e.metaKey : e.ctrlKey; // ⌘ on macOS, Ctrl elsewhere — leaves Ctrl free for caret shortcuts on Mac
     if (mod && e.key.toLowerCase() === 'k') { e.preventDefault(); paletteOpen = true; query = ''; }
     else if (mod && e.key.toLowerCase() === 'e') { e.preventDefault(); if (view === 'notes') mode = mode === 'read' ? 'write' : 'read'; }
     else if (mod && e.key.toLowerCase() === 'g') { e.preventDefault(); graphFull = !graphFull; }
@@ -748,7 +755,7 @@
     else if (mod && e.key.toLowerCase() === 's') { e.preventDefault(); flushSave(); }
     else if (mod && e.key.toLowerCase() === 'b') { e.preventDefault(); view = view === 'library' ? 'notes' : 'library'; }
     else if (mod && e.key.toLowerCase() === 'r') { e.preventDefault(); flushSave(); syncFromFolder(); }
-    else if (mod && e.key === 'Backspace' && current && mode === 'read') { e.preventDefault(); deleteNote(currentId); }
+    else if (mod && e.key === 'Backspace' && current && mode === 'read' && !editable(e.target)) { e.preventDefault(); deleteNote(currentId); }
     else if (e.key === 'Escape') { paletteOpen = false; digestOpen = false; connect = null; graphFull = false; docExport = false; settingsOpen = false; focus = false; closeCtx(); }
   }
 </script>

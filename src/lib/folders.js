@@ -3,6 +3,10 @@
 // are implied. buildFolderRows flattens the tree into rows (with depth) for the
 // sidebar, respecting collapsed state — recursion-free rendering.
 
+// canonical folder path: split on BOTH separators so a backslash folder ("a\\b") matches the
+// tree, drop empty / "." / ".." segments, join with "/". Used everywhere a folder is keyed.
+export const canonFolder = (p) => (p || '').split(/[\\/]/).filter((seg) => seg && seg !== '.' && seg !== '..').join('/');
+
 export function allFolderPaths(folders, notes) {
   const set = new Set();
   const add = (p) => {
@@ -10,7 +14,7 @@ export function allFolderPaths(folders, notes) {
     let cur = '';
     // skip empty segments — a leading/double slash must never insert '' and make a folder
     // its own ancestor (which would make buildFolderRows recurse forever)
-    p.split('/').forEach((seg) => { if (!seg || seg === '.' || seg === '..') return; cur = cur ? cur + '/' + seg : seg; set.add(cur); });
+    p.split(/[\\/]/).forEach((seg) => { if (!seg || seg === '.' || seg === '..') return; cur = cur ? cur + '/' + seg : seg; set.add(cur); });
   };
   (folders || []).forEach(add);
   (notes || []).forEach((n) => add(n.folder || ''));
@@ -29,7 +33,9 @@ export function buildFolderRows(folders, notes, collapsed) {
     (childrenOf[parent] = childrenOf[parent] || []).push(p);
   });
   const notesOf = {};
-  notes.forEach((n) => { const f = n.folder || ''; (notesOf[f] = notesOf[f] || []).push(n); });
+  // key by the SAME canonical path the tree is built from, or a note with a non-canonical
+  // folder string (trailing slash, backslash, "./") would never render under its folder
+  notes.forEach((n) => { const f = canonFolder(n.folder); (notesOf[f] = notesOf[f] || []).push(n); });
   Object.keys(notesOf).forEach((k) => notesOf[k].sort((a, b) => (a.title || '').localeCompare(b.title || '')));
 
   const rows = [];

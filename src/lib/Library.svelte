@@ -39,7 +39,7 @@
     return t;
   });
 
-  function shortAuth(a) { return !a.length ? '' : a.length === 1 ? a[0].f : a.length === 2 ? a[0].f + ' & ' + a[1].f : a[0].f + ' et al.'; }
+  function shortAuth(a) { if (!Array.isArray(a) || !a.length) return ''; return a.length === 1 ? a[0].f : a.length === 2 ? a[0].f + ' & ' + a[1].f : a[0].f + ' et al.'; }
   function initials(g) { return g ? g.split(/\s+/).filter(Boolean).map((x) => x[0] + '.').join(' ') : ''; }
   function count(k) { return k === 'all' ? refs.length : refs.filter((r) => r.type === k).length; }
 
@@ -69,6 +69,18 @@
     const citekey = mkCitekey(authors, year);
     return { id: 'r_' + citekey, citekey, type: 'book', title: b.title || 'Untitled', authors, year, publisher, isbn, url: b.url || '', sources: ['Open Library'] };
   }
+  async function fetchArxiv(arxivId) {
+    // arXiv DOIs are registered with DataCite, not Crossref
+    const doi = '10.48550/arXiv.' + arxivId;
+    const r = await fetch('https://api.datacite.org/dois/' + encodeURIComponent(doi), { headers: { Accept: 'application/vnd.api+json' }, signal: AbortSignal.timeout(10000) });
+    if (!r.ok) return null;
+    const at = (await r.json()).data?.attributes; if (!at) return null;
+    const title = (at.titles && at.titles[0] && at.titles[0].title) || 'Untitled';
+    const authors = (at.creators || []).map((c) => ({ f: c.familyName || (c.name || '').split(',')[0].trim() || c.name || '', g: c.givenName || '' })).filter((a) => a.f);
+    const year = at.publicationYear || '';
+    const citekey = mkCitekey(authors, year);
+    return { id: 'r_' + citekey, citekey, type: 'preprint', title, authors, year, container: 'arXiv', doi, url: 'https://arxiv.org/abs/' + arxivId, sources: ['arXiv', 'DataCite'] };
+  }
   async function doFetch() {
     const rawInput = addInput.trim(); if (!rawInput) return;
     const token = ++fetchToken;                 // supersede any in-flight/cancelled request
@@ -80,13 +92,14 @@
         .replace(/\.pdf$/, '')
         .replace(/\s+/g, '');
       let isbn = v; if (/^[0-9][0-9-]{8,16}[0-9x]$/.test(v) && !v.includes('/')) isbn = v.replace(/-/g, '');
-      const arxivId = /^arxiv:/.test(v) ? v.replace(/^arxiv:/, '') : (/^\d{4}\.\d{4,5}(v\d+)?$/.test(v) ? v : null);
+      let arxivId = /^arxiv:/.test(v) ? v.replace(/^arxiv:/, '') : (/^\d{4}\.\d{4,5}(v\d+)?$/.test(v) ? v : null);
+      if (arxivId) arxivId = arxivId.replace(/v\d+$/, ''); // drop version so it matches the offline set and DataCite
       // 1) instant local set first (works offline, no request)
       const hit = FETCH_DB[v] || FETCH_DB[isbn] || (arxivId && FETCH_DB['arxiv:' + arxivId]);
       if (hit) { if (token === fetchToken) addResult = { ...hit, id: 'r_' + hit.citekey }; return; }
       // 2) live lookup from open libraries (CORS-friendly; arXiv resolved via its Crossref DOI)
       let ref = null;
-      if (arxivId) ref = await fetchDOI('10.48550/arxiv.' + arxivId);
+      if (arxivId) ref = await fetchArxiv(arxivId);
       else if (/^10\.\d{4,}\//.test(v)) ref = await fetchDOI(v);
       else if (/^(97[89])?[0-9]{9}[0-9x]$/.test(isbn)) ref = await fetchISBN(isbn);
       if (token !== fetchToken) return;         // a newer request or a cancel won
@@ -114,15 +127,15 @@
   // export generators
   function bibType(t) { return t === 'book' ? 'book' : t === 'preprint' ? 'misc' : (t === 'webpage' || t === 'article-magazine') ? 'online' : 'article'; }
   function escBib(s) { return String(s == null ? '' : s).replace(/([%&#_${}])/g, '\\$1').replace(/\^/g, '\\^{}').replace(/~/g, '\\~{}'); }
-  function toBibTeX(r) { const f = []; if (r.authors && r.authors.length) f.push('  author = {' + r.authors.map((a) => escBib(a.f) + ', ' + escBib(a.g)).join(' and ') + '}'); f.push('  title = {' + escBib(r.title) + '}'); f.push('  year = {' + r.year + '}'); if (r.container) f.push('  ' + (r.type === 'book' ? 'publisher' : 'journal') + ' = {' + escBib(r.container) + '}'); if (r.publisher && !r.container) f.push('  publisher = {' + escBib(r.publisher) + '}'); if (r.volume) f.push('  volume = {' + r.volume + '}'); if (r.pages) f.push('  pages = {' + r.pages.replace('–', '--') + '}'); if (r.doi) f.push('  doi = {' + escBib(r.doi) + '}'); if (r.isbn) f.push('  isbn = {' + escBib(r.isbn) + '}'); if (r.url) f.push('  url = {' + escBib(r.archived || r.url) + '}'); return '@' + bibType(r.type) + '{' + r.citekey + ',\n' + f.join(',\n') + '\n}'; }
+  function toBibTeX(r) { const f = []; if (r.authors && r.authors.length) f.push('  author = {' + r.authors.map((a) => escBib(a.f) + ', ' + escBib(a.g)).join(' and ') + '}'); f.push('  title = {' + escBib(r.title) + '}'); f.push('  year = {' + r.year + '}'); if (r.container) f.push('  ' + (r.type === 'book' ? 'publisher' : 'journal') + ' = {' + escBib(r.container) + '}'); if (r.publisher && !r.container) f.push('  publisher = {' + escBib(r.publisher) + '}'); if (r.volume) f.push('  volume = {' + r.volume + '}'); if (r.pages) f.push('  pages = {' + String(r.pages).replace(/[–—-]+/g, '--') + '}'); if (r.doi) f.push('  doi = {' + escBib(r.doi) + '}'); if (r.isbn) f.push('  isbn = {' + escBib(r.isbn) + '}'); if (r.url) f.push('  url = {' + escBib(r.archived || r.url) + '}'); return '@' + bibType(r.type) + '{' + r.citekey + ',\n' + f.join(',\n') + '\n}'; }
   function risType(t) { return t === 'book' ? 'BOOK' : t === 'webpage' ? 'ELEC' : t === 'article-magazine' ? 'MGZN' : t === 'preprint' ? 'GEN' : 'JOUR'; }
-  function toRIS(r) { const L = ['TY  - ' + risType(r.type)]; r.authors.forEach((a) => L.push('AU  - ' + a.f + ', ' + a.g)); L.push('TI  - ' + r.title); L.push('PY  - ' + r.year); if (r.container) L.push((r.type === 'book' ? 'PB  - ' : 'JO  - ') + r.container); if (r.publisher && r.type === 'book') L.push('PB  - ' + r.publisher); if (r.volume) L.push('VL  - ' + r.volume); if (r.pages) { const p = r.pages.split(/[–-]/); L.push('SP  - ' + p[0]); if (p[1]) L.push('EP  - ' + p[1]); } if (r.doi) L.push('DO  - ' + r.doi); if (r.isbn) L.push('SN  - ' + r.isbn); if (r.url) L.push('UR  - ' + (r.archived || r.url)); if (r.accessed) L.push('Y2  - ' + r.accessed); L.push('ER  - '); return L.join('\n'); }
-  function toCSL(r) { const o = { id: r.citekey, type: r.type, title: r.title, author: r.authors.map((a) => ({ family: a.f, given: a.g })), issued: { 'date-parts': [[r.year]] } }; if (r.container) o['container-title'] = r.container; if (r.publisher) o.publisher = r.publisher; if (r.volume) o.volume = r.volume; if (r.pages) o.page = r.pages; if (r.doi) o.DOI = r.doi; if (r.isbn) o.ISBN = r.isbn; if (r.url) o.URL = r.archived || r.url; return '  ' + JSON.stringify(o); }
+  function toRIS(r) { const L = ['TY  - ' + risType(r.type)]; (r.authors || []).forEach((a) => L.push('AU  - ' + a.f + ', ' + a.g)); L.push('TI  - ' + r.title); L.push('PY  - ' + r.year); if (r.container) L.push((r.type === 'book' ? 'PB  - ' : 'JO  - ') + r.container); if (r.publisher && r.type === 'book') L.push('PB  - ' + r.publisher); if (r.volume) L.push('VL  - ' + r.volume); if (r.pages) { const p = r.pages.split(/[–-]/); L.push('SP  - ' + p[0]); if (p[1]) L.push('EP  - ' + p[1]); } if (r.doi) L.push('DO  - ' + r.doi); if (r.isbn) L.push('SN  - ' + r.isbn); if (r.url) L.push('UR  - ' + (r.archived || r.url)); if (r.accessed) L.push('Y2  - ' + r.accessed); L.push('ER  - '); return L.join('\n'); }
+  function toCSL(r) { const o = { id: r.citekey, type: r.type, title: r.title, author: (r.authors || []).map((a) => ({ family: a.f, given: a.g })) }; if (r.year) o.issued = { 'date-parts': [[r.year]] }; if (r.container) o['container-title'] = r.container; if (r.publisher) o.publisher = r.publisher; if (r.volume) o.volume = r.volume; if (r.pages) o.page = r.pages; if (r.doi) o.DOI = r.doi; if (r.isbn) o.ISBN = r.isbn; if (r.url) o.URL = r.archived || r.url; return '  ' + JSON.stringify(o); }
   function apaAuth(as) { if (!as || !as.length) return ''; const s = as.map((a) => a.f + ', ' + initials(a.g)); return s.length > 1 ? s.slice(0, -1).join(', ') + ', & ' + s[s.length - 1] : s[0]; }
   function toAPA(r) { const au = apaAuth(r.authors); let s = (au ? au + ' ' : '') + '(' + r.year + '). ' + r.title + '.'; if (r.container) s += ' ' + r.container + (r.volume ? ', ' + r.volume : '') + (r.pages ? ', ' + r.pages : '') + '.'; else if (r.publisher) s += ' ' + r.publisher + '.'; if (r.doi) s += ' https://doi.org/' + r.doi; else if (r.url) s += ' Retrieved ' + (r.accessed || '') + ', from ' + (r.archived || r.url); return s; }
-  function toNature(r) { const a = r.authors.map((x) => x.f + ', ' + initials(x.g)).join(', '); let s = (a ? a + ' ' : '') + r.title + '.'; if (r.container) s += ' ' + r.container + (r.volume ? ' ' + r.volume : '') + (r.pages ? ', ' + r.pages : '') + ' (' + r.year + ').'; else s += ' (' + (r.publisher || '') + ', ' + r.year + ').'; return s; }
+  function toNature(r) { const a = (r.authors || []).map((x) => x.f + ', ' + initials(x.g)).join(', '); let s = (a ? a + ' ' : '') + r.title + '.'; if (r.container) s += ' ' + r.container + (r.volume ? ' ' + r.volume : '') + (r.pages ? ', ' + r.pages : '') + ' (' + r.year + ').'; else s += ' (' + (r.publisher || '') + ', ' + r.year + ').'; return s; }
   function zenType(t) { return t === 'book' ? 'book' : t === 'preprint' ? 'preprint' : (t === 'webpage' || t === 'article-magazine') ? 'other' : 'article'; }
-  function toZenodo(r) { const m = { upload_type: 'publication', publication_type: zenType(r.type), title: r.title, creators: r.authors.map((a) => ({ name: a.f + ', ' + a.g })), publication_date: r.year + '-01-01', description: r.abstract || r.title }; if (r.doi) m.doi = r.doi; if (r.container && r.type !== 'book') m.journal_title = r.container; if (r.publisher || r.type === 'book') m.imprint_publisher = r.publisher || r.container; return '  ' + JSON.stringify(m); }
+  function toZenodo(r) { const m = { upload_type: 'publication', publication_type: zenType(r.type), title: r.title, creators: (r.authors || []).map((a) => ({ name: a.f + ', ' + a.g })), description: r.abstract || r.title }; if (r.year) m.publication_date = r.year + '-01-01'; if (r.doi) m.doi = r.doi; if (r.container && r.type !== 'book') m.journal_title = r.container; if (r.publisher || r.type === 'book') m.imprint_publisher = r.publisher || r.container; return '  ' + JSON.stringify(m); }
   function exportOne(r, f) { return ({ 'BibTeX': toBibTeX, 'RIS (EndNote)': toRIS, 'CSL-JSON': toCSL, 'APA': toAPA, 'Nature': toNature, 'Zenodo': toZenodo }[f] || (() => ''))(r); }
   function copy() { try { navigator.clipboard.writeText(exportText); } catch (e) {} }
 </script>

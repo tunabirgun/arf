@@ -7,7 +7,11 @@
 // ---------- note <-> markdown file ----------
 
 export function slug(title) {
-  return (title || 'untitled').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80) || 'untitled';
+  // keep Unicode letters/numbers so non-Latin titles (e.g. Turkish) don't collapse to "untitled"
+  let s = (title || 'untitled').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '-').replace(/^-+|-+$/g, '').slice(0, 80) || 'untitled';
+  // Windows reserved device names (CON, NUL, COM1…) can't be real files, with any extension
+  if (/^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i.test(s)) s += '-note';
+  return s;
 }
 
 function yamlStr(s) { return '"' + String(s == null ? '' : s).replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"'; }
@@ -132,10 +136,12 @@ export class TauriBackend {
         const rel = prefix ? prefix + '/' + e.name : e.name;
         if (e.isDirectory) await walk(this.join(dir, e.name), rel);
         else if (e.name.endsWith('.md')) {
-          const text = await this.fs.readTextFile(this.join(dir, e.name));
-          const folder = rel.includes('/') ? rel.slice(0, rel.lastIndexOf('/')) : '';
-          const note = parse(text, { folder, fallbackId: rel, fallbackTitle: e.name.replace(/\.md$/, '') });
-          note._path = rel; notes.push(note);
+          try {
+            const text = await this.fs.readTextFile(this.join(dir, e.name));
+            const folder = rel.includes('/') ? rel.slice(0, rel.lastIndexOf('/')) : '';
+            const note = parse(text, { folder, fallbackId: rel, fallbackTitle: e.name.replace(/\.md$/, '') });
+            note._path = rel; notes.push(note);
+          } catch (err) { /* skip one locked/unreadable file instead of aborting the whole vault load */ }
         }
       }
     };
@@ -146,11 +152,13 @@ export class TauriBackend {
   async saveNote(note) {
     let path = relPath(note);
     if (note._path !== path && (await this.pathExists(path))) path = relPath(note, note.id.slice(-5).toLowerCase());
-    if (note._path && note._path !== path) await this.removeByPath(note._path);
     const abs = this.join(this.root, path);
     const dir = abs.slice(0, abs.lastIndexOf('/'));
     try { await this.fs.mkdir(dir, { recursive: true }); } catch (e) {}
+    // write the new file FIRST; only remove the old path once the write succeeds, so a failed
+    // write (sync-client lock, reserved name, MAX_PATH) can never leave the note on neither path
     await this.fs.writeTextFile(abs, serialize(note));
+    if (note._path && note._path !== path) await this.removeByPath(note._path);
     note._path = path;
   }
   // return whether the file is actually gone, so a failed delete (locked by a sync client) can be retried
