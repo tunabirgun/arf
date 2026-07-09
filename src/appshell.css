@@ -34,6 +34,7 @@
 .list { grid-column: 1; border-right: 1px solid var(--line); padding: .8rem .6rem; font-family: var(--sans); font-size: 13px; }
 .center { grid-column: 2; padding: 1.5rem clamp(1rem, 4vw, 2.4rem); display: flex; flex-direction: column; }
 .rail { grid-column: 3; border-left: 1px solid var(--line); padding: 1rem .9rem; background: color-mix(in srgb, var(--canvas) 55%, var(--surface)); }
+.rail.readerpane { padding: 0; overflow: hidden; display: flex; flex-direction: column; }
 
 .lh { font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: var(--fg-faint); margin: .2rem .3rem .5rem; }
 .item { display: flex; gap: .4rem; align-items: flex-start; width: 100%; text-align: left; background: none; border: 0; border-radius: 5px; padding: .4rem .4rem; cursor: pointer; }
@@ -47,6 +48,9 @@
 .item .s { font-size: 12px; color: var(--fg-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* sidebar drag & drop: drag a note into a folder, nest a folder under a folder, drop on "Vault" for top level */
 .item.dragging, .frow.dragging { opacity: .4; }
+/* drag-to-reorder: an insertion line on the row's top (before) or bottom (after) edge */
+.item.dropbefore, .frow.dropbefore { box-shadow: inset 0 2px 0 var(--accent); border-radius: 5px; }
+.item.dropafter, .frow.dropafter { box-shadow: inset 0 -2px 0 var(--accent); border-radius: 5px; }
 .frow.dropon, .lhrow.dropon { background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--accent); border-radius: 6px; }
 .lhrow.dropon .lh { color: var(--accent); }
 .tags { display: flex; flex-wrap: wrap; gap: .3rem; }
@@ -129,7 +133,8 @@
 .read table { border-collapse: collapse; margin: 1rem 0; }
 .read th, .read td { border: 1px solid var(--line); padding: .35rem .6rem; text-align: left; }
 .read .math-display { text-align: center; margin: 1.1rem 0; overflow-x: auto; }
-.read img { max-width: 100%; height: auto; }
+/* images: block, centered, fit the column width and keep their aspect ratio */
+.read img { display: block; max-width: 100%; height: auto; margin: 1.1rem auto; border-radius: 3px; }
 
 /* rail */
 .rh { font-family: var(--sans); font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: var(--fg-faint); margin: 0 0 .5rem; display: flex; justify-content: space-between; align-items: baseline; }
@@ -141,6 +146,7 @@
 .ref .sim { float: right; font-family: var(--mono); font-size: 10.5px; color: var(--accent); }
 .rempty { font-size: 13px; color: var(--fg-faint); font-style: italic; }
 .mltoggle { font-family: var(--sans); font-size: 10px; letter-spacing: 0; text-transform: none; color: var(--accent); background: none; border: 0; cursor: pointer; padding: 0; }
+.mlstat + .mltoggle { margin-left: .45rem; }
 .mltoggle:hover { text-decoration: underline; }
 .mlstat { font-family: var(--mono); font-size: 9.5px; letter-spacing: 0; text-transform: none; color: var(--fg-faint); }
 .mlstat.ok { color: var(--accent); }
@@ -261,6 +267,18 @@
 /* library */
 .libview { grid-column: 1 / -1; display: grid; grid-template-columns: 200px minmax(0,1fr) 340px; overflow: hidden; height: 100%; }
 .libcol { overflow-y: auto; padding: 1rem .9rem; }
+/* library keyword search (minisearch) */
+.libsearch { display: flex; align-items: center; gap: .45rem; border: 1px solid var(--line-strong); border-radius: 7px; padding: .34rem .6rem; margin-bottom: .5rem; background: color-mix(in srgb, var(--canvas) 45%, var(--surface)); transition: border-color .15s; }
+.libsearch:focus-within { border-color: var(--accent); }
+.libsearch .lmag { font-size: 15px; color: var(--fg-muted); flex: none; }
+.libsearch input { flex: 1; min-width: 0; border: 0; background: none; color: var(--fg-bright); font-family: var(--sans); font-size: 13px; outline: none; }
+.libsearchx { flex: none; background: none; border: 0; color: var(--fg-faint); font-size: 13px; cursor: pointer; padding: 0 .1rem; line-height: 1; }
+.libsearchx:hover { color: var(--accent); }
+.libsearchmeta { font-family: var(--mono); font-size: 10.5px; color: var(--fg-faint); margin: -.2rem .2rem .5rem; }
+.libnote { font-family: var(--sans); font-size: 11.5px; color: var(--accent); background: var(--accent-soft); border-radius: 5px; padding: .35rem .5rem; margin: .5rem 0 0; }
+.attachprompt { border: 1px solid var(--accent); background: var(--accent-soft); border-radius: 7px; padding: .7rem .8rem; margin-bottom: .9rem; }
+.attachprompt .dl { font-family: var(--sans); font-size: 11px; letter-spacing: .04em; text-transform: uppercase; color: var(--fg-bright); }
+.attclip { font-size: 11px; color: var(--accent); margin-left: .35rem; vertical-align: baseline; }
 .libcol.filters { border-right: 1px solid var(--line); font-family: var(--sans); font-size: 13px; }
 .libcol.detail { border-left: 1px solid var(--line); background: color-mix(in srgb, var(--canvas) 55%, var(--surface)); }
 .libfilter { display: flex; justify-content: space-between; padding: .34rem .4rem; border-radius: 4px; color: var(--fg-muted); cursor: pointer; background: none; border: 0; width: 100%; text-align: left; font: inherit; }
@@ -292,6 +310,28 @@
 .expsel { font-family: var(--sans); font-size: 13px; padding: .35rem; border: 1px solid var(--line-strong); border-radius: 4px; background: var(--surface); color: var(--fg-bright); }
 
 @media (max-width: 900px) { .ws { grid-template-columns: 190px minmax(0,1fr); } .rail { display: none; } .resizer { display: none; } .libview { grid-template-columns: 1fr; } }
+
+/* ===== motion: subtle, uniform entrances + hover easing (design-token colors only) ===== */
+@keyframes arf-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes arf-pop { from { opacity: 0; transform: translateY(5px) scale(.99); } to { opacity: 1; transform: none; } }
+@keyframes arf-menu { from { opacity: 0; transform: translateY(-3px) scale(.98); } to { opacity: 1; transform: none; } }
+.scrim { animation: arf-fade .15s ease; }
+.modal, .palette { animation: arf-pop .17s cubic-bezier(.2, .7, .3, 1); }
+.ctxmenu { animation: arf-menu .12s ease; transform-origin: top left; }
+.ctxback { animation: arf-fade .1s ease; }
+.overlay { animation: arf-fade .16s ease; }
+.rail.readerpane { animation: arf-fade .18s ease; }
+.savebanner { animation: arf-pop .2s ease; }
+/* ease the common hover state changes — colour/'box-shadow only, never motion, so drag opacity stays snappy */
+.tbtn, .viewtoggle button, .seg button, .newbtn, .searchpill, .libfilter, .libbtn, .frow, .item, .ctxi, .mini,
+.setbtn, .expbtn, .tag, .ref, .refrow, .fmtpick button, .zoomctl button, .cnbtn, .ovclose, .mllink, .clearfilter {
+  transition: background-color .13s ease, color .13s ease, border-color .13s ease, box-shadow .13s ease;
+}
+@media (prefers-reduced-motion: reduce) {
+  .scrim, .modal, .palette, .ctxmenu, .ctxback, .overlay, .rail.readerpane, .savebanner { animation: none; }
+  .eg-node-g circle { transition: none; }
+  .eg-node-g:hover circle { transform: none; }
+}
 
 /* ===== welcome gate (first run / vault missing) ===== */
 .welcome { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: var(--canvas); padding: 2rem; }

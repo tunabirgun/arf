@@ -5,8 +5,8 @@
 
 // Build the bundle object written to disk. `exported` is passed in so callers control
 // the timestamp (and tests stay deterministic).
-export function buildBundle(notes, folders, refs, version, exported) {
-  return { arf: 1, app: 'Arf', version, exported, notes, folders, refs };
+export function buildBundle(notes, folders, refs, version, exported, libFolders = []) {
+  return { arf: 1, app: 'Arf', version, exported, notes, folders, refs, libFolders };
 }
 
 // Parse + validate a bundle's text. Throws a user-facing message if it isn't one.

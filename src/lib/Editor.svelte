@@ -8,7 +8,7 @@
   import { syntaxHighlighting, HighlightStyle } from '@codemirror/language';
   import { tags as hlTags } from '@lezer/highlight';
 
-  let { value = '', onchange, resemble = null, oncite = null } = $props();
+  let { value = '', onchange, resemble = null, oncite = null, onimage = null } = $props();
   // markers this editor treats as interchangeable list/quote prefixes, so a toolbar
   // button converts one into another instead of stacking or half-stripping it
   const LIST_MARKER = /^(- \[[ xX]\] |[-*+] |\d+\. |> )/;
@@ -93,20 +93,30 @@
       hint = m;
     } else hint = null;
   }
-  // paste/drop an image → embed it inline as a data URI so the .md stays self-contained and portable
-  function insertImage(file) {
+  // paste/drop/insert an image. In the desktop app onimage stores it as a file under the vault's
+  // attachments/images/ and returns a relative path (organized, not bloating the .md); on the web,
+  // or if that fails, it falls back to an inline data URI so the note stays self-contained.
+  async function insertImage(file) {
     if (!file || !/^image\//.test(file.type) || !view) return;
+    const alt = (file.name || 'image').replace(/\.[a-z0-9]+$/i, '').replace(/[[\]()]/g, '');
+    if (onimage) { try { const src = await onimage(file); if (src) { insertImgMd(alt, src); return; } } catch (e) {} }
     const reader = new FileReader();
-    reader.onload = () => {
-      if (!view) return;
-      const alt = (file.name || 'image').replace(/\.[a-z0-9]+$/i, '').replace(/[[\]()]/g, '');
-      const md = '![' + alt + '](' + reader.result + ')';
-      const s = view.state.selection.main;
-      view.dispatch({ changes: { from: s.from, to: s.to, insert: md }, selection: { anchor: s.from + md.length } });
-      view.focus();
-    };
+    reader.onload = () => { if (view) insertImgMd(alt, reader.result); };
     reader.readAsDataURL(file);
   }
+  function insertImgMd(alt, src) {
+    if (!view) return;
+    const md = '![' + alt + '](' + src + ')';
+    const s = view.state.selection.main;
+    view.dispatch({ changes: { from: s.from, to: s.to, insert: md }, selection: { anchor: s.from + md.length } });
+    view.focus();
+  }
+  // explicit image insertion (toolbar button + right-click) — opens a native picker,
+  // then reuses the same data-URI embed as paste/drop so the .md stays self-contained
+  let imgInput;
+  function pickImage() { if (imgInput) imgInput.click(); }
+  function onImgPick(e) { const f = e.currentTarget.files && e.currentTarget.files[0]; e.currentTarget.value = ''; if (f) insertImage(f); }
+  export function edInsertImage() { pickImage(); }
   function placeLink() {
     if (!view || !hint || !hint.title || hint.title.includes(']')) { hint = null; return; } // unlinkable title
     const at = view.state.selection.main.to;  // append at the caret — never delete a live selection
@@ -259,7 +269,9 @@
     <span class="fsep"></span>
     <button type="button" class="fm" title="Code block" onclick={codeBlock}>{'{ }'}</button>
     <button type="button" class="fsym" title="Divider" onclick={insertRule}>―</button>
+    <button type="button" class="fsym" title="Insert image" aria-label="Insert image" onclick={pickImage}>▣</button>
   </div>
+  <input type="file" accept="image/*" bind:this={imgInput} onchange={onImgPick} style="display:none" />
   <div class="cm-host" bind:this={el}></div>
   {#if hint}
     {#key hint.id}

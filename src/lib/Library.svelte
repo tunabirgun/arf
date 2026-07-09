@@ -1,7 +1,9 @@
 <script>
+  import MiniSearch from 'minisearch';
   import { shortAuth, joinRefs } from './cite.js';
-  import { folderList, canonFolder } from './folders.js';
-  let { notes, idx, onopen, refs = $bindable([]), jumpTo = null, onjumped = null, onrefsdelete = null } = $props();
+  import { folderList, canonFolder, buildFolderRows, planFolderMove } from './folders.js';
+  let { notes, idx, onopen, refs = $bindable([]), libFolders = $bindable([]), jumpTo = null, onjumped = null, onrefsdelete = null,
+    hasVault = false, onopenreader = null, onattach = null, onfetchpdf = null, ondetach = null } = $props();
 
   const TYPELABEL = { 'article-journal': 'Article', 'article-magazine': 'Magazine', book: 'Book', preprint: 'Preprint', dataset: 'Dataset', webpage: 'Web' };
   const FILTERS = [
@@ -10,9 +12,19 @@
   ];
 
   let filter = $state('all');
+  let libQuery = $state('');          // keyword search across every reference field
   let folderFilter = $state(null);   // null = all folders; '' = unfiled; else a folder path (matches it + subfolders)
   let dragRef = $state(null);        // id of the reference row being dragged onto a folder
+  let dragFolder = $state(null);     // path of a library folder being dragged to nest under another
   let dropFolder = $state(undefined);// folder currently hovered as a drop target ('' = unfiled)
+  // library folder tree management (mirrors the notes sidebar)
+  let libCollapsed = $state({});
+  let newFolderName = $state(null);   // inline new/rename input (null = hidden)
+  let newFolderParent = $state('');
+  let renameFolderPath = $state(null);
+  let movePick = $state(null);        // { src } — the "Move folder to…" picker
+  let uiMsg = $state(''); let uiTimer;
+  function notify(m) { uiMsg = m; clearTimeout(uiTimer); uiTimer = setTimeout(() => (uiMsg = ''), 2600); }
   let selId = $state(refs[0]?.id ?? null);
   // jump to a reference when a [@citekey] citation is clicked — one-shot, so a later refs change
   // (e.g. deleting or adding a ref) doesn't keep snapping the selection back to the cited one
@@ -38,6 +50,7 @@
   function toggleSel(id) { const s = new Set(selected); s.has(id) ? s.delete(id) : s.add(id); selected = s; }
   let expFmt = $state('BibTeX');
   let adding = $state(false);
+  let attachPrompt = $state(null);   // a just-added reference we're offering to attach a reader file to
   let addInput = $state('');
   let addResult = $state(undefined);
   let addBusy = $state(false);
@@ -51,9 +64,38 @@
   };
 
   const refFolders = $derived(folderList([], refs));   // folder paths implied by the refs' folder fields
+  const allLibFolders = $derived(folderList(libFolders, refs));  // persisted + implied, for the move picker
   const hasUnfiled = $derived(refs.some((r) => !canonFolder(r.folder)));
+  // nested folder rows for the tree (folder rows only; refs render in the middle column).
+  // buildFolderRows treats a ref as a "note" — refs carry id/title/folder, so it just works.
+  const folderTree = $derived(buildFolderRows(libFolders, refs, libCollapsed).filter((r) => r.type === 'folder'));
   const inFolder = (r) => { if (folderFilter == null) return true; const f = canonFolder(r.folder); return folderFilter === '' ? !f : (f === folderFilter || f.startsWith(folderFilter + '/')); };
-  const filtered = $derived(refs.filter((r) => (filter === 'all' || r.type === filter) && inFolder(r)));
+  // Keyword search: a client-side MiniSearch index over every reference field (authors flattened
+  // to names). Prefix + light fuzzy so "vasw", "attention", "1706", or a DOI fragment all hit.
+  // Rebuilt on any refs change — a personal library is small, so a full reindex is negligible.
+  function refDoc(r) {
+    return {
+      id: r.id, title: r.title || '', citekey: r.citekey || '',
+      authors: (r.authors || []).map((a) => (a.g ? a.g + ' ' : '') + a.f).join(', '),
+      year: String(r.year || ''), container: r.container || '', publisher: r.publisher || '',
+      abstract: r.abstract || '', doi: r.doi || '', isbn: r.isbn || '',
+      sources: (r.sources || []).join(' '), folder: r.folder || '',
+    };
+  }
+  const libIndex = $derived.by(() => {
+    const ms = new MiniSearch({
+      fields: ['title', 'authors', 'year', 'container', 'publisher', 'abstract', 'doi', 'isbn', 'citekey', 'sources', 'folder'],
+      searchOptions: { prefix: true, fuzzy: 0.2, combineWith: 'AND', boost: { title: 3, authors: 2, citekey: 2 } },
+    });
+    ms.addAll(refs.map(refDoc));
+    return ms;
+  });
+  const searchIds = $derived.by(() => {
+    const q = libQuery.trim();
+    if (!q) return null;                                 // null = search inactive (show all)
+    return new Set(libIndex.search(q).map((h) => h.id));
+  });
+  const filtered = $derived(refs.filter((r) => (filter === 'all' || r.type === filter) && inFolder(r) && (searchIds == null || searchIds.has(r.id))));
   const sel = $derived(refs.find((r) => r.id === selId) ?? null);
   // assign the selected reference to a folder (creates the folder by naming it; '' = unfiled)
   function assignFolder(id, v) {
@@ -61,6 +103,80 @@
     refs = refs.map((r) => r.id === id ? { ...r, folder: path } : r);
   }
   function folderCount(p) { return refs.filter((r) => { const f = canonFolder(r.folder); return f === p || f.startsWith(p + '/'); }).length; }
+
+  // --- library folder tree management (parallels App.svelte's note-folder functions) ---
+  function toggleLibFolder(p) { libCollapsed[p] = !libCollapsed[p]; }
+  function commitFolderInput() { if (renameFolderPath != null) commitLibRename(); else addLibFolder(); }
+  function addLibFolder() {
+    const raw = (newFolderName || '').trim(); newFolderName = null;
+    if (!raw) return;
+    const name = canonFolder(raw.replace(/[\/\\]/g, '-')); if (!name) return;
+    const parent = canonFolder(newFolderParent);
+    const path = parent ? parent + '/' + name : name;
+    if (!libFolders.includes(path)) libFolders = [...libFolders, path];
+    if (parent) libCollapsed[parent] = false;
+    folderFilter = path;
+  }
+  function libCollision(src, newPath, leaf) {
+    if (libFolders.some((p) => (p === newPath || p.startsWith(newPath + '/')) && !(p === src || p.startsWith(src + '/'))) ||
+        refs.some((r) => { const f = canonFolder(r.folder); return (f === newPath || f.startsWith(newPath + '/')) && !(f === src || f.startsWith(src + '/')); })) {
+      notify('A folder named “' + leaf + '” already exists there.'); return true;
+    }
+    return false;
+  }
+  function commitLibRename() {
+    const raw = (newFolderName || '').trim(); const src = canonFolder(renameFolderPath); newFolderName = null; renameFolderPath = null;
+    if (!raw || !src) return;
+    const name = canonFolder(raw.replace(/[\/\\]/g, '-')); if (!name) return;
+    const parent = src.includes('/') ? src.slice(0, src.lastIndexOf('/')) : '';
+    const newPath = parent ? parent + '/' + name : name;
+    if (newPath === src || libCollision(src, newPath, name)) return;
+    const re = (p) => p === src ? newPath : (p.startsWith(src + '/') ? newPath + p.slice(src.length) : p);
+    libFolders = [...new Set(libFolders.map(re))];
+    refs = refs.map((r) => { const f = canonFolder(r.folder); return (f === src || f.startsWith(src + '/')) ? { ...r, folder: re(f) } : r; });
+    if (libCollapsed[src] != null) { libCollapsed[newPath] = libCollapsed[src]; delete libCollapsed[src]; }
+    if (folderFilter === src || (folderFilter && folderFilter.startsWith(src + '/'))) folderFilter = re(folderFilter);
+  }
+  function deleteLibFolder(path) {
+    path = canonFolder(path); if (!path) return;
+    if (!confirm('Delete the library folder “' + path.slice(path.lastIndexOf('/') + 1) + '”?\n\nReferences inside move up to the parent — none are deleted.')) return;
+    const parent = path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '';
+    const reDesc = (p) => { const suf = p.slice(path.length + 1); return parent ? parent + '/' + suf : suf; };
+    libFolders = [...new Set(libFolders.flatMap((p) => p === path ? [] : (p.startsWith(path + '/') ? [reDesc(p)] : [p])))];
+    refs = refs.map((r) => { const f = canonFolder(r.folder); if (f === path) return { ...r, folder: parent }; if (f.startsWith(path + '/')) return { ...r, folder: reDesc(f) }; return r; });
+    if (folderFilter === path) folderFilter = parent || null; else if (folderFilter && folderFilter.startsWith(path + '/')) folderFilter = reDesc(folderFilter);
+    if (libCollapsed[path] != null) delete libCollapsed[path];
+  }
+  function moveLibFolder(src, destParent) {
+    const plan = planFolderMove(src, destParent, libFolders, refs);
+    if (!plan.ok) { if (plan.reason === 'collision') notify('A folder named “' + plan.leaf + '” already exists there.'); return; }
+    libFolders = plan.newFolders;
+    const moves = new Map(plan.noteMoves.map((m) => [m.id, m.to]));
+    refs = refs.map((r) => moves.has(r.id) ? { ...r, folder: moves.get(r.id) } : r);
+    if (libCollapsed[plan.src] != null) { libCollapsed[plan.newPath] = libCollapsed[plan.src]; delete libCollapsed[plan.src]; }
+    if (folderFilter === plan.src || (folderFilter && folderFilter.startsWith(plan.src + '/'))) folderFilter = plan.reparent(folderFilter);
+  }
+  function moveDestinations(src) { return [''].concat(allLibFolders.filter((f) => f !== src && !f.startsWith(src + '/'))); }
+  function doMovePick(dest) { const p = movePick; movePick = null; if (p) moveLibFolder(p.src, dest); }
+  // library folder drag & drop: nest a folder, or drop a reference into a folder
+  function folderDragAllowed(target) {
+    if (dragFolder) { const s = canonFolder(dragFolder), t = canonFolder(target); return !(t === s || t.startsWith(s + '/')); }
+    return !!dragRef;
+  }
+  function onFolderDrop(target) {
+    if (dragFolder) { if (folderDragAllowed(target)) moveLibFolder(dragFolder, target); }
+    else if (dragRef) assignFolder(dragRef, target);
+    dragRef = null; dragFolder = null; dropFolder = undefined;
+  }
+  // methods the global right-click menu (App.svelte) drives via bind:this
+  export function ctxNewFolder() { newFolderParent = ''; renameFolderPath = null; newFolderName = ''; }
+  export function ctxNewSubfolder(path) { newFolderParent = path; renameFolderPath = null; newFolderName = ''; libCollapsed[path] = false; }
+  export function ctxRenameFolder(path) { renameFolderPath = path; newFolderName = path.slice(path.lastIndexOf('/') + 1); }
+  export function ctxDeleteFolder(path) { deleteLibFolder(path); }
+  export function ctxMoveFolder(path) { movePick = { src: canonFolder(path) }; }
+  export function ctxSelectFolder(path) { folderFilter = path; libCollapsed[path] = false; }
+  export function ctxNewRef() { adding = true; addResult = undefined; addInput = ''; addError = ''; addBusy = false; fetchToken++; }
+  export function ctxFolderCollapsed(path) { return !!libCollapsed[path]; }
   const exportRefs = $derived(exportScope === 'all' ? refs : exportScope === 'selected' ? refs.filter((r) => selected.has(r.id)) : refs.filter((r) => r.id === exportScope));
   const exportText = $derived(joinRefs(exportRefs, expFmt));
 
@@ -146,8 +262,10 @@
       let sfx = 'b'; while (refs.find((r) => r.id === addResult.id + sfx)) sfx = String.fromCharCode(sfx.charCodeAt(0) + 1); // different work, same citekey
       addResult = { ...addResult, id: addResult.id + sfx, citekey: addResult.citekey + sfx };
     }
-    refs.unshift(addResult); selId = addResult.id; filter = 'all';
+    const added = addResult;
+    refs.unshift(added); selId = added.id; filter = 'all';
     adding = false; addResult = undefined; addInput = ''; addError = '';
+    attachPrompt = added;   // offer to attach a PDF/EPUB, fetch one, or skip
   }
 
   function copy() { try { navigator.clipboard.writeText(exportText); } catch (e) {} }
@@ -161,21 +279,36 @@
         <button class="libfilter" class:on={filter === f.k} onclick={() => (filter = f.k)}><span>{f.l}</span><span class="ct">{count(f.k)}</span></button>
       {/if}
     {/each}
-    {#if refFolders.length || hasUnfiled || dragRef}
-      <div class="libhead" style="margin-top:.9rem">Folders</div>
-      <button class="libfilter" class:on={folderFilter === null} onclick={() => (folderFilter = null)}><span>All folders</span></button>
-      {#each refFolders as fp}
-        <button class="libfilter" class:on={folderFilter === fp} class:dropon={dropFolder === fp}
-          ondragover={(e) => { if (dragRef) { e.preventDefault(); dropFolder = fp; } }} ondragleave={() => { if (dropFolder === fp) dropFolder = undefined; }}
-          ondrop={() => { if (dragRef) { assignFolder(dragRef, fp); dragRef = null; dropFolder = undefined; } }}
-          onclick={() => (folderFilter = fp)}><span>{fp}</span><span class="ct">{folderCount(fp)}</span></button>
-      {/each}
-      <button class="libfilter" class:on={folderFilter === ''} class:dropon={dropFolder === ''}
-        ondragover={(e) => { if (dragRef) { e.preventDefault(); dropFolder = ''; } }} ondragleave={() => { if (dropFolder === '') dropFolder = undefined; }}
+    <div class="lhrow" style="margin-top:.9rem" class:dropon={dropFolder === '__root__'}
+      ondragover={(e) => { if (folderDragAllowed('')) { e.preventDefault(); dropFolder = '__root__'; } }} ondragleave={() => { if (dropFolder === '__root__') dropFolder = undefined; }}
+      ondrop={() => { if (dropFolder === '__root__') onFolderDrop(''); }} role="group">
+      <span class="lh" style="margin:0">{dropFolder === '__root__' ? 'Move to top level' : 'Folders'}</span>
+      <button class="mini" title="New library folder" onclick={ctxNewFolder}>+ Folder</button>
+    </div>
+    {#if newFolderName !== null}
+      <!-- svelte-ignore a11y_autofocus -->
+      <input class="nfinput" autofocus placeholder={renameFolderPath != null ? 'Rename folder' : (newFolderParent ? 'Subfolder of ' + newFolderParent : 'Folder name')} bind:value={newFolderName}
+        onkeydown={(e) => { if (e.key === 'Enter') commitFolderInput(); else if (e.key === 'Escape') { newFolderName = null; renameFolderPath = null; } }} onblur={commitFolderInput} />
+    {/if}
+    <button class="libfilter" class:on={folderFilter === null} onclick={() => (folderFilter = null)}><span>All folders</span><span class="ct">{refs.length}</span></button>
+    {#each folderTree as r}
+      <button class="frow" data-libfolder={r.path} class:active={folderFilter === r.path} class:dropon={dropFolder === r.path} class:dragging={dragFolder === r.path}
+        style="padding-left:{6 + r.depth * 12}px" draggable="true"
+        ondragstart={() => (dragFolder = r.path)} ondragend={() => { dragFolder = null; dropFolder = undefined; }}
+        ondragover={(e) => { if (folderDragAllowed(r.path)) { e.preventDefault(); dropFolder = r.path; } }} ondragleave={() => { if (dropFolder === r.path) dropFolder = undefined; }}
+        ondrop={() => { if (dropFolder === r.path) onFolderDrop(r.path); }}
+        onclick={() => { if (folderFilter === r.path) toggleLibFolder(r.path); else { folderFilter = r.path; libCollapsed[r.path] = false; } }}>
+        <span class="caret" role="button" tabindex="-1" onclick={(e) => { e.stopPropagation(); toggleLibFolder(r.path); }}>{r.hasChildren ? (r.collapsed ? '▸' : '▾') : '·'}</span><span class="fn">{r.name}</span><span class="fcount">{folderCount(r.path)}</span>
+      </button>
+    {/each}
+    {#if hasUnfiled || dragRef}
+      <button class="libfilter" class:on={folderFilter === ''} class:dropon={dropFolder === '__unfiled__'}
+        ondragover={(e) => { if (dragRef) { e.preventDefault(); dropFolder = '__unfiled__'; } }} ondragleave={() => { if (dropFolder === '__unfiled__') dropFolder = undefined; }}
         ondrop={() => { if (dragRef) { assignFolder(dragRef, ''); dragRef = null; dropFolder = undefined; } }}
         onclick={() => (folderFilter = '')}><span>Unfiled</span></button>
     {/if}
-    <button class="libbtn pri" style="margin-top:.9rem" onclick={() => { adding = true; addResult = undefined; addInput = ''; addError = ''; addBusy = false; fetchToken++; }}>＋ Add reference</button>
+    {#if uiMsg}<div class="libnote">{uiMsg}</div>{/if}
+    <button class="libbtn pri" style="margin-top:.9rem" onclick={ctxNewRef}>＋ Add reference</button>
     <button class="libbtn" onclick={() => { exportScope = 'all'; }}>⇩ Export library</button>
     {#if selected.size}
       <button class="libbtn pri" onclick={() => { exportScope = 'selected'; }}>⇩ Export selected ({selected.size})</button>
@@ -184,15 +317,24 @@
   </div>
 
   <div class="libcol refs">
+    <div class="libsearch">
+      <span class="lmag">⌕</span>
+      <input placeholder="Search title, author, year, DOI, keyword…" bind:value={libQuery}
+        onkeydown={(e) => { if (e.key === 'Escape') { libQuery = ''; e.currentTarget.blur(); } }} />
+      {#if libQuery}<button class="libsearchx" title="Clear search" aria-label="Clear search" onclick={() => (libQuery = '')}>✕</button>{/if}
+    </div>
+    {#if libQuery.trim()}<div class="libsearchmeta">{filtered.length} {filtered.length === 1 ? 'match' : 'matches'}{filter !== 'all' || folderFilter != null ? ' in filter' : ''}</div>{/if}
     {#each filtered as r (r.id)}
       <button class="refrow" class:on={r.id === selId} class:sel={selected.has(r.id)} data-ref={r.id} draggable="true"
         ondragstart={() => (dragRef = r.id)} ondragend={() => { dragRef = null; dropFolder = undefined; }} onclick={() => (selId = r.id)}>
         <span class="refsel" role="checkbox" tabindex="-1" aria-checked={selected.has(r.id)} title="Select for bulk export"
           onclick={(e) => { e.stopPropagation(); toggleSel(r.id); }}>{selected.has(r.id) ? '☑' : '☐'}</span>
-        <div class="rtitle"><span class="rtype">{TYPELABEL[r.type] || r.type}</span>{r.title}</div>
+        <div class="rtitle"><span class="rtype">{TYPELABEL[r.type] || r.type}</span>{r.title}{#if r.attachment}<span class="attclip" title="Has a reader file">▤</span>{/if}</div>
         <div class="rmeta">{shortAuth(r.authors)} · {r.year}{r.container ? ' · ' + r.container : r.publisher ? ' · ' + r.publisher : ''}</div>
         <div class="rsrc">{#each r.sources || [] as s}<span class="sb">{s}</span>{/each}</div>
       </button>
+    {:else}
+      <div class="rempty" style="padding:1.2rem .2rem">{libQuery.trim() ? 'No reference matches “' + libQuery + '”.' : (refs.length ? 'No references in this view.' : 'Your library is empty — add a reference to begin.')}</div>
     {/each}
   </div>
 
@@ -213,6 +355,15 @@
       <button class="libbtn" onclick={() => { adding = false; addBusy = false; addError = ''; fetchToken++; }}>Cancel</button>
     {:else if sel}
       <div class="libhead">Reference detail</div>
+      {#if attachPrompt && attachPrompt.id === sel.id && !sel.attachment}
+        <div class="attachprompt">
+          <div class="dl">Add a reader copy of this reference?</div>
+          <p class="rmeta" style="margin:.2rem 0 .5rem">Attach a PDF / EPUB (or another reader format) to read and quote it inside Arf — or try fetching an open-access copy.</p>
+          <button class="libbtn pri" onclick={() => { onattach && onattach(sel); attachPrompt = null; }}>＋ Attach a file…</button>
+          <button class="libbtn" onclick={() => { onfetchpdf && onfetchpdf(sel); attachPrompt = null; }}>⇩ Fetch from open access</button>
+          <button class="libbtn" onclick={() => (attachPrompt = null)}>Don't add a file</button>
+        </div>
+      {/if}
       <div class="dfield"><div class="dl">Title</div><div class="dv" style="font-size:18px;color:var(--fg-bright)">{sel.title}</div></div>
       <div class="dfield"><div class="dl">Authors</div><div class="dv">{(sel.authors || []).map((a) => a.g + ' ' + a.f).join(', ')}</div></div>
       <div class="dfield"><div class="dl">Type · Year</div><div class="dv">{TYPELABEL[sel.type] || sel.type} · {sel.year}</div></div>
@@ -227,6 +378,18 @@
       {#if sel.archived}<div class="dfield"><div class="dl">Archived snapshot · Wayback Machine</div><div class="dv"><a href={sel.archived} target="_blank" rel="noopener">web.archive.org/{sel.archivedDate}</a><br>captured {sel.archivedDate} · accessed {sel.accessed || '—'}</div></div>{/if}
       {#if sel.abstract}<div class="dfield"><div class="dl">Abstract</div><div class="dv" style="font-size:14px;color:var(--fg-muted)">{sel.abstract}</div></div>{/if}
       <div class="dfield"><div class="dl">Fetched from</div><div class="rsrc">{#each sel.sources || [] as s}<span class="sb">{s}</span>{/each}</div></div>
+      <div class="dfield"><div class="dl">Reader copy</div><div class="dv">
+        {#if sel.attachment}
+          <div class="rsrc" style="margin:0 0 .4rem"><span class="sb">{(sel.attachment.kind || 'file').toUpperCase()}</span> {sel.attachment.name}</div>
+          <button class="libbtn" style="width:auto;padding:.35rem .8rem" onclick={() => onopenreader && onopenreader(sel)}>▤ Open in reader</button>
+          <button class="libbtn" style="margin-top:.4rem" onclick={() => ondetach && ondetach(sel)}>Remove attachment</button>
+        {:else}
+          <button class="libbtn" onclick={() => onattach && onattach(sel)}>＋ Attach PDF / EPUB…</button>
+          <button class="libbtn" onclick={() => onfetchpdf && onfetchpdf(sel)}>⇩ Fetch open-access PDF</button>
+          {#if sel.abstract}<button class="libbtn" onclick={() => onopenreader && onopenreader(sel)}>▤ Read abstract</button>{/if}
+          {#if !hasVault}<p class="rmeta" style="margin-top:.3rem;opacity:.7">Files are saved in your vault folder — open one in the desktop app to attach.</p>{/if}
+        {/if}
+      </div></div>
       <div class="dfield"><div class="dl">Cite in a note</div><div class="dv"><button class="libbtn" style="width:auto;padding:.35rem .8rem" onclick={() => copyCite(sel)}>Copy [@{sel.citekey}]</button></div></div>
       <button class="libbtn pri" onclick={() => (exportScope = sel.id)}>⇩ Export this reference</button>
       <button class="libbtn" style="margin-top:.5rem;color:var(--danger,#c0392b)" onclick={deleteRef}>Delete reference</button>
@@ -246,6 +409,19 @@
         <button class="libbtn" style="width:auto;margin:0 0 0 auto;padding:.35rem .8rem" onclick={copy}>Copy</button>
       </div>
       <textarea class="exparea" readonly>{exportText}</textarea>
+    </div>
+  </div>
+{/if}
+
+{#if movePick}
+  <div class="scrim" onclick={(e) => { if (e.target === e.currentTarget) movePick = null; }}>
+    <div class="palette">
+      <div class="pg" style="padding:.7rem .9rem .3rem">Move folder to…</div>
+      <div class="presults">
+        {#each moveDestinations(movePick.src) as dest}
+          <button class="prow" onclick={() => doMovePick(dest)}><span class="pt">{dest === '' ? '↑ Top level' : dest}</span></button>
+        {/each}
+      </div>
     </div>
   </div>
 {/if}

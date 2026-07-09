@@ -52,7 +52,7 @@
   function nodeSVG(nd, i, r) {
     const orphan = !hasLinks(nd.id, idx);
     const cls = nd.center ? 'eg-center' : 'eg-node' + (orphan ? ' orphan' : '');
-    let s = '<g class="eg-node-g' + (nd.center ? ' c' : '') + '" data-i="' + i + '" transform="translate(' + nd.x.toFixed(1) + ',' + nd.y.toFixed(1) + ')">';
+    let s = '<g class="eg-node-g' + (nd.center ? ' c' : '') + '" data-i="' + i + '" data-nid="' + esc(nd.id) + '" transform="translate(' + nd.x.toFixed(1) + ',' + nd.y.toFixed(1) + ')">';
     if (nd.center) s += '<circle class="eg-ring" r="' + (r + 5) + '"/>';
     const ndTitle = idx.byId[nd.id] && idx.byId[nd.id].title || 'Untitled';   // a note with no title must not crash the whole graph
     s += '<circle class="' + cls + '" r="' + r + '"><title>' + esc(ndTitle) + '</title></circle>';

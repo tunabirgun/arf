@@ -19,18 +19,35 @@ function yamlStr(s) { return '"' + String(s == null ? '' : s).replace(/\\/g, '\\
 // strip CR/LF from any scalar so a crafted title/id/tag can't inject extra
 // frontmatter lines (a newline in the value would parse as a new YAML key)
 const clean = (v) => String(v == null ? '' : v).replace(/[\r\n]+/g, ' ');
+// The canonical created/updated stay UTC ISO (…Z) so the lexicographic sync-merge
+// comparisons in sync.js keep sorting chronologically. These _local companions record
+// the same instant as system-local wall-clock with its offset (e.g. …+03:00 in Istanbul),
+// so a note's metadata carries both local time and the GMT+0 standard. Derived
+// deterministically from the UTC field, so a self-flush round-trips byte-for-byte.
+export function localISO(utc) {
+  const d = new Date(utc);
+  if (isNaN(d.getTime())) return '';
+  const off = -d.getTimezoneOffset();               // minutes east of UTC, from the system tz
+  const sign = off >= 0 ? '+' : '-', a = Math.abs(off), p = (n) => String(n).padStart(2, '0');
+  return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + 'T' +
+    p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds()) + sign + p(Math.floor(a / 60)) + ':' + p(a % 60);
+}
 export function serialize(note) {
-  const fm = [
+  const created = clean(note.created || new Date().toISOString());
+  const updated = clean(note.updated || new Date().toISOString());
+  const lines = [
     '---',
     'id: ' + clean(note.id),
     'title: ' + yamlStr(clean(note.title || 'Untitled')),
     'tags: [' + (note.tags || []).map((t) => clean(t).replace(/[,\]]/g, ' ').trim()).filter(Boolean).join(', ') + ']',
-    'created: ' + clean(note.created || new Date().toISOString()),
-    'updated: ' + clean(note.updated || new Date().toISOString()),
-    '---',
-    '',
-  ].join('\n');
-  return fm + '\n' + (note.body || '').replace(/\s+$/, '') + '\n';
+    'created: ' + created,
+    'updated: ' + updated,
+  ];
+  const cl = localISO(created), ul = localISO(updated);
+  if (cl) lines.push('created_local: ' + cl);
+  if (ul) lines.push('updated_local: ' + ul);
+  lines.push('---', '');
+  return lines.join('\n') + '\n' + (note.body || '').replace(/\s+$/, '') + '\n';
 }
 
 export function parse(text, opts = {}) {
@@ -145,6 +162,10 @@ export class TauriBackend {
       let entries = []; try { entries = await this.fs.readDir(dir); } catch (e) { return; }
       for (const e of entries) {
         if (e.name.startsWith('.')) continue;
+        // the root attachments/ folder holds reference reader files (PDF/EPUB and also .md/.txt/.html);
+        // never parse them as notes, or a Markdown attachment would appear as a phantom note and get
+        // overwritten with Arf frontmatter on the next save
+        if (!prefix && e.isDirectory && e.name === 'attachments') continue;
         const rel = prefix ? prefix + '/' + e.name : e.name;
         if (e.isDirectory) await walk(this.join(dir, e.name), rel);
         else if (e.name.endsWith('.md')) {
@@ -183,6 +204,19 @@ export class TauriBackend {
   async writeAux(name, text) {
     try { await this.fs.writeTextFile(this.join(this.root, name), text); return true; } catch (e) { return false; }
   }
+  // binary attachments (reference PDFs/EPUBs) live under attachments/ in the vault. The note
+  // loader only reads .md, so these travel with the folder without ever being parsed as notes.
+  async saveBinary(relPath, data) {
+    const abs = this.join(this.root, relPath);
+    const dir = abs.slice(0, abs.lastIndexOf('/'));
+    try { await this.fs.mkdir(dir, { recursive: true }); } catch (e) {}
+    await this.fs.writeFile(abs, data);
+    return relPath;
+  }
+  async readBinary(relPath) {
+    try { return await this.fs.readFile(this.join(this.root, relPath)); } catch (e) { return null; }
+  }
+  async removeBinary(relPath) { return this.removeByPath(relPath); }
 }
 
 // ---------- entry ----------

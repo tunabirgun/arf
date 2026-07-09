@@ -20,3 +20,15 @@ export function loadRefs() {
 export function saveRefs(refs) {
   try { localStorage.setItem(KEY, JSON.stringify(refs)); return true; } catch (e) { return false; }
 }
+
+// Library folder tree, stored as path strings just like note folders. Persisted so an
+// empty folder (one holding no reference yet) survives — folders otherwise implied by a
+// ref's `folder` field. Travels with the vault via library.json (see App.svelte).
+const LF_KEY = 'arf-libfolders-v0';
+export function loadLibFolders() {
+  try { const raw = localStorage.getItem(LF_KEY); if (raw) { const p = JSON.parse(raw); if (Array.isArray(p)) return p.filter((x) => typeof x === 'string' && x); } } catch (e) {}
+  return [];
+}
+export function saveLibFolders(folders) {
+  try { localStorage.setItem(LF_KEY, JSON.stringify(folders)); return true; } catch (e) { return false; }
+}

@@ -3,6 +3,9 @@ dist/
 .DS_Store
 *.log
 
+# Rust build output (installers are built in CI)
+src-tauri/target/
+
 # test artifacts
 playwright-report/
 test-results/

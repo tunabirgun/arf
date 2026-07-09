@@ -28,7 +28,16 @@ export function folderList(folders, notes) {
   return allFolderPaths(folders, notes).sort((a, b) => a.localeCompare(b));
 }
 
-export function buildFolderRows(folders, notes, collapsed) {
+// `orders` (optional) is { notes: {id: rank}, folders: {path: rank} } for manual drag-to-reorder.
+// An item with a rank sorts by it; items without a rank keep the previous alphabetical order,
+// so an un-reordered vault (and every caller that omits `orders`) is unchanged.
+export function buildFolderRows(folders, notes, collapsed, orders = null) {
+  const noteOrder = (orders && orders.notes) || null;
+  const folderOrder = (orders && orders.folders) || null;
+  const nrank = (id) => (noteOrder && noteOrder[id] != null ? noteOrder[id] : Infinity);
+  const frank = (p) => (folderOrder && folderOrder[p] != null ? folderOrder[p] : Infinity);
+  const byFolder = (a, b) => { const ra = frank(a), rb = frank(b); return ra !== rb ? ra - rb : a.localeCompare(b); };
+  const byNote = (a, b) => { const ra = nrank(a.id), rb = nrank(b.id); return ra !== rb ? ra - rb : (a.title || '').localeCompare(b.title || ''); };
   const paths = folderList(folders, notes);
   const childrenOf = {};
   paths.forEach((p) => {
@@ -39,11 +48,11 @@ export function buildFolderRows(folders, notes, collapsed) {
   // key by the SAME canonical path the tree is built from, or a note with a non-canonical
   // folder string (trailing slash, backslash, "./") would never render under its folder
   notes.forEach((n) => { const f = canonFolder(n.folder); (notesOf[f] = notesOf[f] || []).push(n); });
-  Object.keys(notesOf).forEach((k) => notesOf[k].sort((a, b) => (a.title || '').localeCompare(b.title || '')));
+  Object.keys(notesOf).forEach((k) => notesOf[k].sort(byNote));
 
   const rows = [];
   function walk(parent, depth) {
-    (childrenOf[parent] || []).sort((a, b) => a.localeCompare(b)).forEach((path) => {
+    (childrenOf[parent] || []).sort(byFolder).forEach((path) => {
       const name = path.slice(path.lastIndexOf('/') + 1);
       const kids = (childrenOf[path] || []).length + (notesOf[path] || []).length;
       const isCollapsed = !!collapsed[path];

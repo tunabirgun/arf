@@ -47,6 +47,20 @@ describe('buildFolderRows', () => {
   it('terminates on a self-referential leading-slash path', () => {
     expect(() => buildFolderRows(['/a'], [], {})).not.toThrow();
   });
+  it('keeps alphabetical order when no explicit order is given (unchanged default)', () => {
+    const ns = [{ id: 'b', title: 'Beta', folder: '' }, { id: 'a', title: 'Alpha', folder: '' }];
+    const rows = buildFolderRows([], ns, {});
+    expect(rows.map((r) => r.note.title)).toEqual(['Alpha', 'Beta']);
+  });
+  it('honors an explicit note order over the alphabetical fallback', () => {
+    const ns = [{ id: 'a', title: 'Alpha', folder: '' }, { id: 'b', title: 'Beta', folder: '' }];
+    const rows = buildFolderRows([], ns, {}, { notes: { a: 1, b: 0 }, folders: {} });
+    expect(rows.map((r) => r.note.id)).toEqual(['b', 'a']);
+  });
+  it('honors an explicit folder order among siblings', () => {
+    const rows = buildFolderRows(['A', 'B'], [], {}, { notes: {}, folders: { A: 1, B: 0 } });
+    expect(rows.filter((r) => r.type === 'folder').map((r) => r.path)).toEqual(['B', 'A']);
+  });
 });
 
 describe('planFolderMove', () => {

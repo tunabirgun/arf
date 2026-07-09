@@ -6,6 +6,46 @@ All notable changes to Arf are recorded here. The format follows
 below matches a `v*` git tag and a GitHub Release; the release notes are generated
 from the matching section of this file.
 
+## [1.6.0] - 2026-07-10
+
+### Added
+- **Side reader.** Open another note, or a reference's attached PDF, EPUB, or article, in a panel
+  beside the editor and write from it. Select a passage and quote it into the open note as an
+  attributed blockquote, or highlight the sentences that matter — from the reader's right-click
+  menu or its header.
+- **Reference attachments.** Attach a PDF, EPUB, or other reader file from your disk, or fetch an
+  open-access copy where one exists, and read it in the side reader. Files are organized under an
+  `attachments/` folder in the vault and travel in the `.arf` bundle.
+- **Library keyword search** across every field — author, title, year, venue, DOI, ISBN, abstract —
+  with prefix and light fuzzy matching, and a **nested folder tree** for references that matches the
+  notes sidebar, including empty folders you make ahead of time.
+- **Drag to reorder** notes and folders in the sidebar; the order is remembered in a sidecar file
+  and travels with the vault.
+- **Specialized right-click menus** for the knowledge graph (nodes and background), the Library
+  (folders and background), and the reader, alongside the existing note, folder, tag, link,
+  citation, editor, and reading-view menus.
+- **Insert images** from the editor toolbar or its right-click menu. In the desktop app images are
+  stored as organized files under `attachments/images/` and shown in the reading view; images export
+  centered and fit to the page, keeping their proportions.
+- A control to turn the **on-device model off** again, not only on.
+- Each note's header now records both **local time** (with the system's UTC offset) and **UTC**, so
+  timestamps read correctly wherever a note was written.
+
+### Changed
+- The **Export dialog** shows only the options that fit the chosen format — Markdown offers a
+  keep-frontmatter toggle; PDF offers page size and margins — instead of PDF page settings for every
+  format.
+- Interface transitions were smoothed throughout and honor the operating system's reduced-motion
+  setting.
+- The `.arf` workspace bundle now carries the Library's folder tree and inlines note images, so the
+  file stays self-contained.
+
+### Fixed
+- A Markdown, text, or HTML file attached to a reference is no longer mistaken for a note.
+- Moving or deleting a note or folder no longer leaves a stale manual-order rank behind.
+- The reader's quote and highlight actions stay reachable even when a link or citation sits under the
+  pointer in the reading text.
+
 ## [1.5.1] - 2026-07-09
 
 ### Fixed

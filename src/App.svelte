@@ -6,21 +6,24 @@
   import { buildIndex, buildVectorizer, related, hasLinks, digestPairs, cosine, sharedTerms } from './lib/graphindex.js';
   import { renderMarkdown, setLinkResolver, setCiteResolver } from './lib/markdown.js';
   import katexCss from 'katex/dist/katex.min.css?inline';   // inlined into exports so math positions correctly outside the app
-  import { loadRefs, saveRefs } from './lib/references.js';
+  import { loadRefs, saveRefs, loadLibFolders, saveLibFolders } from './lib/references.js';
   import { formatRef, CITE_STYLES } from './lib/cite.js';
   import { initEmbedder, embedNotes, cosine as mlCosine, resetEmbedder } from './lib/ml.js';
   const ML_MODELS = { en: 'Xenova/all-MiniLM-L6-v2', multi: 'Xenova/paraphrase-multilingual-MiniLM-L12-v2' };
   import { connectVault, reconnectVault, lastKnownVaultPath, isTauri } from './lib/vaultadapter.js';
+  import { convertFileSrc } from '@tauri-apps/api/core';   // vault-relative note images → a webview-loadable URL in read view
   import Editor from './lib/Editor.svelte';
   import GraphView from './lib/GraphView.svelte';
   import Library from './lib/Library.svelte';
+  import Reader from './lib/Reader.svelte';
 
   const IS_MAC = /Mac|iPhone|iPad|iPod/.test((navigator.platform || '') + ' ' + (navigator.userAgent || ''));
   const MOD = IS_MAC ? '⌘' : 'Ctrl';
-  const APP_VERSION = '1.5.1';
+  const APP_VERSION = '1.6.0';
 
   let notes = $state(loadNotes());
   let refs = $state(loadRefs());        // shared reference library (also used by [@citekey] citations)
+  let libFolders = $state(loadLibFolders());   // the Library's folder tree (persisted; travels via library.json)
   let refJump = $state(null);           // { key } → Library selects that reference
   let bibEnabled = $state((() => { try { return localStorage.getItem('arf-bib') === '1'; } catch (e) { return false; } })());   // append a reference list to notes
   let bibStyle = $state((() => { try { return localStorage.getItem('arf-bibstyle') || 'APA'; } catch (e) { return 'APA'; } })());
@@ -65,10 +68,15 @@
   let ctxMenu = $state(null);   // { x, y, items } — the context-aware right-click menu
   let ctxSub = $state(null);    // reserved for future submenus
   let editorRef = $state(null); // Editor.svelte instance, for clipboard/format from the ctx menu
+  let libraryRef = $state(null); // Library.svelte instance, so the global menu can drive its folder actions
+  let reader = $state(null);    // side-reader descriptor: { kind:'note', id } or a full source object
+  let readerHls = $state([]);   // highlight snippets for the current reader source
   let query = $state('');
   let tagInput = $state('');   // the "+ tag" field in the crumbs bar
   let folders = $state(loadFolders());
   let collapsed = $state({});
+  let orders = $state(loadOrders());   // manual sidebar order: { notes:{id:rank}, folders:{path:rank} }, sidecar order.json
+  let dropEdge = $state(null);         // { kind:'note'|'folder', id?/path?, edge:'before'|'after' } while reordering
   let activeFolder = $state('');
   let newFolderName = $state(null);
   let newFolderParent = $state('');   // where a new folder lands: '' = vault root, or a folder path for a subfolder
@@ -81,7 +89,7 @@
   let deFmt = $state('PDF');
   let dePage = $state('A4');
   let deMargin = $state('Normal');
-  let deOpts = $state({ title: true, numberHeadings: false, keepHeadings: true, fitImages: true });
+  let deOpts = $state({ title: true, numberHeadings: false, keepHeadings: true, fitImages: true, frontmatter: true });
   const PAGE_SIZES = ['A4', 'Letter', 'Legal', 'Tabloid', 'A3', 'A5', 'A6', 'B5', 'Executive'];
   const PAGE_CSS = { A4: 'A4', A3: 'A3', A5: 'A5', A6: 'A6', B5: 'B5', Letter: 'letter', Legal: 'legal', Tabloid: 'ledger', Executive: '7.25in 10.5in' };
 
@@ -113,7 +121,7 @@
     setLinkResolver((t) => byTitle[t] || null);  // resolve wikilinks before parsing
     citeDisambig;                                // depend on refs/disambiguation so citations re-render
     setCiteResolver(citeResolver);
-    return current ? renderMarkdown(current.body) : '';
+    return rewriteVaultImages(current ? renderMarkdown(current.body) : '');
   });
   // optional end-of-note bibliography: the references this note cites via [@key], in the chosen style
   function buildBibHTML(n) {
@@ -128,12 +136,24 @@
   $effect(() => { try { localStorage.setItem('arf-bib', bibEnabled ? '1' : '0'); localStorage.setItem('arf-bibstyle', bibStyle); } catch (e) {} });
   const allTags = $derived(Object.keys(idx.tagIndex).sort());
   const listNotes = $derived(tagFilter ? notes.filter((n) => (idx.noteTags[n.id] || []).includes(tagFilter)) : notes);
-  const folderRows = $derived(buildFolderRows(folders, notes, collapsed));
+  const folderRows = $derived(buildFolderRows(folders, notes, collapsed, orders));
   // the reference library lives at the vault root as references.json and travels with the folder;
   // localStorage stays as the cache. Reads happen at connect, writes on every change (debounced).
   let refsTimer;
   $effect(() => { saveRefs(refs); clearTimeout(refsTimer); refsTimer = setTimeout(refsToVault, 500); return () => clearTimeout(refsTimer); });
   async function refsToVault() { if (!vaultBackend || refsLoading || !refsLoaded) return; try { await vaultBackend.writeAux('references.json', JSON.stringify(refs, null, 2)); } catch (e) {} }
+  // Library folder tree persists to localStorage and, debounced, to the vault's library.json so it
+  // travels with the folder. Gated by refsLoaded (shared load latch) so a startup write can't clobber disk.
+  let libTimer;
+  $effect(() => { saveLibFolders(libFolders); clearTimeout(libTimer); libTimer = setTimeout(libFoldersToVault, 500); return () => clearTimeout(libTimer); });
+  async function libFoldersToVault() { if (!vaultBackend || refsLoading || !refsLoaded) return; try { await vaultBackend.writeAux('library.json', JSON.stringify({ folders: libFolders }, null, 2)); } catch (e) {} }
+  async function libFoldersFromVault(b, replace = false) {
+    try {
+      const raw = await b.readAux('library.json');
+      if (raw) { const disk = JSON.parse(raw); const list = Array.isArray(disk?.folders) ? disk.folders.filter((x) => typeof x === 'string' && x) : []; libFolders = replace ? list : [...new Set([...libFolders, ...list])]; }
+      else if (replace) libFolders = [];
+    } catch (e) { if (replace) libFolders = []; }
+  }
   // replace=true on a vault switch: adopt only the new vault's references (no old-vault carry-over);
   // guarded by refsLoading so the debounced write-back can't clobber references.json before this read finishes
   async function refsFromVault(b, replace = false) {
@@ -202,6 +222,9 @@
     }, ML_MODELS[mlModel]);
   }
   function enableML() { mlEnabled = true; try { localStorage.setItem('arf-ml', '1'); } catch (e) {} startML(); }
+  // turn the on-device model off again: tear down the worker, drop its vectors, fall back to TF-IDF.
+  // mlEnabled must go false before mlStatus so the (mlEnabled && off → startML) effect can't relaunch it.
+  function disableML() { mlEnabled = false; try { localStorage.setItem('arf-ml', '0'); } catch (e) {} resetEmbedder(); mlStatus = 'off'; mlPct = 0; mlVecs = {}; }
   // switch embedding model (English vs multilingual): reload the worker and re-embed under the new key
   function setModel(m) {
     if (m === mlModel) return;
@@ -265,6 +288,7 @@
           // sidebar repaints instantly; do NOT re-save them (that would churn/rename files
           // in the folder we just opened). Clear all old-vault state for a clean slate.
           refsLoading = true; _conflicts.clear(); pendingDelete.clear(); saveTombstones(); activeFolder = ''; tagFilter = null;
+          orders = { notes: {}, folders: {} }; reader = null;   // start the new vault's sidecar order/reader clean; ordersFromVault re-reads its own
           adopt(existing);
           folders = [...new Set(existing.map((n) => n.folder).filter(Boolean))]; saveFolders(folders);
         } else {
@@ -287,6 +311,8 @@
         needVault = false; vaultMissing = null;
         setWinTitle(b.name);
         await refsFromVault(b, switching);      // replace refs on a switch; guarded so the write-back can't clobber references.json
+        await libFoldersFromVault(b, switching); // adopt the vault's library folder tree the same way
+        await ordersFromVault(b);                // adopt the vault's manual sidebar order (order.json)
       }
     } catch (e) {} finally { vaultBusy = false; }
   }
@@ -362,7 +388,10 @@
   let importMsg = $state('');
   let importMsgTimer;
   async function exportWorkspace() {
-    const data = buildBundle(notes, folders, refs, APP_VERSION, new Date().toISOString());
+    // inline vault-stored note images into the bundle bodies so the .arf file is fully portable
+    let outNotes = notes;
+    if (isTauri && vaultBackend) { outNotes = []; for (const n of notes) outNotes.push({ ...n, body: await inlineVaultImagesMd(n.body || '') }); }
+    const data = buildBundle(outNotes, folders, refs, APP_VERSION, new Date().toISOString(), libFolders);
     await saveText('arf-workspace-' + new Date().toISOString().slice(0, 10) + '.arf', 'application/json', JSON.stringify(data, null, 2));
   }
   async function importWorkspace(e) {
@@ -376,6 +405,7 @@
       adopt(mergeByUpdated(notes, incoming)); // merge so nothing already here is lost
       if (vaultBackend) for (const n of incoming) dirty.add(n.id); // write imported notes to the vault now, not next launch
       if (Array.isArray(data.folders)) { folders = mergeFolders(folders, data.folders); saveFolders(folders); }
+      if (Array.isArray(data.libFolders)) libFolders = mergeFolders(libFolders, data.libFolders);   // library tree from an older/newer bundle merges in; absence is fine
       if (Array.isArray(data.refs)) refs = mergeRefs(refs, data.refs);
       importMsg = '✓ Imported ' + incoming.length + ' notes.';
     } catch (err) { importMsg = '⚠ ' + (err.message || 'Could not read that file'); }
@@ -415,6 +445,8 @@
           flushVault();
         } else { for (const n of notes) { try { await b.saveNote(n); } catch (e) {} } } // reconnected to an emptied folder → re-seed it
         refsFromVault(b);
+        libFoldersFromVault(b);
+        ordersFromVault(b);
       } catch (e) {}
     })();
   });
@@ -453,6 +485,7 @@
     const dest = canonFolder(folder);
     if (canonFolder(n.folder) === dest) return; // already there — no churn
     n.folder = dest; n.updated = new Date().toISOString(); markDirty(id); persist();
+    clearNoteOrder(id);   // moved to a new folder → sort alphabetically there, not by its old rank
   }
   // move/nest a folder subtree under destParent ('' = vault root); reparents its subfolders and notes
   function moveFolder(src, destParent) {
@@ -465,14 +498,81 @@
     }
     if (collapsed[plan.src] != null) { collapsed[plan.newPath] = collapsed[plan.src]; delete collapsed[plan.src]; }
     if (activeFolder === plan.src || activeFolder.startsWith(plan.src + '/')) activeFolder = plan.reparent(activeFolder);
+    clearFolderOrdersUnder(plan.src);   // old paths no longer exist; the moved folder sorts fresh in its new parent
     saveFolders(folders); persist();
+  }
+  // --- manual reordering (drag to change order) — persisted in an order.json sidecar so it
+  // travels with the vault and never touches note frontmatter or the tested merge path ---
+  function loadOrders() { try { const raw = localStorage.getItem('arf-order-v0'); if (raw) { const p = JSON.parse(raw); if (p && typeof p === 'object') return { notes: p.notes || {}, folders: p.folders || {} }; } } catch (e) {} return { notes: {}, folders: {} }; }
+  let orderTimer;
+  function persistOrders() { try { localStorage.setItem('arf-order-v0', JSON.stringify(orders)); } catch (e) {} clearTimeout(orderTimer); orderTimer = setTimeout(ordersToVault, 500); }
+  async function ordersToVault() { if (!vaultBackend) return; try { await vaultBackend.writeAux('order.json', JSON.stringify(orders)); } catch (e) {} }
+  async function ordersFromVault(b) { try { const raw = await b.readAux('order.json'); if (raw) { const p = JSON.parse(raw); if (p && typeof p === 'object') orders = { notes: p.notes || {}, folders: p.folders || {} }; } } catch (e) {} }
+  // drop a stale manual-order rank when an item leaves its sibling group, so a moved/reparented note
+  // sorts alphabetically in its new home instead of carrying its old rank (and a recreated folder of
+  // the same name can't inherit a deleted folder's rank)
+  function clearNoteOrder(id) { if (orders.notes[id] == null) return; const no = { ...orders.notes }; delete no[id]; orders = { ...orders, notes: no }; persistOrders(); }
+  function clearFolderOrdersUnder(path) { let ch = false; const fo = { ...orders.folders }; for (const k in fo) if (k === path || k.startsWith(path + '/')) { delete fo[k]; ch = true; } if (ch) { orders = { ...orders, folders: fo }; persistOrders(); } }
+  const folderParent = (p) => (p.includes('/') ? p.slice(0, p.lastIndexOf('/')) : '');
+  // renumber a whole sibling group 0..n-1 in its new visual order, so the group becomes fully
+  // ordered (no Infinity/explicit mix) and later inserts stay predictable
+  function reorderNote(dragId, targetId, edge) {
+    const drag = notes.find((n) => n.id === dragId), target = notes.find((n) => n.id === targetId);
+    if (!drag || !target || dragId === targetId) return;
+    const folder = canonFolder(target.folder);
+    if (canonFolder(drag.folder) !== folder) return;   // only reorder within the same folder
+    const sibs = folderRows.filter((r) => r.type === 'note' && canonFolder(r.note.folder) === folder).map((r) => r.note.id);
+    const without = sibs.filter((id) => id !== dragId);
+    let at = without.indexOf(targetId); if (at < 0) return;
+    at = edge === 'before' ? at : at + 1;
+    without.splice(at, 0, dragId);
+    const no = { ...orders.notes }; without.forEach((id, i) => (no[id] = i));
+    orders = { ...orders, notes: no }; persistOrders();
+  }
+  function reorderFolder(dragPath, targetPath, edge) {
+    dragPath = canonFolder(dragPath); targetPath = canonFolder(targetPath);
+    if (!dragPath || dragPath === targetPath || folderParent(dragPath) !== folderParent(targetPath)) return;
+    const par = folderParent(targetPath);
+    const sibs = folderRows.filter((r) => r.type === 'folder' && folderParent(r.path) === par).map((r) => r.path);
+    const without = sibs.filter((p) => p !== dragPath);
+    let at = without.indexOf(targetPath); if (at < 0) return;
+    at = edge === 'before' ? at : at + 1;
+    without.splice(at, 0, dragPath);
+    const fo = { ...orders.folders }; without.forEach((p, i) => (fo[p] = i));
+    orders = { ...orders, folders: fo }; persistOrders();
+  }
+  // decide from the pointer's Y whether a drag over a row means "reorder before/after it"
+  // (same-container sibling) rather than "move into". Sets dropEdge, or clears it for move-into.
+  function noteRowDragOver(e, note) {
+    if (!dragItem) return false;
+    if (dragItem.type === 'note' && dragItem.id !== note.id) {
+      const drag = notes.find((n) => n.id === dragItem.id);
+      if (drag && canonFolder(drag.folder) === canonFolder(note.folder)) {
+        e.preventDefault();
+        const rect = e.currentTarget.getBoundingClientRect();
+        dropEdge = { kind: 'note', id: note.id, edge: (e.clientY - rect.top) < rect.height / 2 ? 'before' : 'after' };
+        dropOn = null; return true;
+      }
+    }
+    return false;
+  }
+  function folderRowDragOver(e, path) {
+    if (!dragItem || dragItem.type !== 'folder' || dragItem.path === path) return false;
+    if (folderParent(canonFolder(dragItem.path)) !== folderParent(canonFolder(path))) return false;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const y = (e.clientY - rect.top) / rect.height;
+    // middle band nests INTO the folder (existing behaviour); top/bottom edge reorders siblings
+    if (y > 0.28 && y < 0.72) return false;
+    e.preventDefault();
+    dropEdge = { kind: 'folder', path, edge: y <= 0.28 ? 'before' : 'after' };
+    dropOn = null; return true;
   }
   // --- sidebar drag & drop: move notes into folders, nest folders under folders ---
   function onDragStart(e, item) {
     dragItem = item;
     try { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', item.type + ':' + (item.id || item.path)); } catch (x) {}
   }
-  function onDragEnd() { dragItem = null; dropOn = null; }
+  function onDragEnd() { dragItem = null; dropOn = null; dropEdge = null; }
   function dragAllowed(target) { // '' or a folder path
     if (!dragItem) return false;
     if (dragItem.type === 'folder') { const s = canonFolder(dragItem.path), t = canonFolder(target); if (t === s || t.startsWith(s + '/')) return false; }
@@ -482,10 +582,21 @@
   function onDrop(e, target) {
     e.preventDefault();
     const d = dragItem, ok = dragAllowed(target);
-    dragItem = null; dropOn = null;
+    dragItem = null; dropOn = null; dropEdge = null;
     if (!d || !ok) return;
     if (d.type === 'note') moveNote(d.id, target);
     else moveFolder(d.path, target);
+  }
+  function isEdge(kind, key, edge) { return !!dropEdge && dropEdge.kind === kind && (kind === 'note' ? dropEdge.id : dropEdge.path) === key && dropEdge.edge === edge; }
+  function onNoteRowDrop(e, note) {
+    e.preventDefault();
+    if (dropEdge && dropEdge.kind === 'note') { const id = dragItem && dragItem.id; dragItem = null; dropOn = null; const edge = dropEdge; dropEdge = null; reorderNote(id, edge.id, edge.edge); return; }
+    onDrop(e, canonFolder(note.folder));
+  }
+  function onFolderRowDrop(e, path) {
+    e.preventDefault();
+    if (dropEdge && dropEdge.kind === 'folder') { const p = dragItem && dragItem.path; dragItem = null; dropOn = null; const edge = dropEdge; dropEdge = null; reorderFolder(p, edge.path, edge.edge); return; }
+    onDrop(e, path);
   }
 
   function esc(s) { return (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
@@ -494,7 +605,7 @@
     const css = '@page{size:' + size + ';margin:' + m + ';}'
       + "body{font-family:'EB Garamond',Georgia,serif;font-size:12pt;line-height:1.6;color:#111;max-width:40em;margin:0 auto;}"
       + 'h1{font-size:22pt}h2{font-size:16pt}h1,h2,h3{font-weight:600;' + (o.keepHeadings ? 'break-after:avoid;page-break-after:avoid;' : '') + '}'
-      + (o.fitImages ? 'img{max-width:100%;height:auto}pre,table{max-width:100%;overflow-x:auto;break-inside:avoid}' : '')
+      + (o.fitImages ? 'img{display:block;max-width:100%;max-height:88vh;height:auto;margin:1em auto;break-inside:avoid}pre,table{max-width:100%;overflow-x:auto;break-inside:avoid}' : 'img{display:block;max-width:100%;height:auto;margin:1em auto}')
       + 'pre{font-family:ui-monospace,Consolas,monospace;font-size:10.5pt;background:#f4f4f2;padding:.6em .8em;border-radius:4px}'
       + 'blockquote{border-left:2px solid #ccc;padding-left:1em;color:#555;font-style:italic}'
       + '.katex{font-size:1em}'
@@ -531,9 +642,9 @@
   async function doExport() {
     const n = current; if (!n) return;
     const slug = (n.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')) || 'note';
-    if (deFmt === 'Markdown') await saveText(slug + '.md', 'text/markdown', toMarkdown(n));
-    else if (deFmt === 'HTML') await saveText(slug + '.html', 'text/html', exportHTML(n));
-    else printHTML(exportHTML(n));
+    if (deFmt === 'Markdown') await saveText(slug + '.md', 'text/markdown', await inlineVaultImagesMd(toMarkdown(n, { frontmatter: deOpts.frontmatter })));
+    else if (deFmt === 'HTML') await saveText(slug + '.html', 'text/html', await inlineVaultImages(exportHTML(n)));
+    else printHTML(await inlineVaultImages(exportHTML(n)));
     docExport = false;
   }
   function open(id) { if (!idx.byId[id]) return; flushSave(); currentId = id; mode = 'read'; view = 'notes'; paletteOpen = false; graphFull = false; }
@@ -563,8 +674,12 @@
 
   function buildCtxItems(t) {
     if (!t || !t.closest) return generalMenu();
+    // the reader is checked first: its rendered content contains wikilinks/citations/tags, but a
+    // selection there must always offer Quote/Highlight — readerMenu folds in the link/cite actions
+    if (t.closest('.readerbody')) return readerMenu(t);
     const cite = t.closest('[data-cite]'); if (cite) return [{ label: 'Open reference', run: () => openReference(cite.getAttribute('data-cite')) }];
     const rref = t.closest('[data-ref]'); if (rref) return refMenu(rref.getAttribute('data-ref'));
+    const libf = t.closest('[data-libfolder]'); if (libf) return libFolderMenu(libf.getAttribute('data-libfolder'));
     const nav = t.closest('[data-nav]'); if (nav) return linkMenu(nav.getAttribute('data-nav'));
     const tag = t.closest('[data-tag]'); if (tag) return tagMenu(tag.getAttribute('data-tag'));
     const nid = t.closest('[data-nid]'); if (nid) return noteMenu(nid.getAttribute('data-nid'));
@@ -572,6 +687,8 @@
     if (t.closest('.cm-editor')) return editorMenu();
     const inp = t.closest('textarea, input:not([type=checkbox]):not([type=file]):not([type=radio])'); if (inp) return inputMenu(inp);
     if (t.closest('.read')) return readMenu();
+    if (t.closest('.overlay')) return graphMenu();
+    if (t.closest('.libview')) return libraryMenu();
     return generalMenu();
   }
   function noteMenu(id) {
@@ -579,6 +696,7 @@
     return [
       { label: 'Open', run: () => open(id) },
       { label: 'Open & edit', run: () => { open(id); mode = 'write'; } },
+      { label: 'Open in reader', run: () => openReaderNote(id) },
       { label: 'Rename', run: () => renameFromCtx(id) },
       { label: 'Duplicate', run: () => dupNote(id) },
       { label: 'Move to…', run: () => { movePick = { kind: 'note', id }; closeCtx(); } },
@@ -595,6 +713,7 @@
     return [
       { label: 'Open note', run: () => open(id) },
       { label: 'Open & edit', run: () => { open(id); mode = 'write'; } },
+      { label: 'Open in reader', run: () => openReaderNote(id) },
       { label: 'Copy wikilink', run: () => copyWikilink(id) },
     ];
   }
@@ -618,6 +737,36 @@
     if (!window.confirm('Delete the reference “' + (r.title || r.citekey) + '”?\n\nCitations to it in your notes will show as unknown until you re-add it.')) return;
     refs = refs.filter((x) => x.id !== id);
     queueMicrotask(refsToVault);   // flush references.json now so it can't resurrect on next launch
+  }
+  function libFolderMenu(path) {
+    return [
+      { label: 'Show references here', run: () => libraryRef?.ctxSelectFolder(path) },
+      { label: 'New subfolder', run: () => libraryRef?.ctxNewSubfolder(path) },
+      { label: 'Rename…', run: () => libraryRef?.ctxRenameFolder(path) },
+      { label: 'Move to…', run: () => libraryRef?.ctxMoveFolder(path) },
+      { sep: true },
+      { label: 'Delete folder', danger: true, run: () => libraryRef?.ctxDeleteFolder(path) },
+    ];
+  }
+  function graphMenu() {
+    return [
+      { label: 'Close graph', run: () => (graphFull = false) },
+      { sep: true },
+      { label: 'New note', run: () => { graphFull = false; create(); } },
+      { label: 'Search…', run: () => { graphFull = false; paletteOpen = true; query = ''; } },
+      { label: theme === 'dark' ? 'Light theme' : 'Dark theme', run: toggleTheme },
+    ];
+  }
+  function libraryMenu() {
+    return [
+      { label: 'Add reference…', run: () => libraryRef?.ctxNewRef() },
+      { label: 'New folder', run: () => libraryRef?.ctxNewFolder() },
+      { sep: true },
+      { label: 'Notes', run: () => (view = 'notes') },
+      { label: 'Knowledge graph', run: () => (graphFull = true) },
+      { label: theme === 'dark' ? 'Light theme' : 'Dark theme', run: toggleTheme },
+      { label: 'Settings', run: () => (settingsOpen = true) },
+    ];
   }
   function folderMenu(path) {
     return [
@@ -645,6 +794,8 @@
       { label: 'Italic', disabled: !has, run: () => editorRef?.edFormat('italic') },
       { label: 'Inline code', disabled: !has, run: () => editorRef?.edFormat('code') },
       { label: 'Link', run: () => editorRef?.edFormat('link') },
+      { sep: true },
+      { label: 'Insert image…', run: () => editorRef?.edInsertImage() },
     ];
   }
   function inputMenu(el) {
@@ -723,7 +874,8 @@
     const note = n;
     notes = notes.filter((x) => x.id !== id);
     if (currentId === id) currentId = notes[0]?.id ?? null;
-    dirty.delete(id);
+    dirty.delete(id); clearNoteOrder(id);
+    if (reader && reader.kind === 'note' && reader.id === id) reader = null;   // don't leave the reader pointed at a deleted note
     if (vaultBackend) { pendingDelete.add(id); saveTombstones(); }   // tombstone first: an in-flight first-save (no _path yet) must not resurrect the note
     closeCtx();
     writeNow();
@@ -758,16 +910,20 @@
     for (const n of notes) { const f = canonFolder(n.folder); if (f === src || f.startsWith(src + '/')) { n.folder = re(f); n.updated = new Date().toISOString(); markDirty(n.id); } }
     if (collapsed[src] != null) { collapsed[newPath] = collapsed[src]; delete collapsed[src]; }
     if (activeFolder === src || activeFolder.startsWith(src + '/')) activeFolder = re(activeFolder);
+    clearFolderOrdersUnder(src);   // old folder paths are gone; the renamed folder sorts fresh
     saveFolders(folders); persist();
   }
   function deleteFolder(path) {
     path = canonFolder(path); if (!path) return;
     const parent = path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '';
     const reDesc = (p) => { const suf = p.slice(path.length + 1); return parent ? parent + '/' + suf : suf; };
+    const reparentedIds = notes.filter((n) => canonFolder(n.folder) === path).map((n) => n.id);   // notes moving up to the parent lose their sibling context
     folders = [...new Set(folders.flatMap((p) => p === path ? [] : (p.startsWith(path + '/') ? [reDesc(p)] : [p])))];
     for (const n of notes) { const f = canonFolder(n.folder); if (f === path) { n.folder = parent; n.updated = new Date().toISOString(); markDirty(n.id); } else if (f.startsWith(path + '/')) { n.folder = reDesc(f); n.updated = new Date().toISOString(); markDirty(n.id); } }
     if (activeFolder === path) activeFolder = parent; else if (activeFolder.startsWith(path + '/')) activeFolder = reDesc(activeFolder);
     if (collapsed[path] != null) delete collapsed[path];
+    if (reparentedIds.length) { const no = { ...orders.notes }; let ch = false; for (const id of reparentedIds) if (no[id] != null) { delete no[id]; ch = true; } if (ch) orders = { ...orders, notes: no }; }
+    clearFolderOrdersUnder(path);   // and drop the deleted folder's ranks so a same-named folder can't inherit them
     saveFolders(folders); persist(); closeCtx();
   }
   // "Move to…" picker (menu path parallel to drag & drop): { kind, id?/src? }
@@ -937,6 +1093,188 @@
     refJump = { key };
     view = 'library';
   }
+
+  // --- side reader: read a note / reference while writing, quote + highlight from it ---
+  // resolve the descriptor to a live source: a note source re-reads the note's current body so
+  // an edit to it reflects in the reader; file/pdf/text sources are passed through as-is.
+  const readerSource = $derived.by(() => {
+    const r = reader; if (!r) return null;
+    if (r.kind === 'note') { const n = notes.find((x) => x.id === r.id); return n ? { kind: 'note', key: 'note:' + n.id, title: n.title, body: n.body } : null; }
+    return r;
+  });
+  const READER_HL_KEY = 'arf-reader-hl-v0';
+  function loadReaderHls(k) { try { const m = JSON.parse(localStorage.getItem(READER_HL_KEY) || '{}'); return Array.isArray(m[k]) ? m[k] : []; } catch (e) { return []; } }
+  function saveReaderHls(k, list) { try { const m = JSON.parse(localStorage.getItem(READER_HL_KEY) || '{}'); if (list && list.length) m[k] = list; else delete m[k]; localStorage.setItem(READER_HL_KEY, JSON.stringify(m)); } catch (e) {} }
+  $effect(() => { const k = readerSource?.key; readerHls = k ? loadReaderHls(k) : []; });
+  function openReaderNote(id) { if (idx.byId[id]) { reader = { kind: 'note', id }; view = 'notes'; } }
+  function closeReader() { reader = null; }
+  function addHighlight(text) {
+    const k = readerSource?.key, t = (text || '').trim(); if (!k || t.length < 3) return;
+    if (!readerHls.includes(t)) { readerHls = [...readerHls, t]; saveReaderHls(k, readerHls); }
+  }
+  // insert the selected passage as a Markdown blockquote at the cursor in the open note, attributed
+  // to its source ([[note]] or [@citekey]). This is the reader → note quote path.
+  function quoteIntoNote(text) {
+    const t = (text || '').trim(); if (!current || !t) return;
+    const src = readerSource;
+    let attrib = '';
+    if (src && src.kind === 'note' && src.title) attrib = ' — from [[' + src.title + ']]';
+    else if (src && src.citekey) attrib = ' — [@' + src.citekey + ']';
+    const quote = t.split(/\n+/).map((l) => '> ' + l).join('\n');
+    const block = quote + (attrib ? '\n>' + attrib : '');
+    if (mode === 'write' && editorRef) editorRef.edPaste('\n' + block + '\n');
+    else { const n = current; n.body = (n.body || '').trimEnd() + '\n\n' + block + '\n'; n.updated = new Date().toISOString(); markDirty(n.id); persist(); if (mode !== 'write') mode = 'write'; }
+  }
+  // open a reference in the reader: its attached file if present (native), else its abstract
+  async function openReferenceInReader(ref) {
+    if (!ref) return;
+    const att = ref.attachment;
+    if (att && att.path && vaultBackend) {
+      const bytes = await vaultBackend.readBinary(att.path);
+      if (bytes) {
+        view = 'notes';
+        if (att.kind === 'pdf') reader = { kind: 'pdf', key: 'ref:' + ref.id, title: ref.title || att.name, citekey: ref.citekey, bytes };
+        else if (att.kind === 'html') reader = { kind: 'html', key: 'ref:' + ref.id, title: ref.title || att.name, citekey: ref.citekey, html: new TextDecoder().decode(bytes) };
+        else if (att.kind === 'epub') reader = { kind: 'epub', key: 'ref:' + ref.id, title: ref.title || att.name, citekey: ref.citekey };
+        else reader = { kind: att.kind === 'md' ? 'md' : 'text', key: 'ref:' + ref.id, title: ref.title || att.name, citekey: ref.citekey, body: new TextDecoder().decode(bytes) };
+        return;
+      }
+    }
+    if (ref.abstract) { view = 'notes'; reader = { kind: 'text', key: 'refabs:' + ref.id, title: ref.title || 'Abstract', citekey: ref.citekey, body: ref.abstract }; return; }
+    notify('Nothing to read yet — attach a file to this reference or add an abstract.');
+  }
+  // --- note images: organized files in the vault (attachments/images/), data-URI on the web ---
+  const IMG_MIME = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml', bmp: 'image/bmp', avif: 'image/avif' };
+  const isExternalSrc = (s) => /^(data:|https?:|blob:|asset:|tauri:)/i.test(s);
+  async function bytesHash(buf) {
+    try { const d = await crypto.subtle.digest('SHA-256', buf); return [...new Uint8Array(d)].slice(0, 10).map((b) => b.toString(16).padStart(2, '0')).join(''); }
+    catch (e) { let h = 0; for (let i = 0; i < buf.length; i++) h = (h * 31 + buf[i]) | 0; return 'img' + (h >>> 0).toString(16); }
+  }
+  // store an inserted image as a content-addressed file under the vault; returns its relative path.
+  // Null → the editor falls back to an inline data URI (web, or if the write fails).
+  async function saveNoteImage(file) {
+    if (!vaultBackend) return null;
+    try {
+      const buf = new Uint8Array(await file.arrayBuffer());
+      const ext = ((file.name || '').split('.').pop() || 'png').toLowerCase().replace(/[^a-z0-9]/g, '') || 'png';
+      const rel = 'attachments/images/' + (await bytesHash(buf)) + '.' + ext;
+      await vaultBackend.saveBinary(rel, buf);
+      return rel;
+    } catch (e) { return null; }
+  }
+  // read view: rewrite a vault-relative image path to a webview asset URL so it renders in place
+  function rewriteVaultImages(html) {
+    if (!isTauri || !vaultBackend) return html;
+    return html.replace(/(<img\b[^>]*?\bsrc=")([^"]+)(")/gi, (m, a, src, c) => {
+      if (isExternalSrc(src)) return m;
+      try { return a + convertFileSrc(vaultBackend.root.replace(/[\\/]+$/, '') + '/' + src) + c; } catch (e) { return m; }
+    });
+  }
+  function u8ToBase64(bytes) { let bin = ''; const c = 0x8000; for (let i = 0; i < bytes.length; i += c) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + c)); return btoa(bin); }
+  async function vaultImageDataURI(src) {
+    try { const b = await vaultBackend.readBinary(src); if (!b) return null; const ext = (src.split('.').pop() || '').toLowerCase(); return 'data:' + (IMG_MIME[ext] || 'application/octet-stream') + ';base64,' + u8ToBase64(b instanceof Uint8Array ? b : new Uint8Array(b)); }
+    catch (e) { return null; }
+  }
+  // export: inline vault-relative images as data URIs so the standalone HTML/PDF/Markdown is self-contained
+  async function inlineVaultImages(html) {
+    if (!isTauri || !vaultBackend) return html;
+    const srcs = new Set(); html.replace(/<img\b[^>]*?\bsrc="([^"]+)"/gi, (m, src) => { if (!isExternalSrc(src)) srcs.add(src); return m; });
+    if (!srcs.size) return html;
+    const map = {}; for (const s of srcs) { const d = await vaultImageDataURI(s); if (d) map[s] = d; }
+    return html.replace(/(<img\b[^>]*?\bsrc=")([^"]+)(")/gi, (m, a, src, c) => map[src] ? a + map[src] + c : m);
+  }
+  async function inlineVaultImagesMd(md) {
+    if (!isTauri || !vaultBackend) return md;
+    const srcs = new Set(); md.replace(/!\[[^\]]*\]\(([^)\s]+)/g, (m, src) => { if (!isExternalSrc(src)) srcs.add(src); return m; });
+    if (!srcs.size) return md;
+    const map = {}; for (const s of srcs) { const d = await vaultImageDataURI(s); if (d) map[s] = d; }
+    return md.replace(/(!\[[^\]]*\]\()([^)\s]+)/g, (m, a, src) => map[src] ? a + map[src] : m);
+  }
+  // --- reference attachments (PDF / EPUB / reader files) — native fs, vault-only ---
+  function attachSlug(ref) { return (ref.citekey || ref.id || 'ref').toString().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'ref'; }
+  function attKind(ext) { ext = (ext || '').toLowerCase(); return ext === 'pdf' ? 'pdf' : ext === 'epub' ? 'epub' : (ext === 'md' || ext === 'markdown') ? 'md' : (ext === 'html' || ext === 'htm') ? 'html' : 'text'; }
+  async function attachLocalFile(ref) {
+    if (!ref) return;
+    if (!vaultBackend) { notify('Attachments need the desktop app with a vault folder open.'); return; }
+    const { open } = await import('@tauri-apps/plugin-dialog');
+    const path = await open({ multiple: false, filters: [{ name: 'Reader files', extensions: ['pdf', 'epub', 'txt', 'md', 'markdown', 'html', 'htm'] }] });
+    if (!path) return;
+    const fs = await import('@tauri-apps/plugin-fs');
+    let data;
+    // read the picked source file separately from the vault write, so the two failure modes get
+    // accurate messages: a picked file outside the granted scope ($HOME/Documents/Desktop/Downloads)
+    // can't be read, which is different from the vault not being writable
+    try { data = await fs.readFile(path); }
+    catch (e) { notify('Couldn’t read that file. Pick one under your Home, Documents, Desktop, or Downloads folder.'); return; }
+    try {
+      const name = String(path).split(/[\\/]/).pop() || 'file';
+      const ext = (name.split('.').pop() || '').toLowerCase();
+      const rel = 'attachments/' + attachSlug(ref) + '.' + (ext || 'bin');
+      await removeStaleAttachment(ref, rel);   // drop a prior attachment at a different path so it isn't orphaned
+      await vaultBackend.saveBinary(rel, data);
+      refs = refs.map((r) => r.id === ref.id ? { ...r, attachment: { path: rel, name, kind: attKind(ext) } } : r);
+      notify('Attached “' + name + '”.');
+    } catch (e) { notify('Couldn’t save the attachment to your vault folder.'); }
+  }
+  // remove a reference's existing attachment file when the new one lands at a different path
+  // (e.g. re-attaching an .epub over a .pdf), so stale binaries don't accumulate in the vault
+  async function removeStaleAttachment(ref, newRel) {
+    const old = ref.attachment && ref.attachment.path;
+    if (old && old !== newRel && vaultBackend) { try { await vaultBackend.removeBinary(old); } catch (e) {} }
+  }
+  // best-effort open-access fetch: arXiv is openly hosted (no CORS wall); otherwise ask OpenAlex for
+  // a best OA location. The actual download can still be blocked by a publisher's CORS policy in the
+  // webview — then we surface the URL so the user can grab it and attach by hand.
+  async function fetchPdfForRef(ref) {
+    if (!ref) return;
+    if (!vaultBackend) { notify('Fetching needs the desktop app with a vault folder open.'); return; }
+    notify('Looking for an open-access PDF…');
+    let url = null;
+    const arx = (ref.doi && ref.doi.match(/arxiv\.(.+)$/i)) || (ref.url && ref.url.match(/arxiv\.org\/(?:abs|pdf)\/([^?]+?)(?:\.pdf)?$/i));
+    if (arx) url = 'https://arxiv.org/pdf/' + arx[1] + '.pdf';
+    if (!url && ref.doi) {
+      try { const r = await fetch('https://api.openalex.org/works/doi:' + encodeURIComponent(ref.doi), { signal: AbortSignal.timeout(10000) }); if (r.ok) { const j = await r.json(); url = (j.best_oa_location && j.best_oa_location.pdf_url) || (j.open_access && j.open_access.oa_url) || null; } } catch (e) {}
+    }
+    if (!url) { notify('No open-access PDF found — you can attach one by hand.'); return; }
+    try {
+      const r = await fetch(url, { signal: AbortSignal.timeout(20000) });
+      if (!r.ok) throw new Error('http ' + r.status);
+      const buf = new Uint8Array(await r.arrayBuffer());
+      await removeStaleAttachment(ref, 'attachments/' + attachSlug(ref) + '.pdf');
+      const rel = 'attachments/' + attachSlug(ref) + '.pdf';
+      await vaultBackend.saveBinary(rel, buf);
+      refs = refs.map((x) => x.id === ref.id ? { ...x, attachment: { path: rel, name: attachSlug(ref) + '.pdf', kind: 'pdf' } } : x);
+      notify('Attached the open-access PDF.');
+    } catch (e) { notify('Found a PDF but couldn’t download it here (the publisher may block it).'); }
+  }
+  async function detachFromRef(ref) {
+    if (!ref || !ref.attachment) return;
+    if (vaultBackend && ref.attachment.path) { try { await vaultBackend.removeBinary(ref.attachment.path); } catch (e) {} }
+    refs = refs.map((r) => r.id === ref.id ? { ...r, attachment: undefined } : r);
+    if (reader && reader.key === 'ref:' + ref.id) closeReader();
+    notify('Removed the attachment.');
+  }
+  function readerMenu(t) {
+    const selText = (typeof window.getSelection === 'function' && String(window.getSelection())) || '';
+    const items = [];
+    if (selText.trim()) items.push(
+      { label: 'Quote into note', disabled: !current, run: () => quoteIntoNote(selText) },
+      { label: 'Highlight', run: () => addHighlight(selText) },
+      { label: 'Copy', run: () => copyText(selText) },
+      { sep: true },
+    );
+    // if the click landed on a rendered link/citation/tag inside the reader, still offer to follow it
+    const nav = t && t.closest && t.closest('[data-nav]');
+    const cite = t && t.closest && t.closest('[data-cite]');
+    const tg = t && t.closest && t.closest('[data-tag]');
+    let followed = false;
+    if (nav && idx.byId[nav.getAttribute('data-nav')]) { items.push({ label: 'Open linked note', run: () => open(nav.getAttribute('data-nav')) }); followed = true; }
+    if (cite) { items.push({ label: 'Open reference', run: () => openReference(cite.getAttribute('data-cite')) }); followed = true; }
+    if (tg) { items.push({ label: 'Filter by #' + tg.getAttribute('data-tag'), run: () => { tagFilter = tg.getAttribute('data-tag'); view = 'notes'; } }); followed = true; }
+    if (followed) items.push({ sep: true });
+    items.push({ label: 'Close reader', run: closeReader });
+    return items;
+  }
   // faint-mark: while writing, does this paragraph resemble another, not-yet-linked note?
   // Judge against the OTHER notes only — including the note being written would let its own
   // text inflate its terms' document-frequency and collapse the similarity. Cache the
@@ -1070,7 +1408,8 @@
   {/if}
 
   {#if view === 'library'}
-    <Library {notes} {idx} onopen={open} bind:refs jumpTo={refJump} onjumped={() => (refJump = null)} onrefsdelete={() => queueMicrotask(refsToVault)} />
+    <Library bind:this={libraryRef} {notes} {idx} onopen={open} bind:refs bind:libFolders jumpTo={refJump} onjumped={() => (refJump = null)} onrefsdelete={() => queueMicrotask(refsToVault)}
+      hasVault={!!vaultBackend} onopenreader={openReferenceInReader} onattach={attachLocalFile} onfetchpdf={fetchPdfForRef} ondetach={detachFromRef} />
   {:else}
     <div class="ws" style="--leftw:{leftW}px; --rightw:{rightW}px">
       <button type="button" class="resizer rz-l" aria-label="Resize left sidebar"
@@ -1109,20 +1448,20 @@
         {:else}
           {#each folderRows as r}
             {#if r.type === 'folder'}
-              <button class="frow" class:active={activeFolder === r.path} class:dropon={dropOn === r.path} class:dragging={dragItem && dragItem.type === 'folder' && dragItem.path === r.path}
+              <button class="frow" class:active={activeFolder === r.path} class:dropon={dropOn === r.path} class:dropbefore={isEdge('folder', r.path, 'before')} class:dropafter={isEdge('folder', r.path, 'after')} class:dragging={dragItem && dragItem.type === 'folder' && dragItem.path === r.path}
                 data-folder={r.path} style="padding-left:{6 + r.depth * 12}px" draggable="true"
                 ondragstart={(e) => onDragStart(e, { type: 'folder', path: r.path })} ondragend={onDragEnd}
-                ondragover={(e) => onDragOver(e, r.path)} ondragleave={() => { if (dropOn === r.path) dropOn = null; }} ondrop={(e) => onDrop(e, r.path)}
+                ondragover={(e) => { if (!folderRowDragOver(e, r.path)) { onDragOver(e, r.path); if (dropEdge && dropEdge.kind === 'folder' && dropEdge.path === r.path) dropEdge = null; } }} ondragleave={() => { if (dropOn === r.path) dropOn = null; if (dropEdge && dropEdge.kind === 'folder' && dropEdge.path === r.path) dropEdge = null; }} ondrop={(e) => onFolderRowDrop(e, r.path)}
                 onclick={() => { if (activeFolder === r.path) toggleFolder(r.path); else { activeFolder = r.path; collapsed[r.path] = false; } }}>
                 <span class="caret" role="button" tabindex="-1" onclick={(e) => { e.stopPropagation(); toggleFolder(r.path); }}>{r.hasChildren ? (r.collapsed ? '▸' : '▾') : '·'}</span><span class="fn">{r.name}</span>{#if r.count}<span class="fcount">{r.count}</span>{/if}
               </button>
             {:else}
-              <button class="item" class:on={r.note.id === currentId} class:dropon={dropOn === '__note__' + r.note.id} class:dragging={dragItem && dragItem.type === 'note' && dragItem.id === r.note.id}
+              <button class="item" class:on={r.note.id === currentId} class:dropon={dropOn === '__note__' + r.note.id} class:dropbefore={isEdge('note', r.note.id, 'before')} class:dropafter={isEdge('note', r.note.id, 'after')} class:dragging={dragItem && dragItem.type === 'note' && dragItem.id === r.note.id}
                 data-nid={r.note.id} style="padding-left:{6 + r.depth * 12}px" draggable="true"
                 ondragstart={(e) => onDragStart(e, { type: 'note', id: r.note.id })} ondragend={onDragEnd}
-                ondragover={(e) => { if (dragAllowed(canonFolder(r.note.folder))) { e.preventDefault(); try { e.dataTransfer.dropEffect = 'move'; } catch (x) {} dropOn = '__note__' + r.note.id; } }}
-                ondragleave={() => { if (dropOn === '__note__' + r.note.id) dropOn = null; }}
-                ondrop={(e) => onDrop(e, canonFolder(r.note.folder))}
+                ondragover={(e) => { if (!noteRowDragOver(e, r.note)) { if (dragAllowed(canonFolder(r.note.folder))) { e.preventDefault(); try { e.dataTransfer.dropEffect = 'move'; } catch (x) {} dropOn = '__note__' + r.note.id; dropEdge = null; } } }}
+                ondragleave={() => { if (dropOn === '__note__' + r.note.id) dropOn = null; if (dropEdge && dropEdge.kind === 'note' && dropEdge.id === r.note.id) dropEdge = null; }}
+                ondrop={(e) => onNoteRowDrop(e, r.note)}
                 onclick={() => open(r.note.id)}>
                 <span class="dot2" class:orphan={invDot(r.note.id) === '○'} title={dotTitle(r.note.id)}>{invDot(r.note.id)}</span>
                 <span class="txt"><span class="t">{r.note.title || 'Untitled'}</span></span>
@@ -1171,7 +1510,7 @@
             </div>
           </div>
           {#if mode === 'write'}
-            {#key currentId}<div class="editor"><Editor bind:this={editorRef} value={current.body} onchange={editBody} resemble={resembleParagraph} oncite={openCitePicker} /></div>{/key}
+            {#key currentId}<div class="editor"><Editor bind:this={editorRef} value={current.body} onchange={editBody} resemble={resembleParagraph} oncite={openCitePicker} onimage={saveNoteImage} /></div>{/key}
           {:else}
             <div class="read" onclick={readClick}>{@html readHTML}{@html bibHTML}</div>
           {/if}
@@ -1180,6 +1519,11 @@
         {/if}
       </main>
 
+      {#if reader}
+        <aside class="rail readerpane">
+          <Reader source={readerSource} highlights={readerHls} canQuote={!!current} onclose={closeReader} onquote={quoteIntoNote} onhighlight={addHighlight} />
+        </aside>
+      {:else}
       <aside class="rail">
         <div class="rh">Referenced in <span>{backlinks.length}</span></div>
         {#if backlinks.length}
@@ -1189,8 +1533,8 @@
         <div class="rh" style="margin-top:1.3rem">Resonance · {mlStatus === 'ready' ? 'MiniLM' : 'on-device'}
           {#if mlStatus === 'off'}<button class="mltoggle" title="Downloads a ~23MB model once; runs entirely on your device" onclick={enableML}>enable AI model</button>
           {:else if mlStatus === 'loading'}<span class="mlstat">↓ model {mlPct}%</span>
-          {:else if mlStatus === 'ready'}<span class="mlstat ok">✓ on device</span>
-          {:else}<span class="mlstat">TF-IDF</span>{/if}
+          {:else if mlStatus === 'ready'}<span class="mlstat ok">✓ on device</span><button class="mltoggle" title="Turn the on-device model off — Resonance falls back to the light TF-IDF method" onclick={disableML}>disable</button>
+          {:else}<span class="mlstat">TF-IDF</span><button class="mltoggle" title="Try loading the on-device model again" onclick={enableML}>retry</button>{/if}
         </div>
         {#if resonance.length}
           {#each resonance as r}
@@ -1204,6 +1548,7 @@
         <div class="rh" style="margin-top:1.3rem">Local graph <button class="expand" onclick={() => (graphFull = true)}>⤢ full</button></div>
         <GraphView {notes} {idx} centerId={currentId} mode="ego" onopen={open} />
       </aside>
+      {/if}
     </div>
   {/if}
 </div>
@@ -1281,12 +1626,23 @@
       <div class="fmtpick">
         {#each ['Markdown', 'HTML', 'PDF'] as f}<button class:on={deFmt === f} onclick={() => (deFmt = f)}>{f}</button>{/each}
       </div>
-      <div class="optrow"><label for="de-page">Page size</label><select id="de-page" class="expsel" bind:value={dePage}>{#each PAGE_SIZES as p}<option>{p}</option>{/each}</select></div>
-      <div class="optrow"><label for="de-margin">Margins</label><select id="de-margin" class="expsel" bind:value={deMargin}><option value="Narrow">Narrow</option><option value="Normal">Normal</option><option value="Wide">Wide</option></select></div>
-      <div class="optrow"><label for="de-t">Include title heading</label><input id="de-t" type="checkbox" bind:checked={deOpts.title} /></div>
-      <div class="optrow"><label for="de-n">Number section headings</label><input id="de-n" type="checkbox" bind:checked={deOpts.numberHeadings} /></div>
-      <div class="optrow"><label for="de-k">Keep headings with their text (no orphans)</label><input id="de-k" type="checkbox" bind:checked={deOpts.keepHeadings} /></div>
-      <div class="optrow"><label for="de-i">Fit images & code to the page (no out-scaling)</label><input id="de-i" type="checkbox" bind:checked={deOpts.fitImages} /></div>
+      {#if deFmt === 'Markdown'}
+        <p class="msub" style="margin-top:.2rem">Plain Markdown — the same text your vault stores, portable to any editor.</p>
+        <div class="optrow"><label for="de-fm">Include YAML frontmatter (id, title, tags, dates)</label><input id="de-fm" type="checkbox" bind:checked={deOpts.frontmatter} /></div>
+      {:else if deFmt === 'HTML'}
+        <p class="msub" style="margin-top:.2rem">A self-contained web page — fonts and math inlined, opens in any browser.</p>
+        <div class="optrow"><label for="de-t">Include title heading</label><input id="de-t" type="checkbox" bind:checked={deOpts.title} /></div>
+        <div class="optrow"><label for="de-n">Number section headings</label><input id="de-n" type="checkbox" bind:checked={deOpts.numberHeadings} /></div>
+        <div class="optrow"><label for="de-i">Fit images & code to the width (no out-scaling)</label><input id="de-i" type="checkbox" bind:checked={deOpts.fitImages} /></div>
+      {:else}
+        <p class="msub" style="margin-top:.2rem">A print-ready document via your browser's Save-as-PDF dialog.</p>
+        <div class="optrow"><label for="de-page">Page size</label><select id="de-page" class="expsel" bind:value={dePage}>{#each PAGE_SIZES as p}<option>{p}</option>{/each}</select></div>
+        <div class="optrow"><label for="de-margin">Margins</label><select id="de-margin" class="expsel" bind:value={deMargin}><option value="Narrow">Narrow</option><option value="Normal">Normal</option><option value="Wide">Wide</option></select></div>
+        <div class="optrow"><label for="de-t2">Include title heading</label><input id="de-t2" type="checkbox" bind:checked={deOpts.title} /></div>
+        <div class="optrow"><label for="de-n2">Number section headings</label><input id="de-n2" type="checkbox" bind:checked={deOpts.numberHeadings} /></div>
+        <div class="optrow"><label for="de-k">Keep headings with their text (no orphans)</label><input id="de-k" type="checkbox" bind:checked={deOpts.keepHeadings} /></div>
+        <div class="optrow"><label for="de-i2">Fit images & code to the page (no out-scaling)</label><input id="de-i2" type="checkbox" bind:checked={deOpts.fitImages} /></div>
+      {/if}
       <button class="libbtn pri" onclick={doExport}>{'Export as ' + deFmt}</button>
     </div>
   </div>
@@ -1348,9 +1704,9 @@
       <div class="setlabel">On-device machine</div>
       <div class="setrow"><span class="sk">Connection suggestions <span class="sh">{mlModel === 'multi' ? 'Multilingual model — runs on your device, ~120 MB once' : 'MiniLM — runs on your device, ~23 MB once'}</span></span>
         {#if mlStatus === 'off'}<button class="setbtn" onclick={enableML}>Enable</button>
-        {:else if mlStatus === 'loading'}<span class="setstat">downloading {mlPct}%…</span>
-        {:else if mlStatus === 'ready'}<span class="setstat ok">✓ on</span>
-        {:else}<span class="setstat">unavailable — using the light method</span>{/if}
+        {:else if mlStatus === 'loading'}<span class="setbtnrow"><span class="setstat">downloading {mlPct}%…</span><button class="setbtn" onclick={disableML}>Cancel</button></span>
+        {:else if mlStatus === 'ready'}<span class="setbtnrow"><span class="setstat ok">✓ on</span><button class="setbtn" onclick={disableML}>Disable</button></span>
+        {:else}<span class="setbtnrow"><span class="setstat">unavailable — using the light method</span><button class="setbtn" onclick={disableML}>Dismiss</button></span>{/if}
       </div>
       <div class="setrow"><span class="sk">Model <span class="sh">English is smaller and faster; Multilingual understands 50+ languages, including Turkish</span></span>
         <div class="seg"><button class:on={mlModel === 'en'} onclick={() => setModel('en')}>English</button><button class:on={mlModel === 'multi'} onclick={() => setModel('multi')}>Multilingual</button></div>

@@ -3,10 +3,10 @@ import { buildBundle, readBundle, normalizeNotes, mergeFolders, mergeRefs } from
 
 describe('buildBundle', () => {
   it('produces the versioned bundle envelope', () => {
-    const b = buildBundle([{ id: 'a' }], ['f'], [{ id: 'r' }], '1.5.0', '2026-01-01T00:00:00.000Z');
+    const b = buildBundle([{ id: 'a' }], ['f'], [{ id: 'r' }], '1.5.0', '2026-01-01T00:00:00.000Z', ['LibFolder']);
     expect(b).toEqual({
       arf: 1, app: 'Arf', version: '1.5.0', exported: '2026-01-01T00:00:00.000Z',
-      notes: [{ id: 'a' }], folders: ['f'], refs: [{ id: 'r' }],
+      notes: [{ id: 'a' }], folders: ['f'], refs: [{ id: 'r' }], libFolders: ['LibFolder'],
     });
   });
 });

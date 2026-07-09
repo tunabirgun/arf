@@ -25,7 +25,9 @@
   <h1>Your data, actually yours</h1>
   <p class="lede">A folder of files that outlives the app.</p>
 
-  <p>The single promise Arf will not break is that your work belongs to you, in a form no company controls. Your vault is a plain folder: one Markdown file per note, your PDFs and images beside them, a small header on each note. You choose that folder at first launch, and the app — native on Windows, macOS, and Linux — reads and writes it directly on your disk. Copy it to a USB stick, keep it in a Drive or Dropbox folder, open it in any editor, and it still makes sense. Everything Arf builds on top — the search index, the fingerprints, the graph layout — lives in one throwaway folder that can be deleted and rebuilt at any time. It is never precious, and it is never the only copy of anything you wrote.</p>
+  <p>The single promise Arf will not break is that your work belongs to you, in a form no company controls. Your vault is a plain folder: one Markdown file per note, an <code>attachments/</code> folder holding the PDFs, EPUBs, and images you add — reference files beside it, note images in <code>attachments/images/</code> — and a small header on each note. You choose that folder at first launch, and the app — native on Windows, macOS, and Linux — reads and writes it directly on your disk. Copy it to a USB stick, keep it in a Drive or Dropbox folder, open it in any editor, and it still makes sense. Everything Arf builds on top — the search index, the fingerprints, the graph layout, the order you dragged things into — lives in small sidecar files that can be deleted and rebuilt at any time. They are never precious, and they are never the only copy of anything you wrote.</p>
+
+  <div class="note"><span class="nlabel">The header on each note</span><p>Every note carries a short YAML header: a stable id, its title and tags, and two timestamps for each of <em>created</em> and <em>updated</em> — one in UTC as the universal standard, one in your machine's local time with its offset (<span class="mono">…+03:00</span> in Istanbul). Arf reads your system's time zone, so the record is correct wherever the note was written, and the UTC field keeps sync ordering unambiguous across devices.</p></div>
 
   <h2>The <span class="mono">.arf</span> bundle</h2>
   <p>Sometimes you want the whole brain as a single object — to email it, to archive a dated backup, to hand it to a collaborator. An <code>.arf</code> file is exactly that: your entire vault, notes and attachments together, packed into one portable file. The working vault stays an open folder; the bundle is just how it travels.</p>
@@ -53,13 +55,13 @@
   <p>If the fast local cache ever becomes unreadable, Arf backs it up under a separate key instead of overwriting it, then rebuilds from the files on your disk.</p>
 
   <h2>Export your writing</h2>
-  <p>Notes leave as easily as they arrive. Any note exports to Markdown, HTML, or PDF, and the document export is built to avoid the things that make an exported file look broken:</p>
+  <p>Notes leave as easily as they arrive. Any note exports to Markdown, HTML, or PDF, and each format shows only the options that fit it — a Markdown export asks whether to keep the YAML header, a PDF export asks for page size and margins — so you are never faced with page settings for a plain-text file. The document export is built to avoid the things that make an exported file look broken:</p>
   <ul>
     <li><strong>No orphaned headings</strong> — a heading is kept with the paragraph that follows it, so none is ever stranded alone at the bottom of a page.</li>
-    <li><strong>No out-scaling</strong> — images and code blocks are fit to the text width instead of spilling past the margin.</li>
+    <li><strong>Images that fit</strong> — pictures are centered and scaled to the page, keeping their proportions, and code blocks are fit to the width instead of spilling past the margin.</li>
     <li><strong>Your typography, preserved</strong> — the page keeps its EB Garamond setting, with page size and margins under your control.</li>
   </ul>
-  <p>Citations in the document resolve through the Library, so a manuscript exports with its reference list intact.</p>
+  <p>Citations in the document resolve through the Library, so a manuscript exports with its reference list intact. A note's images travel with it too: the export inlines them, so the file you hand off is self-contained.</p>
 
   <div class="pager">
     <a class="prev" href="library.html"><span class="dir">Previous</span>← The Library</a>

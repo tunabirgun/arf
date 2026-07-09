@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Writing &amp; reading — Arf</title>
-<meta name="description" content="How you write in Arf: a Markdown editor with an always-visible formatting toolbar that inserts real Markdown, a live reading view, focus mode, code blocks, and LaTeX equations.">
+<meta name="description" content="How you write in Arf: a Markdown editor with an always-visible formatting toolbar that inserts real Markdown, images, a live reading view, a side reader to write from a source, drag-to-order notes and folders, focus mode, code blocks, and LaTeX equations.">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%23faf9f7'/%3E%3Ctext x='50' y='73' text-anchor='middle' font-family='Georgia,serif' font-size='74' font-weight='700' fill='%230a0a0a'%3EA%3C/text%3E%3Ccircle cx='79' cy='67' r='8' fill='%232c4a6e'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="assets/arf-docs.css">
 <script>(function(){try{var t=localStorage.getItem("arf-docs-theme");if(!t&&window.matchMedia&&matchMedia("(prefers-color-scheme: dark)").matches)t="dark";if(t)document.documentElement.setAttribute("data-theme",t);}catch(e){}})();</script>
@@ -37,7 +37,7 @@
   <p>Markdown is fast and precise once you know it, and it keeps your notes portable. But asking a working scientist to learn <code>**bold**</code> and <code>##&nbsp;heading</code> before they can take a note is a real barrier. So the write view is a Markdown editor with a formatting toolbar sitting above it: select some text and click <strong>B</strong>, or a heading, a list, a quote — the button inserts the real Markdown for you, and the syntax is there to see and edit. Lists continue when you press <span class="mono">Enter</span> and stop when you press it on an empty item, the way a word processor behaves.</p>
 
   <div class="grid grid2">
-    <div class="cell"><span class="k">Write</span><h3>Toolbar or syntax</h3><p>Headings, bold, italic, strikethrough, inline code, links, bullet / numbered / task lists, quotes, code blocks, and dividers — from the toolbar or typed by hand. <code>Ctrl/⌘+B</code> and <code>Ctrl/⌘+I</code> work too.</p></div>
+    <div class="cell"><span class="k">Write</span><h3>Toolbar or syntax</h3><p>Headings, bold, italic, strikethrough, inline code, links, bullet / numbered / task lists, quotes, code blocks, dividers, and images — from the toolbar or typed by hand. <code>Ctrl/⌘+B</code> and <code>Ctrl/⌘+I</code> work too.</p></div>
     <div class="cell"><span class="k">Read</span><h3>Rendered page</h3><p>Switch to Read and the note renders: headings and emphasis, wikilinks and citations resolved, math typeset, and task boxes you can tick — the change is written straight back to the file.</p></div>
   </div>
 
@@ -46,7 +46,13 @@
   <div class="note"><span class="nlabel">Why this matters</span><p>The portability promise holds because the file is nothing but Markdown — no proprietary wrapper, no hidden formatting. Open your vault in any other editor and you find exactly the text you wrote.</p></div>
 
   <h2>Tasks, images, and tags</h2>
-  <p>Write a checklist with <code>- [ ]</code> and tick the boxes straight from the reading view — the change is written back to the file. Paste or drop an image and it is embedded inline, so the note stays one self-contained file. And every note carries tags you can add or remove above its title, alongside the <code>#tags</code> you write in the body.</p>
+  <p>Write a checklist with <code>- [ ]</code> and tick the boxes straight from the reading view — the change is written back to the file. Add an image from the toolbar or by pasting or dropping it in: in the desktop app it is filed under the vault's <code>attachments/images/</code> folder and shown in place, and on the web it embeds inline so the note stays self-contained. Either way it renders in the reading view and exports as a centered block, fit to the page and keeping its proportions. And every note carries tags you can add or remove above its title, alongside the <code>#tags</code> you write in the body.</p>
+
+  <h2>Read while you write</h2>
+  <p>The hardest part of writing about a source is keeping the source in view. A <strong>side reader</strong> opens another note, or a reference's attached PDF, EPUB, or article, in a column beside the editor, so you read and take notes on one page. Right-click a passage in the reader and <strong>quote it into the open note</strong> — it lands at your cursor as a blockquote that carries the source's citation or a link back to the note — or <strong>highlight</strong> the sentence you want to remember. It is the difference between transcribing a paper and thinking with it.</p>
+
+  <h2>Keep it in order</h2>
+  <p>Notes and folders are yours to arrange. Drag a note into a folder, nest one folder inside another, or drag either up and down into the exact order you want — the arrangement is remembered and travels with the vault. Nothing here is buried in a menu you have to hunt for: right-click a note, a folder, a link, a tag, a citation, the editor, or the reading view and the actions that fit appear — open, rename, move, quote, filter, export, and the rest.</p>
 
   <h2>Focus mode</h2>
   <p>When you want to write rather than navigate, focus mode hides the side panels, centers the column, and dims every paragraph except the one under your cursor. It is the difference between a workspace and a desk with a single sheet of paper on it. Press <span class="mono">Esc</span> to leave.</p>
