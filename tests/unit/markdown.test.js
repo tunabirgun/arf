@@ -22,6 +22,18 @@ describe('renderMarkdown', () => {
     expect(html).toContain('data-cite="guth1981"');
     expect(html).toContain('Guth 1981');
   });
+  it('in-text-only citation [@!key] still renders the inline marker', () => {
+    const html = renderMarkdown('as shown [@!guth1981]');
+    expect(html).toContain('data-cite="guth1981"');
+    expect(html).toContain('Guth 1981');
+  });
+  it('reference-only citation [@+key] renders no in-text marker (nocite)', () => {
+    const html = renderMarkdown('background [@+guth1981] here');
+    expect(html).not.toContain('data-cite');
+    expect(html).not.toContain('Guth 1981');
+    expect(html).toContain('background');
+    expect(html).toContain('here');
+  });
   it('typesets inline and display math with KaTeX', () => {
     expect(renderMarkdown('$x^2$')).toContain('katex');
     expect(renderMarkdown('$$x^2$$')).toContain('math-display');

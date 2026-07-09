@@ -51,11 +51,19 @@
   let expFmt = $state('BibTeX');
   let adding = $state(false);
   let attachPrompt = $state(null);   // a just-added reference we're offering to attach a reader file to
+  let addMode = $state('id');        // 'id' = paste an identifier · 'search' = search online databases
   let addInput = $state('');
   let addResult = $state(undefined);
   let addBusy = $state(false);
   let addError = $state('');
   let fetchToken = 0;
+  // online free-text search (Crossref + Open Library) → pickable results
+  let searchQ = $state('');
+  let searchResults = $state([]);    // [{ ref, key }] — key is the raw DOI/OL key for a stable {#each}
+  let searchBusy = $state(false);
+  let searchErr = $state('');
+  let searchToken = 0;
+  let searchTimer;
 
   const FETCH_DB = {
     '9780262035613': { type: 'book', citekey: 'goodfellow2016', title: 'Deep Learning', authors: [{ f: 'Goodfellow', g: 'Ian' }, { f: 'Bengio', g: 'Yoshua' }, { f: 'Courville', g: 'Aaron' }], year: 2016, publisher: 'MIT Press', isbn: '9780262035613', sources: ['Open Library', 'Google Books'] },
@@ -175,7 +183,7 @@
   export function ctxDeleteFolder(path) { deleteLibFolder(path); }
   export function ctxMoveFolder(path) { movePick = { src: canonFolder(path) }; }
   export function ctxSelectFolder(path) { folderFilter = path; libCollapsed[path] = false; }
-  export function ctxNewRef() { adding = true; addResult = undefined; addInput = ''; addError = ''; addBusy = false; fetchToken++; }
+  export function ctxNewRef() { adding = true; addMode = 'search'; addResult = undefined; addInput = ''; addError = ''; addBusy = false; fetchToken++; clearSearch(); }
   export function ctxFolderCollapsed(path) { return !!libCollapsed[path]; }
   const exportRefs = $derived(exportScope === 'all' ? refs : exportScope === 'selected' ? refs.filter((r) => selected.has(r.id)) : refs.filter((r) => r.id === exportScope));
   const exportText = $derived(joinRefs(exportRefs, expFmt));
@@ -184,22 +192,38 @@
 
   function mkCitekey(authors, year) {
     // citekeys are conventionally ASCII: fold diacritics (Şahin→sahin, Müller→muller) rather than
-    // dropping the accented letters outright (which would eat the first letter of the name)
+    // dropping the accented letters outright. Turkish ı/İ (and ş/ğ/ç/ö/ü lowercased) have no NFKD
+    // decomposition, so transliterate them explicitly or they'd be stripped (Kılıç→klc, not kilic).
     const raw = (authors && authors[0] && authors[0].f ? authors[0].f : 'ref');
-    const base = raw.normalize('NFKD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]/g, '') || 'ref';
+    const base = raw.normalize('NFKD').replace(/[̀-ͯ]/g, '')
+      .replace(/ı/g, 'i').replace(/İ/g, 'i').replace(/ş/g, 's').replace(/Ş/g, 's').replace(/ğ/g, 'g').replace(/Ğ/g, 'g')
+      .toLowerCase().replace(/[^a-z0-9]/g, '') || 'ref';
     return base + (year || '');
   }
-  async function fetchDOI(doi) {
-    const r = await fetch('https://api.crossref.org/works/' + encodeURIComponent(doi), { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(10000) });
-    if (!r.ok) return null;
-    const m = (await r.json()).message; if (!m) return null;
+  // map one Crossref work object (single-work message, or an item from a /works?query= search — same shape)
+  function mapCrossrefWork(m, doi) {
     const authors = (m.author || []).map((a) => ({ f: a.family || a.name || '', g: a.given || '' })).filter((a) => a.f);
     const dp = (m.issued && m.issued['date-parts'] && m.issued['date-parts'][0]) || (m.published && m.published['date-parts'] && m.published['date-parts'][0]) || [];
     const type = /book|monograph/.test(m.type || '') ? 'book' : m.type === 'posted-content' ? 'preprint' : 'article-journal';
     const title = (Array.isArray(m.title) ? m.title[0] : m.title) || 'Untitled';
     const container = (Array.isArray(m['container-title']) ? m['container-title'][0] : m['container-title']) || '';
     const citekey = mkCitekey(authors, dp[0] || '');
-    return { id: 'r_' + citekey, citekey, type, title, authors, year: dp[0] || '', container, volume: m.volume || '', pages: m.page || '', doi: m.DOI || doi, publisher: m.publisher || '', url: m.URL || '', sources: ['Crossref'] };
+    return { id: 'r_' + citekey, citekey, type, title, authors, year: dp[0] || '', container, volume: m.volume || '', pages: m.page || '', doi: m.DOI || doi || '', publisher: m.publisher || '', url: m.URL || '', sources: ['Crossref'] };
+  }
+  // map one Open Library /search.json doc (author_name is plain strings, not the {name} objects api/books returns)
+  function mapOLDoc(d) {
+    const authors = (d.author_name || []).map((n) => { const p = String(n).trim().split(/\s+/); const f = p.pop() || String(n); return { f, g: p.join(' ') }; });
+    const year = d.first_publish_year || '';
+    const isbn = (d.isbn && d.isbn[0]) || '';
+    const publisher = (d.publisher && d.publisher[0]) || '';
+    const citekey = mkCitekey(authors, year);
+    return { id: 'r_' + citekey, citekey, type: 'book', title: d.title || 'Untitled', authors, year, publisher, isbn, url: d.key ? 'https://openlibrary.org' + d.key : '', sources: ['Open Library'] };
+  }
+  async function fetchDOI(doi) {
+    const r = await fetch('https://api.crossref.org/works/' + encodeURIComponent(doi), { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(10000) });
+    if (!r.ok) return null;
+    const m = (await r.json()).message; if (!m) return null;
+    return mapCrossrefWork(m, doi);
   }
   async function fetchISBN(isbn) {
     const r = await fetch('https://openlibrary.org/api/books?bibkeys=ISBN:' + isbn + '&format=json&jscmd=data', { signal: AbortSignal.timeout(10000) });
@@ -267,6 +291,32 @@
     adding = false; addResult = undefined; addInput = ''; addError = '';
     attachPrompt = added;   // offer to attach a PDF/EPUB, fetch one, or skip
   }
+  // search online databases by free-text (title / author / keyword) and list pickable results.
+  // Crossref covers papers/preprints, Open Library covers books; both are CORS-open and key-free.
+  async function runSearch() {
+    const q = searchQ.trim();
+    if (q.length < 3) { searchToken++; searchResults = []; searchErr = ''; searchBusy = false; return; }   // supersede any in-flight longer-query fetch
+    const token = ++searchToken;
+    searchBusy = true; searchErr = '';
+    try {
+      const [cx, ol] = await Promise.allSettled([
+        fetch('https://api.crossref.org/works?query.bibliographic=' + encodeURIComponent(q) + '&rows=8&select=DOI,title,author,issued,container-title,volume,page,publisher,type,URL', { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(10000) }).then((r) => r.ok ? r.json() : null),
+        fetch('https://openlibrary.org/search.json?q=' + encodeURIComponent(q) + '&limit=8&fields=key,title,author_name,first_publish_year,publisher,isbn', { signal: AbortSignal.timeout(10000) }).then((r) => r.ok ? r.json() : null),
+      ]);
+      if (token !== searchToken) return;
+      const out = [];
+      if (cx.status === 'fulfilled' && cx.value && cx.value.message) for (const m of (cx.value.message.items || [])) out.push({ ref: mapCrossrefWork(m, m.DOI), key: 'cx:' + (m.DOI || out.length) });
+      if (ol.status === 'fulfilled' && ol.value) for (const d of (ol.value.docs || [])) out.push({ ref: mapOLDoc(d), key: 'ol:' + (d.key || out.length) });
+      searchResults = out;
+      searchErr = out.length ? '' : 'No results — try different words, or paste an identifier.';
+    } catch (e) {
+      if (token !== searchToken) return;
+      searchResults = []; searchErr = e && e.name === 'TimeoutError' ? 'Search timed out — check your connection.' : 'Search failed — try again.';
+    } finally { if (token === searchToken) searchBusy = false; }
+  }
+  function onSearchInput() { clearTimeout(searchTimer); searchTimer = setTimeout(runSearch, 300); }
+  function clearSearch() { searchQ = ''; searchResults = []; searchErr = ''; searchToken++; }
+  function pickResult(ref) { addResult = ref; addFetched(); }   // reuse the existing dedup/suffix/add + attach-prompt path
 
   function copy() { try { navigator.clipboard.writeText(exportText); } catch (e) {} }
 </script>
@@ -319,7 +369,7 @@
   <div class="libcol refs">
     <div class="libsearch">
       <span class="lmag">⌕</span>
-      <input placeholder="Search title, author, year, DOI, keyword…" bind:value={libQuery}
+      <input placeholder="Filter your library — title, author, year, DOI…" bind:value={libQuery}
         onkeydown={(e) => { if (e.key === 'Escape') { libQuery = ''; e.currentTarget.blur(); } }} />
       {#if libQuery}<button class="libsearchx" title="Clear search" aria-label="Clear search" onclick={() => (libQuery = '')}>✕</button>{/if}
     </div>
@@ -341,18 +391,43 @@
   <div class="libcol detail">
     {#if adding}
       <div class="libhead">Add reference</div>
-      <p class="rmeta">Paste a DOI, ISBN, or arXiv ID (a DOI or arXiv link works too) — Arf fetches from open libraries.</p>
-      <input class="expsel" style="width:100%;margin:.4rem 0" placeholder="10.1103/… · 9780262035613 · arXiv:1706.03762" bind:value={addInput} />
-      <button class="libbtn pri" onclick={doFetch} disabled={addBusy}>{addBusy ? 'Looking up…' : 'Fetch from open libraries'}</button>
-      <p class="rmeta" style="margin-top:.4rem;opacity:.7">Queries Crossref (DOI · arXiv) and Open Library (ISBN).</p>
-      {#if addError}<p class="rmeta" style="margin-top:.6rem">{addError} You can still add it and fill the fields by hand.</p>{/if}
-      {#if addResult}
-        <div class="dfield" style="margin-top:.8rem"><div class="rsrc">{#each addResult.sources as s}<span class="sb">{s}</span>{/each}</div>
-          <div style="font-size:16px;color:var(--fg-bright);margin-top:.3rem">{addResult.title}</div>
-          <div class="rmeta">{(addResult.authors || []).map((a) => a.g + ' ' + a.f).join(', ')} · {addResult.year}</div>
-          <button class="libbtn pri" onclick={addFetched}>Add to Library</button></div>
+      <div class="addmode">
+        <button class:on={addMode === 'search'} onclick={() => { addMode = 'search'; addResult = undefined; addError = ''; }}>Search databases</button>
+        <button class:on={addMode === 'id'} onclick={() => { addMode = 'id'; clearSearch(); }}>Paste identifier</button>
+      </div>
+      {#if addMode === 'search'}
+        <p class="rmeta" style="margin-top:.5rem">Search online databases by title, author, or keyword, then pick a result to add.</p>
+        <div class="libsearch" style="margin:.4rem 0 .2rem">
+          <span class="lmag">⌕</span>
+          <input placeholder="e.g. attention is all you need · goodfellow deep learning" bind:value={searchQ}
+            oninput={onSearchInput} onkeydown={(e) => { if (e.key === 'Escape') clearSearch(); }} />
+          {#if searchQ}<button class="libsearchx" title="Clear" aria-label="Clear search" onclick={clearSearch}>✕</button>{/if}
+        </div>
+        <div class="libsearchmeta">{searchBusy ? 'Searching…' : (searchResults.length ? searchResults.length + ' results — click one to add' : '')}</div>
+        {#each searchResults as it (it.key)}
+          <button class="refrow" style="padding:.55rem .2rem" onclick={() => pickResult(it.ref)}>
+            <div class="rtitle"><span class="rtype">{TYPELABEL[it.ref.type] || it.ref.type}</span>{it.ref.title}</div>
+            <div class="rmeta">{shortAuth(it.ref.authors)}{it.ref.year ? ' · ' + it.ref.year : ''}{it.ref.container ? ' · ' + it.ref.container : it.ref.publisher ? ' · ' + it.ref.publisher : ''}</div>
+            <div class="rsrc">{#each it.ref.sources || [] as s}<span class="sb">{s}</span>{/each}</div>
+          </button>
+        {:else}
+          {#if searchErr}<p class="rmeta" style="margin-top:.4rem">{searchErr}</p>{/if}
+        {/each}
+        <p class="rmeta" style="margin-top:.5rem;opacity:.7">Searches Crossref and Open Library.</p>
+      {:else}
+        <p class="rmeta" style="margin-top:.5rem">Paste a DOI, ISBN, or arXiv ID (a DOI or arXiv link works too) — Arf fetches from open libraries.</p>
+        <input class="expsel" style="width:100%;margin:.4rem 0" placeholder="10.1103/… · 9780262035613 · arXiv:1706.03762" bind:value={addInput} />
+        <button class="libbtn pri" onclick={doFetch} disabled={addBusy}>{addBusy ? 'Looking up…' : 'Fetch from open libraries'}</button>
+        <p class="rmeta" style="margin-top:.4rem;opacity:.7">Queries Crossref (DOI · arXiv) and Open Library (ISBN).</p>
+        {#if addError}<p class="rmeta" style="margin-top:.6rem">{addError} You can still add it and fill the fields by hand.</p>{/if}
+        {#if addResult}
+          <div class="dfield" style="margin-top:.8rem"><div class="rsrc">{#each addResult.sources as s}<span class="sb">{s}</span>{/each}</div>
+            <div style="font-size:16px;color:var(--fg-bright);margin-top:.3rem">{addResult.title}</div>
+            <div class="rmeta">{(addResult.authors || []).map((a) => a.g + ' ' + a.f).join(', ')} · {addResult.year}</div>
+            <button class="libbtn pri" onclick={addFetched}>Add to Library</button></div>
+        {/if}
       {/if}
-      <button class="libbtn" onclick={() => { adding = false; addBusy = false; addError = ''; fetchToken++; }}>Cancel</button>
+      <button class="libbtn" onclick={() => { adding = false; addBusy = false; addError = ''; fetchToken++; clearSearch(); }}>Cancel</button>
     {:else if sel}
       <div class="libhead">Reference detail</div>
       {#if attachPrompt && attachPrompt.id === sel.id && !sel.attachment}

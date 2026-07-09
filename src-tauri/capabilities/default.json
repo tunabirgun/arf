@@ -8,6 +8,8 @@
     "core:window:allow-set-title",
     "opener:default",
     "dialog:default",
+    "clipboard-manager:allow-read-text",
+    "clipboard-manager:allow-write-text",
     "window-state:default",
     "fs:allow-appconfig-read",
     "fs:allow-appconfig-write",

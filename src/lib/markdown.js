@@ -43,7 +43,8 @@ const wikilink = {
   renderer(t) {
     const n = resolveTitle(t.title.toLowerCase());
     if (n) return '<a class="wl" data-nav="' + n.id + '" href="#">' + esc(t.display) + '</a>';
-    return '<span class="wl dangling" title="unresolved link">' + esc(t.display) + '</span>';
+    // dangling → a create affordance: clicking it makes the note with this title
+    return '<a class="wl dangling" data-newlink="' + esc(t.title) + '" href="#" title="Create note “' + esc(t.title) + '”">' + esc(t.display) + '</a>';
   },
 };
 const tag = {
@@ -61,8 +62,13 @@ const tag = {
 const cite = {
   name: 'cite', level: 'inline',
   start(src) { const i = src.indexOf('[@'); return i < 0 ? undefined : i; },
-  tokenizer(src) { const m = /^\[@([A-Za-z0-9_:.-]+)\]/.exec(src); if (m) return { type: 'cite', raw: m[0], key: m[1] }; },
+  // optional mode flag ('+' and '!' aren't valid in a citekey, so no ambiguity):
+  //   [@key]  → both (in-text citation + reference-list entry)   [default]
+  //   [@!key] → in-text only (cite inline, excluded from the reference list)
+  //   [@+key] → reference-list only, a la \nocite (no in-text marker, listed at the end)
+  tokenizer(src) { const m = /^\[@([+!]?)([A-Za-z0-9_:.-]+)\]/.exec(src); if (m) return { type: 'cite', raw: m[0], mode: m[1], key: m[2] }; },
   renderer(t) {
+    if (t.mode === '+') return '';   // reference-only: no in-text marker
     const r = resolveCite(t.key);
     if (r) {
       const who = r.authors && r.authors[0] ? r.authors[0].f : t.key;
@@ -85,6 +91,6 @@ export function renderMarkdown(md) {
       ? '<input' + attrs.replace(/\s*disabled(=(["'])[^"']*\2|=[^\s>]+)?/gi, '') + ' data-task>' : m);
     // sanitize: a note may come from an external .md file in the vault, so strip
     // scripts/handlers while keeping wikilink data-attrs and KaTeX's spans/styles
-    return DOMPurify.sanitize(html, { ADD_ATTR: ['data-nav', 'data-tag', 'data-cite', 'data-task'] });
+    return DOMPurify.sanitize(html, { ADD_ATTR: ['data-nav', 'data-tag', 'data-cite', 'data-task', 'data-newlink'] });
   } catch (e) { return '<p>' + esc(md || '') + '</p>'; }
 }

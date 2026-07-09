@@ -137,7 +137,7 @@
 .read img { display: block; max-width: 100%; height: auto; margin: 1.1rem auto; border-radius: 3px; }
 
 /* rail */
-.rh { font-family: var(--sans); font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: var(--fg-faint); margin: 0 0 .5rem; display: flex; justify-content: space-between; align-items: baseline; }
+.rh { font-family: var(--sans); font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: var(--fg-faint); margin: 0 0 .5rem; display: flex; justify-content: space-between; align-items: center; }
 .rh .expand { font-family: var(--sans); font-size: 10px; letter-spacing: 0; text-transform: none; color: var(--accent); background: none; border: 0; cursor: pointer; }
 .rh .expand:hover { text-decoration: underline; }
 .ref { display: block; width: 100%; text-align: left; background: none; border: 0; border-bottom: 1px solid var(--line); padding: .3rem 0; color: var(--fg-muted); font-family: var(--serif); font-size: 14px; cursor: pointer; }
@@ -164,6 +164,10 @@
 .prow .pm { font-family: var(--mono); font-size: 11px; color: var(--fg-faint); margin-left: auto; }
 .prow .psim { font-family: var(--mono); font-size: 10.5px; color: var(--accent); margin-left: auto; }
 .prow.none { color: var(--fg-faint); font-style: italic; }
+.citemode { display: flex; gap: .3rem; padding: .5rem 1.1rem 0; }
+.citemode button { flex: 1; font-family: var(--sans); font-size: 11.5px; padding: .32rem; border: 1px solid var(--line-strong); background: none; color: var(--fg-muted); border-radius: 6px; cursor: pointer; transition: background-color .13s, color .13s, border-color .13s; }
+.citemode button.on { border-color: var(--accent); color: var(--fg-bright); background: var(--accent-soft); }
+.citemode button:hover { color: var(--fg-bright); }
 
 .modal { position: relative; margin: 9vh 0; width: min(600px, 92vw); background: var(--surface); border: 1px solid var(--line-strong); border-radius: 8px; box-shadow: 0 18px 50px rgba(0,0,0,.22); padding: 1.2rem 1.3rem 1.4rem; }
 .modal h3 { margin: 0; font-size: 24px; color: var(--fg-bright); font-weight: 600; }
@@ -218,9 +222,9 @@
 .setrow { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: .55rem 0; border-top: 1px solid var(--line); }
 .setrow .sk { font-size: 15px; color: var(--fg); display: flex; flex-direction: column; min-width: 0; }
 .setrow .sk .sh { font-family: var(--sans); font-size: 11.5px; color: var(--fg-faint); margin-top: .15rem; }
-.setbtn { font-family: var(--sans); font-size: 12px; color: var(--fg-bright); background: none; border: 1px solid var(--line-strong); border-radius: 5px; padding: .34rem .7rem; cursor: pointer; white-space: nowrap; }
+.setbtn { font-family: var(--sans); font-size: 12px; line-height: 1.6; color: var(--fg-bright); background: none; border: 1px solid var(--line-strong); border-radius: 5px; padding: .28rem .7rem; cursor: pointer; white-space: nowrap; }
 .setbtn:hover { border-color: var(--accent); }
-.setstat { font-family: var(--mono); font-size: 12px; color: var(--fg-muted); white-space: nowrap; }
+.setstat { font-family: var(--mono); font-size: 12px; line-height: 1.6; color: var(--fg-muted); white-space: nowrap; }
 .setstat.ok { color: var(--accent); }
 .setstat a { color: var(--accent); }
 .zoomctl { display: inline-flex; align-items: center; gap: .3rem; }
@@ -228,7 +232,7 @@
 .zoomctl button:hover { border-color: var(--accent); }
 .zoomctl .zval { font-family: var(--mono); font-size: 12.5px; color: var(--fg); min-width: 3.4em; text-align: center; }
 .zoomctl .zreset { width: auto; padding: 0 .5rem; font-family: var(--sans); font-size: 11px; }
-.setbtnrow { display: inline-flex; gap: .4rem; }
+.setbtnrow { display: inline-flex; align-items: center; gap: .4rem; }
 
 .overlay { position: fixed; inset: 52px 0 0 0; background: var(--canvas); z-index: 34; display: flex; flex-direction: column; }
 .ovhead { display: flex; align-items: center; gap: .7rem; padding: .7rem 1.1rem; border-bottom: 1px solid var(--line); font-family: var(--sans); font-size: 12px; color: var(--fg-faint); }
@@ -279,6 +283,10 @@
 .attachprompt { border: 1px solid var(--accent); background: var(--accent-soft); border-radius: 7px; padding: .7rem .8rem; margin-bottom: .9rem; }
 .attachprompt .dl { font-family: var(--sans); font-size: 11px; letter-spacing: .04em; text-transform: uppercase; color: var(--fg-bright); }
 .attclip { font-size: 11px; color: var(--accent); margin-left: .35rem; vertical-align: baseline; }
+.addmode { display: flex; gap: .4rem; margin-bottom: .2rem; }
+.addmode button { flex: 1; font-family: var(--sans); font-size: 12.5px; padding: .4rem; border: 1px solid var(--line-strong); background: none; color: var(--fg-muted); border-radius: 6px; cursor: pointer; transition: background-color .13s, color .13s, border-color .13s; }
+.addmode button.on { border-color: var(--accent); color: var(--fg-bright); background: var(--accent-soft); }
+.addmode button:hover { color: var(--fg-bright); }
 .libcol.filters { border-right: 1px solid var(--line); font-family: var(--sans); font-size: 13px; }
 .libcol.detail { border-left: 1px solid var(--line); background: color-mix(in srgb, var(--canvas) 55%, var(--surface)); }
 .libfilter { display: flex; justify-content: space-between; padding: .34rem .4rem; border-radius: 4px; color: var(--fg-muted); cursor: pointer; background: none; border: 0; width: 100%; text-align: left; font: inherit; }
@@ -332,6 +340,11 @@
   .eg-node-g circle { transition: none; }
   .eg-node-g:hover circle { transform: none; }
 }
+
+/* keyboard focus ring for the inputs that clear their default outline (mouse focus stays clean via :focus-visible) */
+.title:focus-visible, .palette input:focus-visible, .nfinput:focus-visible, .ctaginput:focus-visible,
+.libsearch input:focus-visible, .cninput:focus-visible, .expsel:focus-visible, .exparea:focus-visible,
+.readerbody:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-radius: 3px; }
 
 /* ===== welcome gate (first run / vault missing) ===== */
 .welcome { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: var(--canvas); padding: 2rem; }

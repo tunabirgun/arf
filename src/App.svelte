@@ -7,11 +7,10 @@
   import { renderMarkdown, setLinkResolver, setCiteResolver } from './lib/markdown.js';
   import katexCss from 'katex/dist/katex.min.css?inline';   // inlined into exports so math positions correctly outside the app
   import { loadRefs, saveRefs, loadLibFolders, saveLibFolders } from './lib/references.js';
-  import { formatRef, CITE_STYLES } from './lib/cite.js';
+  import { formatRef, BIB_STYLES } from './lib/cite.js';
   import { initEmbedder, embedNotes, cosine as mlCosine, resetEmbedder } from './lib/ml.js';
   const ML_MODELS = { en: 'Xenova/all-MiniLM-L6-v2', multi: 'Xenova/paraphrase-multilingual-MiniLM-L12-v2' };
   import { connectVault, reconnectVault, lastKnownVaultPath, isTauri } from './lib/vaultadapter.js';
-  import { convertFileSrc } from '@tauri-apps/api/core';   // vault-relative note images → a webview-loadable URL in read view
   import Editor from './lib/Editor.svelte';
   import GraphView from './lib/GraphView.svelte';
   import Library from './lib/Library.svelte';
@@ -19,7 +18,7 @@
 
   const IS_MAC = /Mac|iPhone|iPad|iPod/.test((navigator.platform || '') + ' ' + (navigator.userAgent || ''));
   const MOD = IS_MAC ? '⌘' : 'Ctrl';
-  const APP_VERSION = '1.6.0';
+  const APP_VERSION = '1.6.1';   // keep in sync with package.json / tauri.conf.json / Cargo.toml
 
   let notes = $state(loadNotes());
   let refs = $state(loadRefs());        // shared reference library (also used by [@citekey] citations)
@@ -93,7 +92,10 @@
   const PAGE_SIZES = ['A4', 'Letter', 'Legal', 'Tabloid', 'A3', 'A5', 'A6', 'B5', 'Executive'];
   const PAGE_CSS = { A4: 'A4', A3: 'A3', A5: 'A5', A6: 'A6', B5: 'B5', Letter: 'letter', Legal: 'legal', Tabloid: 'ledger', Executive: '7.25in 10.5in' };
 
-  const idx = $derived(buildIndex(notes));
+  // the link/tag/title index. Debounced (not a live $derived) so a keystroke doesn't re-parse the
+  // whole vault's text on every press — the `current` note view reads `notes` directly and is unaffected;
+  // only backlinks/tags/resonance/palette lag ~180ms, which is imperceptible.
+  let idx = $state(buildIndex(notes));
   const current = $derived(notes.find((n) => n.id === currentId) ?? null);
   const backlinks = $derived((idx.back[currentId] || []).map((id) => idx.byId[id]).filter(Boolean));
   // disambiguate same-first-author + same-year references with a/b/c suffixes, so their in-text
@@ -126,13 +128,34 @@
   // optional end-of-note bibliography: the references this note cites via [@key], in the chosen style
   function buildBibHTML(n) {
     if (!bibEnabled || !n) return '';
-    const seen = new Set(), keys = []; const re = /\[@([A-Za-z0-9_:.-]+)\]/g; let m;
-    while ((m = re.exec(n.body || ''))) if (!seen.has(m[1])) { seen.add(m[1]); keys.push(m[1]); }
+    const seen = new Set(), keys = []; const re = /\[@([+!]?)([A-Za-z0-9_:.-]+)\]/g; let m;
+    // '!' = in-text only → excluded from the list; '' (both) and '+' (reference-only) → listed
+    while ((m = re.exec(n.body || ''))) { if (m[1] === '!') continue; const key = m[2]; if (!seen.has(key)) { seen.add(key); keys.push(key); } }
     const cited = keys.map((k) => refs.find((r) => r.citekey === k)).filter(Boolean);
     if (!cited.length) return '';
-    return '<div class="bib"><h2>References</h2><ol>' + cited.map((r) => '<li>' + esc(formatRef(r, bibStyle)) + '</li>').join('') + '</ol></div>';
+    const style = BIB_STYLES.includes(bibStyle) ? bibStyle : 'APA';   // a rendered list must be prose, never a multi-line BibTeX/JSON blob
+    return '<div class="bib"><h2>References</h2><ol>' + cited.map((r) => {
+      const sfx = citeDisambig.get(r.id) || '';
+      const rr = sfx ? { ...r, year: (r.year || '') + sfx } : r;   // match the in-text "Guth 1981a" label in the list entry
+      return '<li>' + esc(formatRef(rr, style)) + '</li>';
+    }).join('') + '</ol></div>';
   }
   const bibHTML = $derived(buildBibHTML(current));
+  // after the read view renders, resolve any vault-relative <img> placeholders to inlined data URIs
+  $effect(() => {
+    readHTML; currentId; mode; view;   // re-run when the rendered note changes OR the .read div remounts (mode/view toggle)
+    if (!isTauri || !vaultBackend) return;
+    queueMicrotask(async () => {
+      const imgs = document.querySelectorAll('.read img[data-vaultimg]');
+      for (const el of imgs) {
+        const rel = el.getAttribute('data-vaultimg'); if (!rel) continue;
+        el.removeAttribute('data-vaultimg');
+        if (vaultImgCache.has(rel)) { el.src = vaultImgCache.get(rel); continue; }
+        const uri = await vaultImageDataURI(rel);
+        if (uri) { vaultImgCache.set(rel, uri); el.src = uri; }
+      }
+    });
+  });
   $effect(() => { try { localStorage.setItem('arf-bib', bibEnabled ? '1' : '0'); localStorage.setItem('arf-bibstyle', bibStyle); } catch (e) {} });
   const allTags = $derived(Object.keys(idx.tagIndex).sort());
   const listNotes = $derived(tagFilter ? notes.filter((n) => (idx.noteTags[n.id] || []).includes(tagFilter)) : notes);
@@ -200,6 +223,9 @@
 
   // debounce vector recompute so typing never triggers a full-vault rescan per keystroke
   const sig = $derived(notes.map((n) => n.id + n.updated).join('|'));
+  // rebuild the link/tag index off the same debounced signal (see the `idx` declaration above)
+  let idxTimer;
+  $effect(() => { sig; clearTimeout(idxTimer); idxTimer = setTimeout(() => { idx = buildIndex(notes); }, 180); return () => clearTimeout(idxTimer); });
   let vecTimer;
   $effect(() => {
     sig;
@@ -331,6 +357,7 @@
   let _conflicts = new Set(); // remote versions already stashed, so we don't re-copy every tick
   async function syncFromFolder() {
     if (!vaultBackend || syncing || vaultBusy) return;
+    if (document.hidden) return;   // don't re-read the whole vault every 4s while the window is hidden; the focus/visibility listeners pull on regain
     syncing = true;
     try {
       await flushVault();                                   // 1) push local edits to the folder
@@ -469,6 +496,13 @@
     if (activeFolder) collapsed[activeFolder] = false;  // and expand the folder it lands in
     const n = newNote(activeFolder); notes.unshift(n); currentId = n.id; mode = 'write'; view = 'notes'; markDirty(n.id); persist();
   }
+  // create a note with a given title — used when a dangling [[wikilink]] is clicked in the read view
+  function createNamed(title) {
+    title = (title || '').trim(); if (!title) { create(); return; }
+    tagFilter = null;
+    const n = newNote(activeFolder); n.title = title;
+    notes.unshift(n); currentId = n.id; mode = 'write'; view = 'notes'; markDirty(n.id); persist();
+  }
   function addFolder() {
     const raw = (newFolderName || '').trim(); newFolderName = null;
     if (!raw) return;
@@ -572,7 +606,22 @@
     dragItem = item;
     try { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', item.type + ':' + (item.id || item.path)); } catch (x) {}
   }
-  function onDragEnd() { dragItem = null; dropOn = null; dropEdge = null; }
+  function onDragEnd() { dragItem = null; dropOn = null; dropEdge = null; stopAutoScroll(); }
+  // auto-scroll the sidebar while dragging near its top/bottom edge, so an off-screen drop target is reachable
+  let autoScrollRAF = null, autoScrollV = 0, autoScrollEl = null;
+  function listAutoScroll(e) {
+    if (!dragItem) return;
+    autoScrollEl = e.currentTarget;
+    const r = autoScrollEl.getBoundingClientRect(), edge = 46, y = e.clientY;
+    if (y < r.top + edge) autoScrollV = -Math.ceil((r.top + edge - y) / 5);
+    else if (y > r.bottom - edge) autoScrollV = Math.ceil((y - (r.bottom - edge)) / 5);
+    else autoScrollV = 0;
+    if (autoScrollV && !autoScrollRAF) {
+      const step = () => { if (!dragItem || !autoScrollV || !autoScrollEl) { autoScrollRAF = null; return; } autoScrollEl.scrollTop += autoScrollV; autoScrollRAF = requestAnimationFrame(step); };
+      autoScrollRAF = requestAnimationFrame(step);
+    }
+  }
+  function stopAutoScroll() { autoScrollV = 0; if (autoScrollRAF) { cancelAnimationFrame(autoScrollRAF); autoScrollRAF = null; } autoScrollEl = null; }
   function dragAllowed(target) { // '' or a folder path
     if (!dragItem) return false;
     if (dragItem.type === 'folder') { const s = canonFolder(dragItem.path), t = canonFolder(target); if (t === s || t.startsWith(s + '/')) return false; }
@@ -600,23 +649,31 @@
   }
 
   function esc(s) { return (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
-  function exportHTML(n) {
+  // export CSS, with an optional scope prefix so the same rules serve a standalone document (scope='')
+  // and an in-page print container (scope='#arf-printroot ') without clobbering the app's own styles
+  function buildExportCSS(scope) {
     const o = deOpts, m = { Narrow: '1.5cm', Normal: '2.4cm', Wide: '3.4cm' }[deMargin] || '2.4cm', size = PAGE_CSS[dePage] || 'A4';
-    const css = '@page{size:' + size + ';margin:' + m + ';}'
-      + "body{font-family:'EB Garamond',Georgia,serif;font-size:12pt;line-height:1.6;color:#111;max-width:40em;margin:0 auto;}"
-      + 'h1{font-size:22pt}h2{font-size:16pt}h1,h2,h3{font-weight:600;' + (o.keepHeadings ? 'break-after:avoid;page-break-after:avoid;' : '') + '}'
-      + (o.fitImages ? 'img{display:block;max-width:100%;max-height:88vh;height:auto;margin:1em auto;break-inside:avoid}pre,table{max-width:100%;overflow-x:auto;break-inside:avoid}' : 'img{display:block;max-width:100%;height:auto;margin:1em auto}')
-      + 'pre{font-family:ui-monospace,Consolas,monospace;font-size:10.5pt;background:#f4f4f2;padding:.6em .8em;border-radius:4px}'
-      + 'blockquote{border-left:2px solid #ccc;padding-left:1em;color:#555;font-style:italic}'
-      + '.katex{font-size:1em}'
-      + (o.numberHeadings ? 'body{counter-reset:h2}h2{counter-increment:h2}h2::before{content:counter(h2)". "}' : '');
-    const bibCss = '.bib{margin-top:2em;border-top:1px solid #ddd;padding-top:1em}.bib h2{font-size:14pt}.bib ol{padding-left:1.4em}.bib li{margin:.35em 0;font-size:11pt}';
-    // export may be triggered from write mode, where the read-view derived never ran — set the
-    // resolvers here so [[wikilinks]] and [@citations] resolve in the standalone document
+    const B = scope ? scope.trim() : 'body';
+    return '@page{size:' + size + ';margin:' + m + ';}'
+      + B + "{font-family:'EB Garamond',Georgia,serif;font-size:12pt;line-height:1.6;color:#111;max-width:40em;margin:0 auto;}"
+      + scope + 'h1{font-size:22pt}' + scope + 'h2{font-size:16pt}' + scope + 'h1,' + scope + 'h2,' + scope + 'h3{font-weight:600;' + (o.keepHeadings ? 'break-after:avoid;page-break-after:avoid;' : '') + '}'
+      + (o.fitImages ? scope + 'img{display:block;max-width:100%;max-height:88vh;height:auto;margin:1em auto;break-inside:avoid}' + scope + 'pre,' + scope + 'table{max-width:100%;overflow-x:auto;break-inside:avoid}' : scope + 'img{display:block;max-width:100%;height:auto;margin:1em auto}')
+      + scope + 'pre{font-family:ui-monospace,Consolas,monospace;font-size:10.5pt;background:#f4f4f2;padding:.6em .8em;border-radius:4px}'
+      + scope + 'blockquote{border-left:2px solid #ccc;padding-left:1em;color:#555;font-style:italic}'
+      + scope + '.katex{font-size:1em}'
+      + (o.numberHeadings ? B + '{counter-reset:h2}' + scope + 'h2{counter-increment:h2}' + scope + 'h2::before{content:counter(h2)". "}' : '')
+      + scope + '.bib{margin-top:2em;border-top:1px solid #ddd;padding-top:1em}' + scope + '.bib h2{font-size:14pt}' + scope + '.bib ol{padding-left:1.4em}' + scope + '.bib li{margin:.35em 0;font-size:11pt}';
+  }
+  // the note's exportable body (title + rendered markdown + bibliography); resolvers set here because
+  // export can fire from write mode where the read-view derived never ran
+  function exportBody(n) {
     setLinkResolver((t) => idx.byTitle[t] || null);
     setCiteResolver(citeResolver);
-    const title = o.title ? '<h1>' + esc(n.title || 'Untitled') + '</h1>' : '';
-    return '<!doctype html><html><head><meta charset="utf-8"><title>' + esc(n.title || 'Untitled') + '</title><style>' + katexCss + '</style><style>' + css + bibCss + '</style></head><body>' + title + renderMarkdown(n.body) + buildBibHTML(n) + '</body></html>';
+    const title = deOpts.title ? '<h1>' + esc(n.title || 'Untitled') + '</h1>' : '';
+    return title + renderMarkdown(n.body) + buildBibHTML(n);
+  }
+  function exportHTML(n) {
+    return '<!doctype html><html><head><meta charset="utf-8"><title>' + esc(n.title || 'Untitled') + '</title><style>' + katexCss + '</style><style>' + buildExportCSS('') + '</style></head><body>' + exportBody(n) + '</body></html>';
   }
   async function saveText(name, mime, text) {
     if (isTauri) { // desktop: browser download APIs don't work in the webview — use the native save dialog
@@ -632,22 +689,32 @@
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 1500);
   }
-  function printHTML(html) { // PDF via the print dialog (Save as PDF) — an iframe works in both browser and the Tauri webview
-    const ifr = document.createElement('iframe');
-    ifr.style.cssText = 'position:fixed;left:-9999px;top:0;width:820px;height:1100px;border:0;';
-    document.body.appendChild(ifr);
-    const d = ifr.contentWindow.document; d.open(); d.write(html); d.close();
-    setTimeout(() => { try { ifr.contentWindow.focus(); ifr.contentWindow.print(); } catch (e) {} setTimeout(() => ifr.remove(), 3000); }, 500);
+  // PDF via the print dialog (Save as PDF). Print the TOP-LEVEL document, not an iframe: WKWebView
+  // (macOS) silently ignores iframe.contentWindow.print() and WebKitGTK (Linux) is unreliable — only
+  // window.print() on the main document works uniformly. A print stylesheet hides the app and shows
+  // just the export container; katexCss is included so math typesets.
+  function printDoc(bodyHTML, scopedCSS) {
+    const root = document.createElement('div'); root.id = 'arf-printroot'; root.innerHTML = bodyHTML;
+    const style = document.createElement('style'); style.id = 'arf-printstyle';
+    style.textContent = katexCss
+      + '@media screen{#arf-printroot{display:none}}'
+      + '@media print{html{zoom:1!important}body{margin:0}body>*:not(#arf-printroot){display:none!important}#arf-printroot{display:block}}'
+      + scopedCSS;
+    document.head.appendChild(style); document.body.appendChild(root);
+    const cleanup = () => { try { root.remove(); style.remove(); } catch (e) {} window.removeEventListener('afterprint', cleanup); };
+    window.addEventListener('afterprint', cleanup);
+    setTimeout(() => { try { window.print(); } catch (e) {} }, 80);
+    setTimeout(cleanup, 60000);   // fallback if afterprint never fires
   }
   async function doExport() {
     const n = current; if (!n) return;
     const slug = (n.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')) || 'note';
     if (deFmt === 'Markdown') await saveText(slug + '.md', 'text/markdown', await inlineVaultImagesMd(toMarkdown(n, { frontmatter: deOpts.frontmatter })));
     else if (deFmt === 'HTML') await saveText(slug + '.html', 'text/html', await inlineVaultImages(exportHTML(n)));
-    else printHTML(await inlineVaultImages(exportHTML(n)));
+    else printDoc(await inlineVaultImages(exportBody(n)), buildExportCSS('#arf-printroot '));
     docExport = false;
   }
-  function open(id) { if (!idx.byId[id]) return; flushSave(); currentId = id; mode = 'read'; view = 'notes'; paletteOpen = false; graphFull = false; }
+  function open(id) { if (!idx.byId[id] && !notes.some((n) => n.id === id)) return; flushSave(); currentId = id; mode = 'read'; view = 'notes'; paletteOpen = false; graphFull = false; }
 
   // --- context-aware right-click menu ---
   // one global handler suppresses the native WebView menu everywhere and opens an Arf menu
@@ -669,8 +736,49 @@
   function closeCtx() { ctxMenu = null; ctxSub = null; }
   function runCtx(it) { if (it.disabled) return; const r = it.run; closeCtx(); if (r) r(); }
   $effect(() => { window.addEventListener('contextmenu', onContextMenu); return () => window.removeEventListener('contextmenu', onContextMenu); });
-  async function copyText(t) { try { await navigator.clipboard.writeText(t); } catch (e) {} }
-  async function readClip() { try { return await navigator.clipboard.readText(); } catch (e) { return ''; } }
+  // modal a11y: while an overlay is open, make the background inert (Tab/screen-reader can't wander
+  // behind it), mark the dialog with role/aria-modal, move focus in, and restore focus to the opener on close
+  let overlayReturnFocus = null;
+  $effect(() => {
+    // read each overlay flag individually so the effect re-fires on ANY change — including a same-tick
+    // overlay→overlay swap (e.g. graph → Search), which a single boolean would miss.
+    // citePick is intentionally excluded: it's an inline tool that inserts into (and refocuses) the
+    // editor, so making the editor inert would break edPaste's view.focus() and strand the caret.
+    const open = paletteOpen || settingsOpen || digestOpen || !!connect || docExport || !!movePick || graphFull;
+    const shell = document.querySelector('.shell');
+    if (open) {
+      if (!overlayReturnFocus) overlayReturnFocus = document.activeElement;
+      if (shell) shell.setAttribute('inert', '');
+      queueMicrotask(() => {
+        const dlg = document.querySelector('.palette:not(.citepicker), .modal, .overlay'); if (!dlg) return;   // skip the cite picker (excluded from inert) so a real modal opened over it still gets the dialog aria
+        dlg.setAttribute('role', 'dialog'); dlg.setAttribute('aria-modal', 'true');
+        const h = dlg.querySelector('h3, h1, input');
+        if (h && !dlg.hasAttribute('aria-label') && !dlg.hasAttribute('aria-labelledby')) {
+          if (h.tagName === 'INPUT') dlg.setAttribute('aria-label', h.getAttribute('placeholder') || 'Dialog');
+          else { if (!h.id) h.id = 'arf-dlg-heading'; dlg.setAttribute('aria-labelledby', h.id); }
+        }
+        if (!dlg.contains(document.activeElement)) { const f = dlg.querySelector('input,button,select,textarea,[tabindex]'); if (f && f.focus) f.focus(); else if (dlg.focus) dlg.focus(); }
+      });
+    } else {
+      if (shell) shell.removeAttribute('inert');
+      if (overlayReturnFocus && overlayReturnFocus.focus) {
+        const el = overlayReturnFocus; overlayReturnFocus = null;
+        // restore only if focus was orphaned to body/null; if something already grabbed it (e.g. the
+        // editor after inserting a citation via edPaste's view.focus()), don't steal it back
+        queueMicrotask(() => { try { if (document.activeElement === document.body || !document.activeElement) el.focus(); } catch (e) {} });
+      }
+    }
+  });
+  // clipboard: navigator.clipboard.readText() is unreliable in WKWebView/WebKitGTK (context-menu Paste
+  // silently did nothing), so route through the Tauri clipboard plugin when native; fall back on web
+  async function copyText(t) {
+    if (isTauri) { try { const { writeText } = await import('@tauri-apps/plugin-clipboard-manager'); await writeText(t); return; } catch (e) {} }
+    try { await navigator.clipboard.writeText(t); } catch (e) {}
+  }
+  async function readClip() {
+    if (isTauri) { try { const { readText } = await import('@tauri-apps/plugin-clipboard-manager'); return await readText(); } catch (e) {} }
+    try { return await navigator.clipboard.readText(); } catch (e) { return ''; }
+  }
 
   function buildCtxItems(t) {
     if (!t || !t.closest) return generalMenu();
@@ -681,6 +789,7 @@
     const rref = t.closest('[data-ref]'); if (rref) return refMenu(rref.getAttribute('data-ref'));
     const libf = t.closest('[data-libfolder]'); if (libf) return libFolderMenu(libf.getAttribute('data-libfolder'));
     const nav = t.closest('[data-nav]'); if (nav) return linkMenu(nav.getAttribute('data-nav'));
+    const nl = t.closest('[data-newlink]'); if (nl) return [{ label: 'Create note “' + nl.getAttribute('data-newlink') + '”', run: () => createNamed(nl.getAttribute('data-newlink')) }];
     const tag = t.closest('[data-tag]'); if (tag) return tagMenu(tag.getAttribute('data-tag'));
     const nid = t.closest('[data-nid]'); if (nid) return noteMenu(nid.getAttribute('data-nid'));
     const fol = t.closest('.frow[data-folder]'); if (fol) return folderMenu(fol.getAttribute('data-folder'));
@@ -941,6 +1050,7 @@
   // insert-citation picker: filter the reference library, insert [@citekey] at the cursor
   let citePick = $state(false);
   let citeQuery = $state('');
+  let citeMode = $state('both');   // 'both' (in-text + list) · 'intext' (in-text only) · 'ref' (reference-list only)
   const citeMatches = $derived.by(() => {
     const all = refs.filter((r) => r && r.citekey);
     const q = citeQuery.trim().toLowerCase();
@@ -949,7 +1059,7 @@
       || (r.authors || []).some((a) => (a.f || '').toLowerCase().includes(q)) || String(r.year || '').includes(q)).slice(0, 40);
   });
   function openCitePicker() { citeQuery = ''; citePick = true; }
-  function insertCite(r) { citePick = false; citeQuery = ''; if (r && editorRef) editorRef.edPaste('[@' + r.citekey + '] '); }
+  function insertCite(r) { citePick = false; citeQuery = ''; if (r && editorRef) { const pfx = citeMode === 'intext' ? '!' : citeMode === 'ref' ? '+' : ''; editorRef.edPaste('[@' + pfx + r.citekey + '] '); } }
   function firstLine(b) { const l = (b || '').split('\n').find((x) => x.trim()); return l ? l.replace(/[#>*`\[\]]/g, '').slice(0, 52) : 'Empty note'; }
   function invDot(id) { return hasLinks(id, idx) ? '●' : '○'; }
   function dotTitle(id) { return hasLinks(id, idx) ? 'Linked to other notes' : 'Orphan — not linked to any note yet'; }
@@ -1071,6 +1181,7 @@
     const task = e.target.closest && e.target.closest('input[data-task]');
     if (task) { e.preventDefault(); const boxes = [...e.currentTarget.querySelectorAll('input[data-task]')]; toggleTaskAt(boxes.indexOf(task)); return; }
     const nav = e.target.closest('[data-nav]'); if (nav) { e.preventDefault(); open(nav.getAttribute('data-nav')); return; }
+    const nl = e.target.closest('[data-newlink]'); if (nl) { e.preventDefault(); createNamed(nl.getAttribute('data-newlink')); return; }
     const tg = e.target.closest('[data-tag]'); if (tg) { e.preventDefault(); tagFilter = tg.getAttribute('data-tag'); return; }
     const ck = e.target.closest('[data-cite]'); if (ck) { e.preventDefault(); openReference(ck.getAttribute('data-cite')); return; }
   }
@@ -1106,7 +1217,7 @@
   function loadReaderHls(k) { try { const m = JSON.parse(localStorage.getItem(READER_HL_KEY) || '{}'); return Array.isArray(m[k]) ? m[k] : []; } catch (e) { return []; } }
   function saveReaderHls(k, list) { try { const m = JSON.parse(localStorage.getItem(READER_HL_KEY) || '{}'); if (list && list.length) m[k] = list; else delete m[k]; localStorage.setItem(READER_HL_KEY, JSON.stringify(m)); } catch (e) {} }
   $effect(() => { const k = readerSource?.key; readerHls = k ? loadReaderHls(k) : []; });
-  function openReaderNote(id) { if (idx.byId[id]) { reader = { kind: 'note', id }; view = 'notes'; } }
+  function openReaderNote(id) { if (idx.byId[id] || notes.some((n) => n.id === id)) { reader = { kind: 'note', id }; view = 'notes'; } }
   function closeReader() { reader = null; }
   function addHighlight(text) {
     const k = readerSource?.key, t = (text || '').trim(); if (!k || t.length < 3) return;
@@ -1162,12 +1273,17 @@
       return rel;
     } catch (e) { return null; }
   }
-  // read view: rewrite a vault-relative image path to a webview asset URL so it renders in place
+  // read view: swap a vault-relative image path for a placeholder + a data-vaultimg marker; the
+  // effect below resolves each to an inlined data URI (readBinary → base64). This deliberately avoids
+  // the Tauri asset protocol, so images render regardless of where the vault folder lives (any drive,
+  // network share, macOS/Linux) — the asset-protocol scope only covered $HOME/Documents/Desktop/Downloads.
+  const IMG_PLACEHOLDER = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+  const vaultImgCache = new Map();
   function rewriteVaultImages(html) {
-    if (!isTauri || !vaultBackend) return html;
-    return html.replace(/(<img\b[^>]*?\bsrc=")([^"]+)(")/gi, (m, a, src, c) => {
+    if (!isTauri || !vaultBackend || html.indexOf('<img') < 0) return html;
+    return html.replace(/(<img\b[^>]*?)\bsrc="([^"]+)"/gi, (m, pre, src) => {
       if (isExternalSrc(src)) return m;
-      try { return a + convertFileSrc(vaultBackend.root.replace(/[\\/]+$/, '') + '/' + src) + c; } catch (e) { return m; }
+      return pre + 'data-vaultimg="' + src.replace(/"/g, '&quot;') + '" src="' + IMG_PLACEHOLDER + '"';
     });
   }
   function u8ToBase64(bytes) { let bin = ''; const c = 0x8000; for (let i = 0; i < bytes.length; i += c) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + c)); return btoa(bin); }
@@ -1316,6 +1432,7 @@
     return { lex, sem };
   });
   const digest = $derived.by(() => {
+    if (!digestOpen) return [];   // the pairwise scan is O(n²); only run it while the Synthesis panel is open
     let pairs;
     if (mlStatus === 'ready' && Object.keys(mlVecs).length) {
       pairs = [];
@@ -1352,7 +1469,10 @@
   }
 </script>
 
-<svelte:window onkeydown={onKey} />
+<!-- with the OS drag-drop handler off (tauri dragDropEnabled:false, required for HTML5 DnD on Windows),
+     an unhandled file drop would otherwise make the webview navigate to file:// and replace the app.
+     These bubble-phase guards neutralise any drop the row/editor handlers didn't already accept. -->
+<svelte:window onkeydown={onKey} ondragover={(e) => e.preventDefault()} ondrop={(e) => e.preventDefault()} />
 
 {#if needVault}
   <div class="welcome">
@@ -1416,7 +1536,7 @@
         style="left:{leftW - 5}px" onpointerdown={(e) => startResize('l', e)} onpointermove={onResizeMove} onpointerup={endResize} onpointercancel={endResize} onkeydown={(e) => nudgeResize('l', e)}></button>
       <button type="button" class="resizer rz-r" aria-label="Resize right sidebar"
         style="right:{rightW - 5}px" onpointerdown={(e) => startResize('r', e)} onpointermove={onResizeMove} onpointerup={endResize} onpointercancel={endResize} onkeydown={(e) => nudgeResize('r', e)}></button>
-      <aside class="list" ondragover={(e) => { if (e.target === e.currentTarget) onDragOver(e, ''); }} ondrop={(e) => { if (e.target === e.currentTarget) onDrop(e, ''); }} role="group">
+      <aside class="list" ondragover={(e) => { listAutoScroll(e); if (e.target === e.currentTarget) onDragOver(e, ''); }} ondrop={(e) => { stopAutoScroll(); if (e.target === e.currentTarget) onDrop(e, ''); }} role="group">
         <div class="vaultbar">
           {#if vaultBackend}
             <span class="vlabel on" title="Writing Markdown files in “{vaultBackend.name}”. Keep this folder in Dropbox, iCloud, OneDrive, Syncthing, or a Git repo to sync it across machines."><span class="syncdot"></span>{vaultBackend.name}</span>
@@ -1588,10 +1708,15 @@
 
 {#if citePick}
   <div class="scrim" onclick={(e) => { if (e.target === e.currentTarget) citePick = false; }}>
-    <div class="palette">
+    <div class="palette citepicker">
       <!-- svelte-ignore a11y_autofocus -->
       <input autofocus placeholder="Insert citation — filter by author, title, year, or key…" bind:value={citeQuery}
         onkeydown={(e) => { if (e.key === 'Enter' && citeMatches[0]) insertCite(citeMatches[0]); else if (e.key === 'Escape') citePick = false; }} />
+      <div class="citemode">
+        <button class:on={citeMode === 'both'} onclick={() => (citeMode = 'both')} title="Show the citation in the text and list it at the end of the note">In text + list</button>
+        <button class:on={citeMode === 'intext'} onclick={() => (citeMode = 'intext')} title="Show the citation in the text only, without an entry in the reference list">In text only</button>
+        <button class:on={citeMode === 'ref'} onclick={() => (citeMode = 'ref')} title="Add the work to the reference list without an in-text marker (like \nocite)">References only</button>
+      </div>
       <div class="presults">
         <div class="pg">References</div>
         {#each citeMatches as r (r.id)}
@@ -1718,7 +1843,7 @@
       </div>
       {#if bibEnabled}
         <div class="setrow"><span class="sk">Citation style</span>
-          <select class="expsel" bind:value={bibStyle}>{#each CITE_STYLES as s}<option>{s}</option>{/each}</select>
+          <select class="expsel" bind:value={bibStyle}>{#each BIB_STYLES as s}<option>{s}</option>{/each}</select>
         </div>
       {/if}
 

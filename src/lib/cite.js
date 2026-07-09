@@ -2,6 +2,9 @@
 // bibliography. One reference object -> a formatted string in the chosen style.
 
 export const CITE_STYLES = ['APA', 'Nature', 'BibTeX', 'RIS (EndNote)', 'CSL-JSON', 'Zenodo'];
+// prose styles suitable for a rendered end-of-note reference list; the machine formats
+// (BibTeX/RIS/CSL-JSON/Zenodo) are multi-line/JSON and only belong in the Library export modal
+export const BIB_STYLES = ['APA', 'Nature'];
 
 function initials(g) { return g ? g.split(/\s+/).filter(Boolean).map((x) => x[0] + '.').join(' ') : ''; }
 export function shortAuth(a) { if (!Array.isArray(a) || !a.length) return ''; return a.length === 1 ? a[0].f : a.length === 2 ? a[0].f + ' & ' + a[1].f : a[0].f + ' et al.'; }

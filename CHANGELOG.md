@@ -6,6 +6,42 @@ All notable changes to Arf are recorded here. The format follows
 below matches a `v*` git tag and a GitHub Release; the release notes are generated
 from the matching section of this file.
 
+## [1.6.1] - 2026-07-10
+
+### Fixed
+- **Drag and drop now works in the desktop app.** Moving notes into folders, nesting folders,
+  reordering notes and folders, and dragging references onto Library folders were silently broken in
+  the packaged app because the window's OS-level drag-drop handler intercepted the events. It is now
+  disabled so in-app HTML5 drag and drop works — and dropping an image file into the editor works too.
+- **PDF export works on macOS and Linux.** Export now prints the document itself rather than a hidden
+  frame, which the macOS/Linux system webviews silently ignored.
+- **Note images render wherever your vault lives.** Images are inlined directly in the reading view
+  instead of through a scoped file protocol, so they show correctly for a vault on any drive or
+  folder, including after a restart.
+- **Copy and paste from the right-click menu** now use the system clipboard reliably on macOS and Linux.
+- **Turkish author names make correct citekeys.** A dotless ı (Kılıç, Yıldız, Işık) is folded to i
+  rather than dropped.
+- **The end-of-note reference list is always readable prose.** Its style is limited to APA and Nature
+  (the machine formats — BibTeX, RIS, CSL-JSON, Zenodo — stay in the Library export where they
+  belong), and same-author/same-year entries carry the a/b suffix that matches the in-text citation.
+- The on-device model's status and Disable control in Settings are vertically aligned.
+
+### Added
+- **Search online databases to add a reference.** Alongside pasting a DOI/ISBN/arXiv ID, you can now
+  search Crossref and Open Library by title, author, or keyword and pick a result to add.
+- **Choose where a citation appears.** For each `[@key]`, pick in-text + reference list (the default),
+  in-text only, or reference-list only (like `\nocite`) — from the citation picker, no syntax to learn.
+- **Click a dangling `[[wikilink]]`** in the reading view to create that note.
+- **The sidebar auto-scrolls while dragging** near its top or bottom edge, so an off-screen folder is
+  reachable without releasing the drag.
+- Keyboard focus rings on text fields, dialog focus containment (the background is inert while a
+  dialog is open), and focus returns to its origin on close.
+
+### Changed
+- Faster at scale: the weekly Synthesis no longer computes while closed, the folder sync skips its
+  re-read while the window is hidden, the link index is rebuilt on a short debounce instead of on
+  every keystroke, and the Rust core is compiled for speed.
+
 ## [1.6.0] - 2026-07-10
 
 ### Added
