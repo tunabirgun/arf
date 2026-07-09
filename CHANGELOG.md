@@ -6,6 +6,13 @@ All notable changes to Arf are recorded here. The format follows
 below matches a `v*` git tag and a GitHub Release; the release notes are generated
 from the matching section of this file.
 
+## [1.5.1] - 2026-07-09
+
+### Fixed
+- Dialog windows that are taller than the screen — Settings in particular — now scroll,
+  so their lower rows stay reachable on short windows, zoomed-in views, and small screens.
+  Previously the bottom of a long dialog could run off the edge with no way to reach it.
+
 ## [1.5.0] - 2026-07-09
 
 ### Added
@@ -76,6 +83,7 @@ from the matching section of this file.
   concept tags, a knowledge graph, on-device similarity (Resonance and the weekly
   Synthesis digest), continuous two-way folder sync, and document export.
 
+[1.5.1]: https://github.com/tunabirgun/arf/releases/tag/v1.5.1
 [1.5.0]: https://github.com/tunabirgun/arf/releases/tag/v1.5.0
 [1.4.1]: https://github.com/tunabirgun/arf/releases/tag/v1.4.1
 [1.4.0]: https://github.com/tunabirgun/arf/releases/tag/v1.4.0
