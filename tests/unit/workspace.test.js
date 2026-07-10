@@ -1,13 +1,28 @@
 import { describe, it, expect } from 'vitest';
-import { buildBundle, readBundle, normalizeNotes, mergeFolders, mergeRefs } from '../../src/lib/workspace.js';
+import { buildBundle, readBundle, normalizeNotes, mergeFolders, mergeRefs, mergeHls } from '../../src/lib/workspace.js';
 
 describe('buildBundle', () => {
   it('produces the versioned bundle envelope', () => {
-    const b = buildBundle([{ id: 'a' }], ['f'], [{ id: 'r' }], '1.5.0', '2026-01-01T00:00:00.000Z', ['LibFolder']);
+    const b = buildBundle([{ id: 'a' }], ['f'], [{ id: 'r' }], '1.5.0', '2026-01-01T00:00:00.000Z', ['LibFolder'], { 'ref:x': ['a note'] });
     expect(b).toEqual({
       arf: 1, app: 'Arf', version: '1.5.0', exported: '2026-01-01T00:00:00.000Z',
-      notes: [{ id: 'a' }], folders: ['f'], refs: [{ id: 'r' }], libFolders: ['LibFolder'],
+      notes: [{ id: 'a' }], folders: ['f'], refs: [{ id: 'r' }], libFolders: ['LibFolder'], readerHls: { 'ref:x': ['a note'] },
     });
+  });
+});
+
+describe('mergeHls', () => {
+  it('unions snippets per key without dropping either side', () => {
+    const a = { 'ref:1': ['one', 'two'], 'ref:2': ['x'] };
+    const b = { 'ref:1': ['two', 'three'], 'ref:3': ['y'] };
+    expect(mergeHls(a, b)).toEqual({ 'ref:1': ['one', 'two', 'three'], 'ref:2': ['x'], 'ref:3': ['y'] });
+  });
+  it('ignores non-arrays and drops empty keys', () => {
+    expect(mergeHls({ a: 'nope', b: [] }, { c: ['keep'] })).toEqual({ c: ['keep'] });
+  });
+  it('tolerates null inputs', () => {
+    expect(mergeHls(null, { k: ['v'] })).toEqual({ k: ['v'] });
+    expect(mergeHls({}, null)).toEqual({});
   });
 });
 

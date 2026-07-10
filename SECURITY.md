@@ -21,9 +21,19 @@ Arf is local-first by construction, which shapes what a vulnerability means here
 - **Your notes are plain files on your own disk.** There is no Arf account and no server that
   holds your data. Anyone with access to your machine or your synced folder has access to your
   notes — that is the trust boundary of any local file, not a flaw in Arf.
-- **The model runs on your device.** The only network activity is the one-time download of the
-  public embedding model and the reference lookups (Crossref, Open Library, arXiv) you trigger
-  yourself. Note text is never uploaded.
+- **The model runs on your device.** Network activity is limited to the one-time download of the
+  public embedding model and the reference/full-text lookups you trigger yourself — reference
+  metadata (Crossref, Open Library, DataCite, Project Gutenberg) and, when you ask for an
+  open-access copy, discovery via Unpaywall, OpenAlex, Semantic Scholar and Europe PMC followed by
+  downloading the PDF/EPUB. Only a reference's own identifiers (a DOI, arXiv id, PMCID, or your
+  search words) ever leave the device; your notes and highlights are never uploaded.
+- **Open-access downloads run through the native HTTP client, not the web view.** Publisher
+  open-access hosts serve their files without cross-origin headers, so an in-page fetch is blocked;
+  Arf performs these requests from the Rust side instead. That path is granted a broad `https://*`
+  scope because an open-access copy can live on any publisher or repository domain — a deliberate,
+  documented widening. It is used only for user-initiated reference lookups and downloads, every
+  downloaded file is verified (PDF/EPUB signature) before it is saved, and no credentials or note
+  content are ever attached to these requests.
 - **Notes can come from untrusted sources.** A vault may contain Markdown files written or
   synced from elsewhere, so note content is rendered through DOMPurify to strip scripts and
   event handlers before it reaches the reading view. Reports of a bypass here are in scope.

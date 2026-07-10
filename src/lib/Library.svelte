@@ -219,6 +219,23 @@
     const citekey = mkCitekey(authors, year);
     return { id: 'r_' + citekey, citekey, type: 'book', title: d.title || 'Untitled', authors, year, publisher, isbn, url: d.key ? 'https://openlibrary.org' + d.key : '', sources: ['Open Library'] };
   }
+  // map one Gutendex (Project Gutenberg) result — public-domain literary and philosophical texts.
+  // Carries the EPUB download URL as readerUrl so "Fetch open-access copy" can attach it for reading.
+  function mapGutenberg(d) {
+    const authors = (d.authors || []).map((a) => { const parts = String(a.name || '').split(','); const f = (parts[0] || '').trim(); const g = (parts[1] || '').trim(); return { f: f || String(a.name || ''), g }; }).filter((a) => a.f);
+    const fmts = d.formats || {};
+    const epub = fmts['application/epub+zip'] || '';
+    const citekey = mkCitekey(authors, '');
+    return { id: 'r_' + citekey + '_g' + d.id, citekey: citekey + 'g' + d.id, type: 'book', title: d.title || 'Untitled', authors, year: '', publisher: 'Project Gutenberg', url: 'https://www.gutenberg.org/ebooks/' + d.id, sources: ['Project Gutenberg'], readerUrl: epub, readerKind: 'epub' };
+  }
+  // JSON GET that bypasses the webview CORS wall on desktop (native http), plain fetch on the web.
+  // Needed for sources like Gutendex that don't send Access-Control-Allow-Origin.
+  async function netJson(url) {
+    if (typeof window !== 'undefined' && (window.__TAURI_INTERNALS__ || window.__TAURI__)) {
+      try { const { fetch: f } = await import('@tauri-apps/plugin-http'); const r = await f(url, { method: 'GET', maxRedirections: 5, connectTimeout: 15000, signal: AbortSignal.timeout(15000), headers: { Accept: 'application/json', Origin: '' } }); return r.ok ? await r.json() : null; } catch (e) { return null; }
+    }
+    try { const r = await fetch(url, { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(12000) }); return r.ok ? await r.json() : null; } catch (e) { return null; }
+  }
   async function fetchDOI(doi) {
     const r = await fetch('https://api.crossref.org/works/' + encodeURIComponent(doi), { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(10000) });
     if (!r.ok) return null;
@@ -299,14 +316,16 @@
     const token = ++searchToken;
     searchBusy = true; searchErr = '';
     try {
-      const [cx, ol] = await Promise.allSettled([
+      const [cx, ol, gb] = await Promise.allSettled([
         fetch('https://api.crossref.org/works?query.bibliographic=' + encodeURIComponent(q) + '&rows=8&select=DOI,title,author,issued,container-title,volume,page,publisher,type,URL', { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(10000) }).then((r) => r.ok ? r.json() : null),
         fetch('https://openlibrary.org/search.json?q=' + encodeURIComponent(q) + '&limit=8&fields=key,title,author_name,first_publish_year,publisher,isbn', { signal: AbortSignal.timeout(10000) }).then((r) => r.ok ? r.json() : null),
+        netJson('https://gutendex.com/books/?search=' + encodeURIComponent(q)),   // Project Gutenberg — literary & philosophical texts (native http; no CORS)
       ]);
       if (token !== searchToken) return;
       const out = [];
       if (cx.status === 'fulfilled' && cx.value && cx.value.message) for (const m of (cx.value.message.items || [])) out.push({ ref: mapCrossrefWork(m, m.DOI), key: 'cx:' + (m.DOI || out.length) });
       if (ol.status === 'fulfilled' && ol.value) for (const d of (ol.value.docs || [])) out.push({ ref: mapOLDoc(d), key: 'ol:' + (d.key || out.length) });
+      if (gb.status === 'fulfilled' && gb.value) for (const d of (gb.value.results || []).slice(0, 6)) out.push({ ref: mapGutenberg(d), key: 'gb:' + d.id });
       searchResults = out;
       searchErr = out.length ? '' : 'No results — try different words, or paste an identifier.';
     } catch (e) {
@@ -413,7 +432,7 @@
         {:else}
           {#if searchErr}<p class="rmeta" style="margin-top:.4rem">{searchErr}</p>{/if}
         {/each}
-        <p class="rmeta" style="margin-top:.5rem;opacity:.7">Searches Crossref and Open Library.</p>
+        <p class="rmeta" style="margin-top:.5rem;opacity:.7">Searches Crossref, Open Library, and Project Gutenberg (literary &amp; philosophical texts).</p>
       {:else}
         <p class="rmeta" style="margin-top:.5rem">Paste a DOI, ISBN, or arXiv ID (a DOI or arXiv link works too) — Arf fetches from open libraries.</p>
         <input class="expsel" style="width:100%;margin:.4rem 0" placeholder="10.1103/… · 9780262035613 · arXiv:1706.03762" bind:value={addInput} />
@@ -460,7 +479,7 @@
           <button class="libbtn" style="margin-top:.4rem" onclick={() => ondetach && ondetach(sel)}>Remove attachment</button>
         {:else}
           <button class="libbtn" onclick={() => onattach && onattach(sel)}>＋ Attach PDF / EPUB…</button>
-          <button class="libbtn" onclick={() => onfetchpdf && onfetchpdf(sel)}>⇩ Fetch open-access PDF</button>
+          <button class="libbtn" onclick={() => onfetchpdf && onfetchpdf(sel)}>⇩ Fetch open-access {sel.readerKind === 'epub' ? 'EPUB' : 'copy'}</button>
           {#if sel.abstract}<button class="libbtn" onclick={() => onopenreader && onopenreader(sel)}>▤ Read abstract</button>{/if}
           {#if !hasVault}<p class="rmeta" style="margin-top:.3rem;opacity:.7">Files are saved in your vault folder — open one in the desktop app to attach.</p>{/if}
         {/if}

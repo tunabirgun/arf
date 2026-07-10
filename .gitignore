@@ -10,3 +10,10 @@ src-tauri/target/
 playwright-report/
 test-results/
 coverage/
+
+# local verification / debugging scratch scripts (never committed)
+/oa-e2e.mjs
+/verify*.mjs
+/diag*.mjs
+/reader-diag*.mjs
+/pdfview-diag.mjs

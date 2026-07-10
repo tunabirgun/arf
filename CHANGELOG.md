@@ -6,6 +6,37 @@ All notable changes to Arf are recorded here. The format follows
 below matches a `v*` git tag and a GitHub Release; the release notes are generated
 from the matching section of this file.
 
+## [1.7.0] - 2026-07-10
+
+### Added
+- **A page-view PDF reader.** An attached or fetched PDF now opens as rendered pages in the side
+  reader — scrollable, zoomable (fit-width, − / +, or Ctrl-scroll), with a selectable text layer —
+  instead of a plain text column. Quote and highlight work directly on the page.
+- **EPUB reading.** Attach or fetch an EPUB and read it in the side reader as clean, reflowable text
+  with its images inlined; chapters follow the book's own reading order.
+- **Project Gutenberg as a reference source.** Search the Add-reference box for literary and
+  philosophical texts (Kant, Shelley, and the rest of the public domain) and fetch a public-domain
+  EPUB copy to read inside Arf.
+- **Highlights that travel with your vault.** Reader highlights are written to a
+  `reader-highlights.json` sidecar and carried in the `.arf` bundle, so they sync alongside your
+  notes and references and re-appear on another device. Highlighting works in both the PDF viewer and
+  the EPUB reader.
+- **A mark on exported pages.** Exported PDF and HTML carry a small, transparent Arf mark in the
+  top-right corner — and nothing else in the header or footer.
+
+### Fixed
+- **Fetching an open-access PDF now works for publisher-hosted papers, not only arXiv.** The download
+  runs through a native HTTP client that isn't bound by the web view's cross-origin rules, so a paper
+  hosted on PLoS, Nature, MDPI, and other open-access sites downloads correctly. Discovery queries
+  Unpaywall, OpenAlex, Semantic Scholar, arXiv, and Europe PMC, prefers a repository copy over a
+  bot-walled publisher copy, and verifies every download is a real PDF before saving it.
+- **The side reader no longer opens a PDF to a blank panel.** Applying highlights had corrupted the
+  reader's content region on a later update, which blanked PDFs whose text arrives after extraction.
+
+### Changed
+- Reference search now also covers Project Gutenberg, alongside Crossref and Open Library.
+- Reader scrolling is smoothed.
+
 ## [1.6.1] - 2026-07-10
 
 ### Fixed
@@ -159,6 +190,9 @@ from the matching section of this file.
   concept tags, a knowledge graph, on-device similarity (Resonance and the weekly
   Synthesis digest), continuous two-way folder sync, and document export.
 
+[1.7.0]: https://github.com/tunabirgun/arf/releases/tag/v1.7.0
+[1.6.1]: https://github.com/tunabirgun/arf/releases/tag/v1.6.1
+[1.6.0]: https://github.com/tunabirgun/arf/releases/tag/v1.6.0
 [1.5.1]: https://github.com/tunabirgun/arf/releases/tag/v1.5.1
 [1.5.0]: https://github.com/tunabirgun/arf/releases/tag/v1.5.0
 [1.4.1]: https://github.com/tunabirgun/arf/releases/tag/v1.4.1

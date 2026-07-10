@@ -21,7 +21,9 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
-        .plugin(tauri_plugin_fs::init());
+        .plugin(tauri_plugin_fs::init())
+        // native HTTP (Rust/reqwest) so open-access PDF fetches bypass the webview CORS wall
+        .plugin(tauri_plugin_http::init());
 
     // persisted-scope must come after fs: it replays dialog-granted vault paths across restarts
     #[cfg(desktop)]

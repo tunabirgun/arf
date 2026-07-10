@@ -4,9 +4,10 @@
 // bundle should merge what it can without losing anything already in the vault.
 
 // Build the bundle object written to disk. `exported` is passed in so callers control
-// the timestamp (and tests stay deterministic).
-export function buildBundle(notes, folders, refs, version, exported, libFolders = []) {
-  return { arf: 1, app: 'Arf', version, exported, notes, folders, refs, libFolders };
+// the timestamp (and tests stay deterministic). `readerHls` is the reader highlight map
+// (source key → snippet list) so highlights travel with the workspace and can be re-synced.
+export function buildBundle(notes, folders, refs, version, exported, libFolders = [], readerHls = {}) {
+  return { arf: 1, app: 'Arf', version, exported, notes, folders, refs, libFolders, readerHls };
 }
 
 // Parse + validate a bundle's text. Throws a user-facing message if it isn't one.
@@ -35,6 +36,21 @@ export function normalizeNotes(rawNotes, localPathById, newId) {
 // Union of existing + imported folder paths (deduped, non-empty strings only).
 export function mergeFolders(existing, incoming) {
   return [...new Set([...existing, ...(incoming || []).filter((f) => typeof f === 'string' && f)])];
+}
+
+// Merge two reader-highlight maps (source key → snippet list). Union of snippets per key so a
+// highlight made on either device survives; no highlight is ever dropped by a merge.
+export function mergeHls(existing, incoming) {
+  const out = {};
+  for (const src of [existing, incoming]) {
+    if (!src || typeof src !== 'object') continue;
+    for (const k of Object.keys(src)) {
+      const list = Array.isArray(src[k]) ? src[k].filter((s) => typeof s === 'string' && s) : [];
+      out[k] = [...new Set([...(out[k] || []), ...list])];
+    }
+  }
+  for (const k of Object.keys(out)) if (!out[k].length) delete out[k];
+  return out;
 }
 
 // Merge imported references into the existing library by id, incoming wins on a clash;

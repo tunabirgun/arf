@@ -2,11 +2,12 @@
   import { loadNotes, seedNotes, saveNotes, newNote, toMarkdown, loadFolders, saveFolders, corruptBackupKey, ulid } from './lib/vault.js';
   import { buildFolderRows, folderList, canonFolder, planFolderMove } from './lib/folders.js';
   import { mergeByUpdated, syncChanged, conflictDecision } from './lib/sync.js';
-  import { buildBundle, readBundle, normalizeNotes, mergeFolders, mergeRefs } from './lib/workspace.js';
+  import { buildBundle, readBundle, normalizeNotes, mergeFolders, mergeRefs, mergeHls } from './lib/workspace.js';
   import { buildIndex, buildVectorizer, related, hasLinks, digestPairs, cosine, sharedTerms } from './lib/graphindex.js';
   import { renderMarkdown, setLinkResolver, setCiteResolver } from './lib/markdown.js';
   import katexCss from 'katex/dist/katex.min.css?inline';   // inlined into exports so math positions correctly outside the app
   import { loadRefs, saveRefs, loadLibFolders, saveLibFolders } from './lib/references.js';
+  import { fetchOaPdf, looksLikePdf, looksLikeEpub, OA_CONTACT } from './lib/openaccess.js';
   import { formatRef, BIB_STYLES } from './lib/cite.js';
   import { initEmbedder, embedNotes, cosine as mlCosine, resetEmbedder } from './lib/ml.js';
   const ML_MODELS = { en: 'Xenova/all-MiniLM-L6-v2', multi: 'Xenova/paraphrase-multilingual-MiniLM-L12-v2' };
@@ -18,7 +19,7 @@
 
   const IS_MAC = /Mac|iPhone|iPad|iPod/.test((navigator.platform || '') + ' ' + (navigator.userAgent || ''));
   const MOD = IS_MAC ? '⌘' : 'Ctrl';
-  const APP_VERSION = '1.6.1';   // keep in sync with package.json / tauri.conf.json / Cargo.toml
+  const APP_VERSION = '1.7.0';   // keep in sync with package.json / tauri.conf.json / Cargo.toml
 
   let notes = $state(loadNotes());
   let refs = $state(loadRefs());        // shared reference library (also used by [@citekey] citations)
@@ -339,6 +340,7 @@
         await refsFromVault(b, switching);      // replace refs on a switch; guarded so the write-back can't clobber references.json
         await libFoldersFromVault(b, switching); // adopt the vault's library folder tree the same way
         await ordersFromVault(b);                // adopt the vault's manual sidebar order (order.json)
+        await hlsFromVault(b);                   // merge in the vault's reader highlights (reader-highlights.json)
       }
     } catch (e) {} finally { vaultBusy = false; }
   }
@@ -418,7 +420,7 @@
     // inline vault-stored note images into the bundle bodies so the .arf file is fully portable
     let outNotes = notes;
     if (isTauri && vaultBackend) { outNotes = []; for (const n of notes) outNotes.push({ ...n, body: await inlineVaultImagesMd(n.body || '') }); }
-    const data = buildBundle(outNotes, folders, refs, APP_VERSION, new Date().toISOString(), libFolders);
+    const data = buildBundle(outNotes, folders, refs, APP_VERSION, new Date().toISOString(), libFolders, loadReaderHlMap());
     await saveText('arf-workspace-' + new Date().toISOString().slice(0, 10) + '.arf', 'application/json', JSON.stringify(data, null, 2));
   }
   async function importWorkspace(e) {
@@ -434,6 +436,9 @@
       if (Array.isArray(data.folders)) { folders = mergeFolders(folders, data.folders); saveFolders(folders); }
       if (Array.isArray(data.libFolders)) libFolders = mergeFolders(libFolders, data.libFolders);   // library tree from an older/newer bundle merges in; absence is fine
       if (Array.isArray(data.refs)) refs = mergeRefs(refs, data.refs);
+      if (data.readerHls && typeof data.readerHls === 'object') {   // merge highlights from the bundle so they survive an import and re-sync
+        try { localStorage.setItem(READER_HL_KEY, JSON.stringify(mergeHls(loadReaderHlMap(), data.readerHls))); const k = readerSource?.key; if (k) readerHls = loadReaderHls(k); queueMicrotask(hlsToVault); } catch (e) {}
+      }
       importMsg = '✓ Imported ' + incoming.length + ' notes.';
     } catch (err) { importMsg = '⚠ ' + (err.message || 'Could not read that file'); }
     finally { flushSave(); clearTimeout(importMsgTimer); importMsgTimer = setTimeout(() => (importMsg = ''), 6000); }   // persist adopted notes even if the merge threw; don't let the status stick forever as the help text
@@ -474,6 +479,7 @@
         refsFromVault(b);
         libFoldersFromVault(b);
         ordersFromVault(b);
+        hlsFromVault(b);
       } catch (e) {}
     })();
   });
@@ -649,6 +655,10 @@
   }
 
   function esc(s) { return (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+  // The Arf mark for exports: a transparent inline SVG (serif "A" + accent dot), no background, no
+  // embedded raster. Sits in the top-right corner of the page; nothing else is added to header/footer.
+  const ARF_LOGO_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 46 40" role="img" aria-label="Arf"><text x="0" y="33" font-family="Georgia,\'Times New Roman\',serif" font-size="40" font-weight="700" fill="#1a1a1a">A</text><circle cx="37" cy="30" r="4.6" fill="#2c4a6e"/></svg>';
+  const ARF_LOGO_HTML = '<div class="arf-logo" aria-hidden="true">' + ARF_LOGO_SVG + '</div>';
   // export CSS, with an optional scope prefix so the same rules serve a standalone document (scope='')
   // and an in-page print container (scope='#arf-printroot ') without clobbering the app's own styles
   function buildExportCSS(scope) {
@@ -662,7 +672,8 @@
       + scope + 'blockquote{border-left:2px solid #ccc;padding-left:1em;color:#555;font-style:italic}'
       + scope + '.katex{font-size:1em}'
       + (o.numberHeadings ? B + '{counter-reset:h2}' + scope + 'h2{counter-increment:h2}' + scope + 'h2::before{content:counter(h2)". "}' : '')
-      + scope + '.bib{margin-top:2em;border-top:1px solid #ddd;padding-top:1em}' + scope + '.bib h2{font-size:14pt}' + scope + '.bib ol{padding-left:1.4em}' + scope + '.bib li{margin:.35em 0;font-size:11pt}';
+      + scope + '.bib{margin-top:2em;border-top:1px solid #ddd;padding-top:1em}' + scope + '.bib h2{font-size:14pt}' + scope + '.bib ol{padding-left:1.4em}' + scope + '.bib li{margin:.35em 0;font-size:11pt}'
+      + scope + '.arf-logo{position:fixed;top:6mm;right:7mm;width:20px;opacity:.9;z-index:10}' + scope + '.arf-logo svg{display:block;width:100%;height:auto}';
   }
   // the note's exportable body (title + rendered markdown + bibliography); resolvers set here because
   // export can fire from write mode where the read-view derived never ran
@@ -670,7 +681,7 @@
     setLinkResolver((t) => idx.byTitle[t] || null);
     setCiteResolver(citeResolver);
     const title = deOpts.title ? '<h1>' + esc(n.title || 'Untitled') + '</h1>' : '';
-    return title + renderMarkdown(n.body) + buildBibHTML(n);
+    return ARF_LOGO_HTML + title + renderMarkdown(n.body) + buildBibHTML(n);
   }
   function exportHTML(n) {
     return '<!doctype html><html><head><meta charset="utf-8"><title>' + esc(n.title || 'Untitled') + '</title><style>' + katexCss + '</style><style>' + buildExportCSS('') + '</style></head><body>' + exportBody(n) + '</body></html>';
@@ -1213,9 +1224,27 @@
     if (r.kind === 'note') { const n = notes.find((x) => x.id === r.id); return n ? { kind: 'note', key: 'note:' + n.id, title: n.title, body: n.body } : null; }
     return r;
   });
+  // Reader highlights persist to localStorage AND (debounced) to the vault's reader-highlights.json
+  // sidecar, keyed by source key (a reference's `ref:<id>` key is stable across devices via
+  // references.json), so highlights travel with the vault and can re-sync — like references.json.
   const READER_HL_KEY = 'arf-reader-hl-v0';
-  function loadReaderHls(k) { try { const m = JSON.parse(localStorage.getItem(READER_HL_KEY) || '{}'); return Array.isArray(m[k]) ? m[k] : []; } catch (e) { return []; } }
-  function saveReaderHls(k, list) { try { const m = JSON.parse(localStorage.getItem(READER_HL_KEY) || '{}'); if (list && list.length) m[k] = list; else delete m[k]; localStorage.setItem(READER_HL_KEY, JSON.stringify(m)); } catch (e) {} }
+  function loadReaderHlMap() { try { const m = JSON.parse(localStorage.getItem(READER_HL_KEY) || '{}'); return m && typeof m === 'object' ? m : {}; } catch (e) { return {}; } }
+  function loadReaderHls(k) { const m = loadReaderHlMap(); return Array.isArray(m[k]) ? m[k] : []; }
+  function saveReaderHls(k, list) {
+    try { const m = loadReaderHlMap(); if (list && list.length) m[k] = list; else delete m[k]; localStorage.setItem(READER_HL_KEY, JSON.stringify(m)); } catch (e) {}
+    clearTimeout(hlsTimer); hlsTimer = setTimeout(hlsToVault, 500);
+  }
+  let hlsTimer;
+  async function hlsToVault() { if (!vaultBackend || refsLoading || !refsLoaded) return; try { await vaultBackend.writeAux('reader-highlights.json', JSON.stringify(loadReaderHlMap(), null, 2)); } catch (e) {} }
+  async function hlsFromVault(b) {
+    try {
+      const raw = await b.readAux('reader-highlights.json'); if (!raw) return;
+      const remote = JSON.parse(raw); if (!remote || typeof remote !== 'object') return;
+      const merged = mergeHls(loadReaderHlMap(), remote);
+      localStorage.setItem(READER_HL_KEY, JSON.stringify(merged));
+      const k = readerSource?.key; if (k) readerHls = Array.isArray(merged[k]) ? merged[k] : [];
+    } catch (e) {}
+  }
   $effect(() => { const k = readerSource?.key; readerHls = k ? loadReaderHls(k) : []; });
   function openReaderNote(id) { if (idx.byId[id] || notes.some((n) => n.id === id)) { reader = { kind: 'note', id }; view = 'notes'; } }
   function closeReader() { reader = null; }
@@ -1246,7 +1275,7 @@
         view = 'notes';
         if (att.kind === 'pdf') reader = { kind: 'pdf', key: 'ref:' + ref.id, title: ref.title || att.name, citekey: ref.citekey, bytes };
         else if (att.kind === 'html') reader = { kind: 'html', key: 'ref:' + ref.id, title: ref.title || att.name, citekey: ref.citekey, html: new TextDecoder().decode(bytes) };
-        else if (att.kind === 'epub') reader = { kind: 'epub', key: 'ref:' + ref.id, title: ref.title || att.name, citekey: ref.citekey };
+        else if (att.kind === 'epub') reader = { kind: 'epub', key: 'ref:' + ref.id, title: ref.title || att.name, citekey: ref.citekey, bytes };
         else reader = { kind: att.kind === 'md' ? 'md' : 'text', key: 'ref:' + ref.id, title: ref.title || att.name, citekey: ref.citekey, body: new TextDecoder().decode(bytes) };
         return;
       }
@@ -1338,30 +1367,72 @@
     const old = ref.attachment && ref.attachment.path;
     if (old && old !== newRel && vaultBackend) { try { await vaultBackend.removeBinary(old); } catch (e) {} }
   }
-  // best-effort open-access fetch: arXiv is openly hosted (no CORS wall); otherwise ask OpenAlex for
-  // a best OA location. The actual download can still be blocked by a publisher's CORS policy in the
-  // webview — then we surface the URL so the user can grab it and attach by hand.
+  // Open-access PDF fetch. The download runs through Tauri's native HTTP (Rust/reqwest), NOT the
+  // webview's browser fetch: publisher OA hosts (PLoS, Nature, MDPI…) serve the PDF with no
+  // Access-Control-Allow-Origin, so a browser fetch is CORS-blocked — native reqwest is not.
+  // Discovery (openaccess.js) queries Unpaywall, OpenAlex, Semantic Scholar, arXiv and Europe PMC,
+  // ordered repository-first, and each candidate is verified as a real PDF (%PDF magic bytes) before
+  // it is saved. If every candidate is blocked (e.g. a Cloudflare challenge), the OA page is opened
+  // so the user can grab it by hand.
+  const OA_UA = 'Arf/' + APP_VERSION + ' (+https://github.com/tunabirgun/arf; mailto:' + OA_CONTACT + ')';
+  const PDF_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
+  const MAX_PDF_BYTES = 80 * 1024 * 1024;   // reject a runaway body (a streamed HTML page, a huge scan)
+  async function openExternal(url) {
+    try { const { openUrl } = await import('@tauri-apps/plugin-opener'); await openUrl(url); }
+    catch (e) { try { const a = document.createElement('a'); a.href = url; a.target = '_blank'; a.rel = 'noopener noreferrer'; a.click(); } catch (e2) {} }
+  }
   async function fetchPdfForRef(ref) {
     if (!ref) return;
-    if (!vaultBackend) { notify('Fetching needs the desktop app with a vault folder open.'); return; }
+    if (!isTauri || !vaultBackend) { notify('Open-access fetch needs the desktop app with a vault folder open.'); return; }
+    let httpFetch;
+    try { ({ fetch: httpFetch } = await import('@tauri-apps/plugin-http')); }
+    catch (e) { notify('Couldn’t start the network request.'); return; }
     notify('Looking for an open-access PDF…');
-    let url = null;
-    const arx = (ref.doi && ref.doi.match(/arxiv\.(.+)$/i)) || (ref.url && ref.url.match(/arxiv\.org\/(?:abs|pdf)\/([^?]+?)(?:\.pdf)?$/i));
-    if (arx) url = 'https://arxiv.org/pdf/' + arx[1] + '.pdf';
-    if (!url && ref.doi) {
-      try { const r = await fetch('https://api.openalex.org/works/doi:' + encodeURIComponent(ref.doi), { signal: AbortSignal.timeout(10000) }); if (r.ok) { const j = await r.json(); url = (j.best_oa_location && j.best_oa_location.pdf_url) || (j.open_access && j.open_access.oa_url) || null; } } catch (e) {}
-    }
-    if (!url) { notify('No open-access PDF found — you can attach one by hand.'); return; }
-    try {
-      const r = await fetch(url, { signal: AbortSignal.timeout(20000) });
+    // metadata indexes: honest polite-pool identity. Origin:'' drops the tauri.localhost Origin header.
+    const httpJson = async (url) => {
+      const r = await httpFetch(url, { method: 'GET', maxRedirections: 5, connectTimeout: 15000,
+        signal: AbortSignal.timeout(15000), headers: { Accept: 'application/json', 'User-Agent': OA_UA, Origin: '' } });
+      return r.ok ? await r.json() : null;
+    };
+    // the PDF GET: browser-like headers so naive UA blocks don't fire; magic-byte check happens upstream
+    const httpBytes = async (url) => {
+      const r = await httpFetch(url, { method: 'GET', maxRedirections: 10, connectTimeout: 20000,
+        signal: AbortSignal.timeout(60000), headers: { Accept: 'application/pdf,application/octet-stream;q=0.9,*/*;q=0.8', 'Accept-Language': 'en-US,en;q=0.9', 'User-Agent': PDF_UA, Origin: '' } });
       if (!r.ok) throw new Error('http ' + r.status);
       const buf = new Uint8Array(await r.arrayBuffer());
-      await removeStaleAttachment(ref, 'attachments/' + attachSlug(ref) + '.pdf');
-      const rel = 'attachments/' + attachSlug(ref) + '.pdf';
-      await vaultBackend.saveBinary(rel, buf);
-      refs = refs.map((x) => x.id === ref.id ? { ...x, attachment: { path: rel, name: attachSlug(ref) + '.pdf', kind: 'pdf' } } : x);
-      notify('Attached the open-access PDF.');
-    } catch (e) { notify('Found a PDF but couldn’t download it here (the publisher may block it).'); }
+      if (buf.length > MAX_PDF_BYTES) throw new Error('too large');
+      return buf;
+    };
+    try {
+      // a reference that already carries a direct reader URL (e.g. a Project Gutenberg EPUB): fetch it directly
+      if (ref.readerUrl) {
+        const kind = ref.readerKind === 'epub' ? 'epub' : 'pdf';
+        try {
+          const bytes = await httpBytes(ref.readerUrl);
+          if (kind === 'epub' ? looksLikeEpub(bytes) : looksLikePdf(bytes)) {
+            const rel = 'attachments/' + attachSlug(ref) + '.' + kind;
+            await removeStaleAttachment(ref, rel);
+            await vaultBackend.saveBinary(rel, bytes);
+            refs = refs.map((x) => x.id === ref.id ? { ...x, attachment: { path: rel, name: attachSlug(ref) + '.' + kind, kind } } : x);
+            notify('Attached the open-access ' + (kind === 'epub' ? 'EPUB' : 'PDF') + ' from ' + (ref.sources && ref.sources[0] ? ref.sources[0] : 'open access') + '.');
+            return;
+          }
+        } catch (e) { /* fall through to the DOI-based cascade */ }
+      }
+      const res = await fetchOaPdf(ref, httpJson, httpBytes, { contact: OA_CONTACT });
+      if (res.ok) {
+        const rel = 'attachments/' + attachSlug(ref) + '.pdf';
+        await removeStaleAttachment(ref, rel);
+        await vaultBackend.saveBinary(rel, res.bytes);
+        refs = refs.map((x) => x.id === ref.id ? { ...x, attachment: { path: rel, name: attachSlug(ref) + '.pdf', kind: 'pdf' } } : x);
+        notify('Attached the open-access PDF' + (res.source ? ' from ' + res.source + '.' : '.'));
+      } else if (res.firstUrl) {
+        notify('Found an open-access copy but the host blocked the download — opening it so you can save it.');
+        openExternal(res.firstUrl);
+      } else {
+        notify('No open-access PDF found — you can attach one by hand.');
+      }
+    } catch (e) { notify('Couldn’t fetch an open-access PDF — you can attach one by hand.'); }
   }
   async function detachFromRef(ref) {
     if (!ref || !ref.attachment) return;
