@@ -12,16 +12,25 @@ describe('buildBundle', () => {
 });
 
 describe('mergeHls', () => {
-  it('unions snippets per key without dropping either side', () => {
-    const a = { 'ref:1': ['one', 'two'], 'ref:2': ['x'] };
-    const b = { 'ref:1': ['two', 'three'], 'ref:3': ['y'] };
-    expect(mergeHls(a, b)).toEqual({ 'ref:1': ['one', 'two', 'three'], 'ref:2': ['x'], 'ref:3': ['y'] });
+  const y = (t) => ({ text: t, color: 'yellow' });
+  it('unions highlights per key by text without dropping either side', () => {
+    const a = { 'ref:1': [y('one'), y('two')], 'ref:2': [y('x')] };
+    const b = { 'ref:1': [y('two'), y('three')], 'ref:3': [y('y')] };
+    expect(mergeHls(a, b)).toEqual({ 'ref:1': [y('one'), y('two'), y('three')], 'ref:2': [y('x')], 'ref:3': [y('y')] });
   });
-  it('ignores non-arrays and drops empty keys', () => {
-    expect(mergeHls({ a: 'nope', b: [] }, { c: ['keep'] })).toEqual({ c: ['keep'] });
+  it('coerces legacy string highlights to the default colour', () => {
+    expect(mergeHls({ 'ref:1': ['old'] }, { 'ref:1': [{ text: 'new', color: 'green' }] }))
+      .toEqual({ 'ref:1': [y('old'), { text: 'new', color: 'green' }] });
+  });
+  it('lets incoming win on a colour clash for the same text', () => {
+    expect(mergeHls({ k: [{ text: 's', color: 'yellow' }] }, { k: [{ text: 's', color: 'pink' }] }))
+      .toEqual({ k: [{ text: 's', color: 'pink' }] });
+  });
+  it('ignores non-arrays and drops empty/blank keys', () => {
+    expect(mergeHls({ a: 'nope', b: [] }, { c: [y('keep')] })).toEqual({ c: [y('keep')] });
   });
   it('tolerates null inputs', () => {
-    expect(mergeHls(null, { k: ['v'] })).toEqual({ k: ['v'] });
+    expect(mergeHls(null, { k: [y('v')] })).toEqual({ k: [y('v')] });
     expect(mergeHls({}, null)).toEqual({});
   });
 });

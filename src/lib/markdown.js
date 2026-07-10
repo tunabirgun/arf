@@ -80,6 +80,49 @@ const cite = {
   },
 };
 
+// Image sizing hint, Obsidian-compatible: ![caption|300](src) or ![caption|300x200](src). Splits the
+// alt into its caption and an optional pixel width/height. The caption doubles as the figure caption.
+export function parseImageAlt(alt) {
+  const m = /^([\s\S]*?)\s*\|\s*(\d{1,4})(?:x(\d{1,4}))?\s*$/.exec(alt || '');
+  if (m) return { cap: m[1].trim(), w: +m[2], h: m[3] ? +m[3] : null };
+  return { cap: (alt || '').trim(), w: null, h: null };
+}
+// Rebuild an alt string with a new width hint (w = pixels, or null for full width), keeping the caption.
+export function withSizeHint(alt, w) {
+  const { cap } = parseImageAlt(alt);
+  return w ? (cap ? cap + '|' + w : '|' + w) : cap;
+}
+// Custom image renderer: apply the width hint as an inline style (so it holds in the read view AND in
+// exported HTML/PDF), keep the caption as the alt, and stash the current width in data-imw for the
+// read-view sizing control.
+marked.use({ renderer: {
+  image(token) {
+    // marked pre-escapes token.text and token.title (but not href), so use cap/title as-is and only
+    // escape href — escaping the caption again would show a literal "&amp;" for an "&" in the caption.
+    const { href, title, text } = token;
+    const { cap, w, h } = parseImageAlt(text || '');
+    const style = w ? ' style="width:' + w + 'px;' + (h ? 'height:' + h + 'px;' : '') + 'max-width:100%"' : '';
+    const t = title ? ' title="' + title + '"' : '';
+    // data-imw (the read-view size/caption control hook) only on INLINE ![alt](src) images: reference-
+    // style ![alt][id] images aren't rewritable by the inline body walker, so marking them would desync
+    // the control's DOM index from that walker and edit the wrong image. They still get the width style.
+    const imw = (token.raw || '').includes('](') ? ' data-imw="' + (w || 'full') + '"' : '';
+    return '<img src="' + esc(href || '') + '" alt="' + cap + '"' + style + t + imw + '>';
+  },
+} });
+
+// A paragraph that is only an image becomes a <figure>; a captioned one gets a sequentially numbered
+// <figcaption> ("Figure N — caption"). Runs on the parsed HTML so read view and export share it.
+export function numberFigures(html) {
+  let n = 0;
+  return html.replace(/<p>\s*(<img\b[^>]*>)\s*<\/p>/gi, (m, img) => {
+    const am = /\balt="([^"]*)"/i.exec(img);
+    const cap = am ? am[1] : '';
+    const fc = cap ? '<figcaption><span class="fign">Figure ' + (++n) + '</span> — ' + cap + '</figcaption>' : '';
+    return '<figure class="fig">' + img + fc + '</figure>';
+  });
+}
+
 marked.use({ gfm: true, breaks: false, extensions: [mathBlock, mathInline, wikilink, tag, cite] });
 
 export function renderMarkdown(md) {
@@ -89,8 +132,9 @@ export function renderMarkdown(md) {
     // can toggle the matching `- [ ]` line in the source when one is clicked
     html = html.replace(/<input\b([^>]*)>/g, (m, attrs) => /type=["']?checkbox/i.test(attrs)
       ? '<input' + attrs.replace(/\s*disabled(=(["'])[^"']*\2|=[^\s>]+)?/gi, '') + ' data-task>' : m);
+    html = numberFigures(html);   // standalone images → numbered <figure> captions (read view + export)
     // sanitize: a note may come from an external .md file in the vault, so strip
     // scripts/handlers while keeping wikilink data-attrs and KaTeX's spans/styles
-    return DOMPurify.sanitize(html, { ADD_ATTR: ['data-nav', 'data-tag', 'data-cite', 'data-task', 'data-newlink'] });
+    return DOMPurify.sanitize(html, { ADD_ATTR: ['data-nav', 'data-tag', 'data-cite', 'data-task', 'data-newlink', 'data-imw'] });
   } catch (e) { return '<p>' + esc(md || '') + '</p>'; }
 }

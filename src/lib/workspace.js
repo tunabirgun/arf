@@ -38,15 +38,24 @@ export function mergeFolders(existing, incoming) {
   return [...new Set([...existing, ...(incoming || []).filter((f) => typeof f === 'string' && f)])];
 }
 
-// Merge two reader-highlight maps (source key → snippet list). Union of snippets per key so a
-// highlight made on either device survives; no highlight is ever dropped by a merge.
+// Merge two reader-highlight maps (source key → highlight list). Each highlight is { text, color };
+// legacy bundles/sidecars hold bare strings, coerced here to the default colour. Union by `text` so a
+// highlight made on either device survives (nothing is ever dropped); on a colour clash, incoming wins
+// (matching mergeRefs) so a re-colour on one device propagates deterministically.
+function hlText(h) { return typeof h === 'string' ? h : (h && typeof h.text === 'string' ? h.text : ''); }
+function hlColor(h) { return typeof h === 'string' ? 'yellow' : (h && typeof h.color === 'string' ? h.color : 'yellow'); }
 export function mergeHls(existing, incoming) {
   const out = {};
   for (const src of [existing, incoming]) {
     if (!src || typeof src !== 'object') continue;
     for (const k of Object.keys(src)) {
-      const list = Array.isArray(src[k]) ? src[k].filter((s) => typeof s === 'string' && s) : [];
-      out[k] = [...new Set([...(out[k] || []), ...list])];
+      if (!Array.isArray(src[k])) continue;
+      const byText = new Map((out[k] || []).map((h) => [h.text, h]));
+      for (const raw of src[k]) {
+        const text = hlText(raw).trim(); if (!text) continue;
+        byText.set(text, { text, color: hlColor(raw) });   // incoming (later in the loop) wins on a clash
+      }
+      out[k] = [...byText.values()];
     }
   }
   for (const k of Object.keys(out)) if (!out[k].length) delete out[k];

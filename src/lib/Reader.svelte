@@ -8,9 +8,11 @@
   // We own bodyEl imperatively (not a reactive {@html}) so highlight DOM mutation can't corrupt it.
   import { renderMarkdown } from './markdown.js';
   import { computeFitScale } from './pdffit.js';
+  import { buildMatchIndex, coveredSegments, coveredIntervals, coerceHl, HL_COLORS } from './highlight.js';
   import DOMPurify from 'dompurify';
 
-  let { source = null, highlights = [], canQuote = true, onclose = null, onquote = null, onhighlight = null } = $props();
+  let { source = null, highlights = [], canQuote = true, onclose = null, onquote = null, onhighlight = null, onunhighlight = null } = $props();
+  let markColor = $state(HL_COLORS[0]);   // colour the next Mark uses; swatches also mark immediately
 
   let bodyEl;
   function esc(s) { return (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
@@ -47,18 +49,44 @@
     bodyEl.innerHTML = s ? h : '<p class="rmuted">Nothing open. Right-click a note or a reference to read it here.</p>';
     if (s) markHighlights(bodyEl, hls);
   });
+  // Mark stored snippets in the HTML flow. Idempotent: unwrap prior marks and normalize first, so a
+  // re-apply (a highlight added/removed) starts from clean text. Matches whitespace-insensitively over
+  // ALL text nodes, then wraps each covered node slice in its own <mark> — so a sentence spanning
+  // inline elements (a [[wikilink]], a citation, bold) or containing brackets highlights correctly,
+  // where the old single-node Range.surroundContents() threw across element boundaries and skipped it.
   function markHighlights(root, snippets) {
     root.querySelectorAll('mark.rhl').forEach((m) => { const t = document.createTextNode(m.textContent); m.replaceWith(t); });
     root.normalize();
-    for (const snip of (snippets || [])) {
-      const needle = (snip || '').trim(); if (needle.length < 3) continue;
-      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
-      const hits = [];
-      while (walker.nextNode()) { const node = walker.currentNode; const i = node.nodeValue.indexOf(needle); if (i >= 0) hits.push({ node, i }); }
-      for (const { node, i } of hits) {
-        try { const range = document.createRange(); range.setStart(node, i); range.setEnd(node, i + needle.length); const mark = document.createElement('mark'); mark.className = 'rhl'; range.surroundContents(mark); }
-        catch (e) { /* snippet spans element boundaries — skip */ }
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
+    const nodes = []; while (walker.nextNode()) nodes.push(walker.currentNode);
+    if (!nodes.length) return;
+    const index = buildMatchIndex(nodes.map((n) => n.nodeValue));
+    const perNode = new Map();   // node index → [{ a, b, color, hi }]
+    (snippets || []).forEach((h, hi) => {
+      const { text, color } = coerceHl(h);
+      for (const iv of coveredIntervals(index, text)) {
+        if (!perNode.has(iv.seg)) perNode.set(iv.seg, []);
+        perNode.get(iv.seg).push({ a: iv.a, b: iv.b, color, hi });
       }
+    });
+    for (const [ni, ivs] of perNode) {
+      const node = nodes[ni]; if (!node || !node.parentNode) continue;
+      const text = node.nodeValue, len = text.length;
+      // paint each character with the last interval covering it, so overlapping/contained highlights on
+      // one node each keep a visible run and a clickable data-hli (a naive left-to-right pass would clip
+      // a fully-contained highlight to zero width).
+      const owner = new Array(len).fill(-1);
+      for (let k = 0; k < ivs.length; k++) { const iv = ivs[k]; for (let p = Math.max(0, iv.a); p < Math.min(len, iv.b); p++) owner[p] = k; }
+      const frag = document.createDocumentFragment();
+      let p = 0;
+      while (p < len) {
+        const o = owner[p]; let q = p; while (q < len && owner[q] === o) q++;
+        const slice = text.slice(p, q);
+        if (o < 0) frag.appendChild(document.createTextNode(slice));
+        else { const iv = ivs[o]; const m = document.createElement('mark'); m.className = 'rhl rhl-' + iv.color; m.dataset.hli = String(iv.hi); m.textContent = slice; frag.appendChild(m); }
+        p = q;
+      }
+      node.replaceWith(frag);
     }
   }
 
@@ -143,21 +171,18 @@
 
   // highlight the text-layer spans covered by each stored snippet. Whitespace-collapsed char map so a
   // snippet matches regardless of the layout's spacing; marks per span (never wraps across spans).
+  // Colour the text-layer spans covered by each stored snippet. Whitespace-insensitive matching means a
+  // citation like "(Smith, 2020)" or "[12]" matches even though pdf.js splits its brackets into their
+  // own spans. data-hlc carries the colour; data-hli maps a span back to its highlight for click-to-remove.
   function applyPdfHighlights(container, snippets) {
-    container.querySelectorAll('span.rhlspan').forEach((s) => s.classList.remove('rhlspan'));
+    container.querySelectorAll('span.rhlspan').forEach((s) => { s.classList.remove('rhlspan'); s.removeAttribute('data-hlc'); s.removeAttribute('data-hli'); });
     const spans = [...container.querySelectorAll('span')].filter((s) => s.textContent && s.textContent.trim());
     if (!spans.length) return;
-    let norm = ''; const owner = []; let prevWs = true;
-    for (let si = 0; si < spans.length; si++) {
-      const t = spans[si].textContent;
-      for (let c = 0; c < t.length; c++) { const ch = t[c]; if (/\s/.test(ch)) { if (!prevWs) { norm += ' '; owner.push(si); prevWs = true; } } else { norm += ch.toLowerCase(); owner.push(si); prevWs = false; } }
-      if (!prevWs) { norm += ' '; owner.push(si); prevWs = true; }
-    }
-    for (const snip of (snippets || [])) {
-      const needle = (snip || '').replace(/\s+/g, ' ').trim().toLowerCase(); if (needle.length < 3) continue;
-      let from = 0, idx;
-      while ((idx = norm.indexOf(needle, from)) >= 0) { for (let i = idx; i < idx + needle.length; i++) { const si = owner[i]; if (si != null) spans[si].classList.add('rhlspan'); } from = idx + needle.length; }
-    }
+    const index = buildMatchIndex(spans.map((s) => s.textContent));
+    (snippets || []).forEach((h, hi) => {
+      const { text, color } = coerceHl(h);
+      for (const si of coveredSegments(index, text)) { spans[si].classList.add('rhlspan'); spans[si].setAttribute('data-hlc', color); spans[si].setAttribute('data-hli', String(hi)); }
+    });
   }
   // re-apply highlights to a live PDF when the highlight set changes (e.g. just added one)
   $effect(() => { highlights; if (source?.kind === 'pdf' && bodyEl) bodyEl.querySelectorAll('.textLayer').forEach((tl) => applyPdfHighlights(tl, highlights)); });
@@ -165,6 +190,7 @@
   $effect(() => {
     if (!bodyEl) return;
     bodyEl.addEventListener('wheel', onWheel, { passive: false });
+    bodyEl.addEventListener('click', onBodyClick);
     // re-fit the PDF when the panel width actually changes (resize / toggle / window). The scrollbar
     // gutter is reserved in CSS so clientWidth doesn't shift when the scrollbar appears; the zero-width
     // bail ignores a hidden panel (display:none → clientWidth 0), and the >=5px guard skips no-op fires.
@@ -176,7 +202,7 @@
       clearTimeout(_rt); _rt = setTimeout(renderPdf, 120);
     });
     ro.observe(bodyEl);
-    return () => { bodyEl.removeEventListener('wheel', onWheel); ro.disconnect(); clearTimeout(_rt); teardownPdf(); clearTimeout(_zoomTimer); };
+    return () => { bodyEl.removeEventListener('wheel', onWheel); bodyEl.removeEventListener('click', onBodyClick); ro.disconnect(); clearTimeout(_rt); teardownPdf(); clearTimeout(_zoomTimer); };
   });
 
   function currentSelection() {
@@ -186,7 +212,18 @@
     return String(s).trim();
   }
   function quoteSel() { const t = currentSelection(); if (t && onquote) onquote(t); }
-  function highlightSel() { const t = currentSelection(); if (t && onhighlight) onhighlight(t); }
+  // highlight the current selection in a colour (the swatch clicked); remembers it as the active colour
+  function mark(color) { markColor = color; const t = currentSelection(); if (t && onhighlight) onhighlight(t, color); }
+  // click a highlight (with no active text selection) to remove it — the reader is read-only, so a bare
+  // click on a mark has no other meaning. data-hli maps the clicked element back to its stored snippet.
+  function onBodyClick(e) {
+    const sel = typeof window.getSelection === 'function' ? window.getSelection() : null;
+    if (sel && !sel.isCollapsed && String(sel).trim()) return;   // a drag-select — not a remove
+    const el = e.target && e.target.closest ? e.target.closest('[data-hli]') : null;
+    if (!el) return;
+    const h = highlights[+el.getAttribute('data-hli')];
+    if (h != null && onunhighlight) onunhighlight(coerceHl(h).text);
+  }
 
   const sourceLabel = $derived(source ? (source.kind === 'note' ? 'Note' : source.kind === 'pdf' ? 'PDF' : source.kind === 'html' ? 'Web' : source.kind === 'epub' ? 'EPUB' : source.kind === 'md' ? 'Markdown' : 'Text') : '');
   const isPdf = $derived(source?.kind === 'pdf');
@@ -205,7 +242,11 @@
       </span>
     {/if}
     <button class="rbtn" disabled={!canQuote} title={canQuote ? 'Quote the selected passage into the open note' : 'Open a note first to quote into it'} onclick={quoteSel}>❞ Quote</button>
-    <button class="rbtn" title="Highlight the selected sentence" onclick={highlightSel}>✎ Mark</button>
+    <span class="marks" title="Highlight the selected text — pick a colour (click a highlight to remove it)">
+      {#each HL_COLORS as c}
+        <button class="swatch sw-{c}" class:on={markColor === c} aria-label={'Highlight in ' + c} onclick={() => mark(c)}></button>
+      {/each}
+    </span>
     <button class="rbtn x" title="Close reader" aria-label="Close reader" onclick={() => onclose && onclose()}>✕</button>
   </div>
   <!-- bodyEl is managed imperatively (innerHTML / canvas pages), never with Svelte child blocks -->
@@ -234,7 +275,7 @@
   /* pdf.js text layer: transparent selectable text positioned over the canvas */
   .readerbody :global(.textLayer) { position: absolute; inset: 0; overflow: clip; opacity: 1; line-height: 1; text-align: initial; transform-origin: 0 0; z-index: 2; forced-color-adjust: none; }
   .readerbody :global(.textLayer span), .readerbody :global(.textLayer br) { color: transparent; position: absolute; white-space: pre; cursor: text; transform-origin: 0% 0%; }
-  .readerbody :global(.textLayer span.rhlspan) { background: color-mix(in srgb, var(--accent) 34%, transparent); border-radius: 2px; }
+  .readerbody :global(.textLayer span.rhlspan) { border-radius: 2px; cursor: pointer; }
   .readerbody :global(.textLayer ::selection) { background: color-mix(in srgb, var(--accent) 42%, transparent); }
   .readerbody :global(hr.epub-sep) { border: 0; border-top: 1px solid var(--line); margin: 1.8rem 0; }
   .readerbody :global(ul), .readerbody :global(ol) { margin: 0 0 .7rem; padding-left: 1.4rem; }
@@ -246,7 +287,22 @@
   .readerbody :global(pre) { background: color-mix(in srgb, var(--canvas) 45%, var(--surface)); border: 1px solid var(--line); border-radius: 6px; padding: .6rem .8rem; overflow-x: auto; font-family: var(--mono); font-size: 12.5px; }
   .readerbody :global(blockquote) { margin: .8rem 0; padding-left: 1rem; border-left: 2px solid var(--line-strong); color: var(--fg-muted); font-style: italic; }
   .readerbody :global(img) { max-width: 100%; height: auto; }
-  .readerbody :global(mark.rhl) { background: color-mix(in srgb, var(--accent) 26%, transparent); color: inherit; border-radius: 2px; padding: 0 .05em; }
+  /* highlighter palette — semi-transparent so both the black PDF text and themed note text read through */
+  .readerbody :global(mark.rhl) { color: inherit; border-radius: 2px; padding: 0 .04em; cursor: pointer; -webkit-box-decoration-break: clone; box-decoration-break: clone; }
+  .readerbody :global(mark.rhl-yellow), .readerbody :global(.textLayer span.rhlspan[data-hlc="yellow"]) { background: rgba(240,190,20,.42); }
+  .readerbody :global(mark.rhl-green),  .readerbody :global(.textLayer span.rhlspan[data-hlc="green"])  { background: rgba(52,190,110,.40); }
+  .readerbody :global(mark.rhl-blue),   .readerbody :global(.textLayer span.rhlspan[data-hlc="blue"])   { background: rgba(58,150,240,.36); }
+  .readerbody :global(mark.rhl-pink),   .readerbody :global(.textLayer span.rhlspan[data-hlc="pink"])   { background: rgba(238,90,165,.36); }
+  .readerbody :global(mark.rhl-orange), .readerbody :global(.textLayer span.rhlspan[data-hlc="orange"]) { background: rgba(240,135,30,.42); }
+  .marks { display: inline-flex; align-items: center; gap: .2rem; margin: 0 .1rem; }
+  .swatch { width: 14px; height: 14px; border-radius: 50%; border: 1px solid var(--line-strong); cursor: pointer; padding: 0; transition: transform .12s; }
+  .swatch:hover { transform: scale(1.15); }
+  .swatch.on { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .swatch.sw-yellow { background: rgba(240,190,20,.92); }
+  .swatch.sw-green  { background: rgba(52,190,110,.92); }
+  .swatch.sw-blue   { background: rgba(58,150,240,.92); }
+  .swatch.sw-pink   { background: rgba(238,90,165,.92); }
+  .swatch.sw-orange { background: rgba(240,135,30,.92); }
   .readerbody :global(.rmuted) { color: var(--fg-faint); font-style: italic; }
   .readerbody :global(::selection) { background: var(--accent-soft); }
 </style>

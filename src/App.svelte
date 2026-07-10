@@ -4,11 +4,12 @@
   import { mergeByUpdated, syncChanged, conflictDecision } from './lib/sync.js';
   import { buildBundle, readBundle, normalizeNotes, mergeFolders, mergeRefs, mergeHls } from './lib/workspace.js';
   import { buildIndex, buildVectorizer, related, hasLinks, digestPairs, cosine, sharedTerms } from './lib/graphindex.js';
-  import { renderMarkdown, setLinkResolver, setCiteResolver } from './lib/markdown.js';
+  import { renderMarkdown, setLinkResolver, setCiteResolver, parseImageAlt, withSizeHint } from './lib/markdown.js';
   import katexCss from 'katex/dist/katex.min.css?inline';   // inlined into exports so math positions correctly outside the app
   import { loadRefs, saveRefs, loadLibFolders, saveLibFolders } from './lib/references.js';
   import { fetchOaPdf, looksLikePdf, looksLikeEpub, OA_CONTACT } from './lib/openaccess.js';
   import { formatRef, BIB_STYLES } from './lib/cite.js';
+  import { coerceHl, HL_COLORS, HL_DEFAULT } from './lib/highlight.js';
   import { initEmbedder, embedNotes, cosine as mlCosine, resetEmbedder } from './lib/ml.js';
   const ML_MODELS = { en: 'Xenova/all-MiniLM-L6-v2', multi: 'Xenova/paraphrase-multilingual-MiniLM-L12-v2' };
   import { connectVault, reconnectVault, lastKnownVaultPath, isTauri } from './lib/vaultadapter.js';
@@ -19,7 +20,7 @@
 
   const IS_MAC = /Mac|iPhone|iPad|iPod/.test((navigator.platform || '') + ' ' + (navigator.userAgent || ''));
   const MOD = IS_MAC ? '⌘' : 'Ctrl';
-  const APP_VERSION = '1.8.0';   // keep in sync with package.json / tauri.conf.json / Cargo.toml
+  const APP_VERSION = '1.9.0';   // keep in sync with package.json / tauri.conf.json / Cargo.toml
 
   let notes = $state(loadNotes());
   let refs = $state(loadRefs());        // shared reference library (also used by [@citekey] citations)
@@ -62,12 +63,21 @@
   let dragging = null;             // 'l' | 'r' while resizing
   let settingsOpen = $state(false);
   let zoom = $state(loadNum('arf-zoom', 108)); // UI scale (%), a touch above 100 by default
+  // reading-column width preset. clamp(floor, %, ceiling): the % resolves against .center — which
+  // already narrows/widens with the side panels — so the column scales both ways, with a readable
+  // floor and a line-length ceiling.
+  const READ_W = { tight: 'clamp(30em, 66%, 38em)', middle: 'clamp(34em, 80%, 50em)', comfy: 'clamp(40em, 94%, 66em)' };
+  let readWidth = $state((() => { try { const v = localStorage.getItem('arf-readwidth'); return READ_W[v] ? v : 'middle'; } catch (e) { return 'middle'; } })());
+  function setReadWidth(v) { if (READ_W[v]) readWidth = v; }
   let saved = $state(false);
   let paletteOpen = $state(false);
   let digestOpen = $state(false);
   let connect = $state(null);   // { aId, bId, terms, text } — the styled connect-notes modal
   let graphFull = $state(false);
   let focus = $state(false);
+  let fullscreen = $state(false);   // real window/browser fullscreen; reconciled with external F11/Esc
+  let topReveal = $state(false);    // in focus mode, the top bar shows only while the pointer is at the top edge
+  let fsFocusDriven = false;        // true when Focus turned fullscreen on, so exiting Focus restores it
   let ctxMenu = $state(null);   // { x, y, items } — the context-aware right-click menu
   let ctxSub = $state(null);    // reserved for future submenus
   let editorRef = $state(null); // Editor.svelte instance, for clipboard/format from the ctx menu
@@ -93,6 +103,7 @@
   let dePage = $state('A4');
   let deMargin = $state('Normal');
   let deOpts = $state({ title: true, numberHeadings: false, keepHeadings: true, fitImages: true, frontmatter: true });
+  let imgCtl = $state(null);   // read-view image control: { index, x, y, w, cap } — set size and caption
   const PAGE_SIZES = ['A4', 'Letter', 'Legal', 'Tabloid', 'A3', 'A5', 'A6', 'B5', 'Executive'];
   const PAGE_CSS = { A4: 'A4', A3: 'A3', A5: 'A5', A6: 'A6', B5: 'B5', Letter: 'letter', Legal: 'legal', Tabloid: 'ledger', Executive: '7.25in 10.5in' };
 
@@ -681,6 +692,8 @@
       + B + "{font-family:'EB Garamond',Georgia,serif;font-size:12pt;line-height:1.6;color:#111;max-width:40em;margin:0 auto;}"
       + scope + 'h1{font-size:22pt}' + scope + 'h2{font-size:16pt}' + scope + 'h1,' + scope + 'h2,' + scope + 'h3{font-weight:600;' + (o.keepHeadings ? 'break-after:avoid;page-break-after:avoid;' : '') + '}'
       + (o.fitImages ? scope + 'img{display:block;max-width:100%;max-height:88vh;height:auto;margin:1em auto;break-inside:avoid}' + scope + 'pre,' + scope + 'table{max-width:100%;overflow-x:auto;break-inside:avoid}' : scope + 'img{display:block;max-width:100%;height:auto;margin:1em auto}')
+      + scope + 'figure.fig{margin:1.3em auto;text-align:center;break-inside:avoid;page-break-inside:avoid}' + scope + 'figure.fig img{margin:0 auto}'
+      + scope + 'figcaption{margin-top:.5em;font-size:10.5pt;color:#555;line-height:1.4}' + scope + 'figcaption .fign{color:#111;font-weight:600}'
       + scope + 'pre{font-family:ui-monospace,Consolas,monospace;font-size:10.5pt;background:#f4f4f2;padding:.6em .8em;border-radius:4px}'
       + scope + 'blockquote{border-left:2px solid #ccc;padding-left:1em;color:#555;font-style:italic}'
       + scope + '.katex{font-size:1em}'
@@ -1123,9 +1136,48 @@
   }
   function toggleLeftPanel() { leftHidden = !leftHidden; try { localStorage.setItem('arf-lefthidden', leftHidden ? '1' : '0'); } catch (e) {} }
   function toggleRightPanel() { rightHidden = !rightHidden; try { localStorage.setItem('arf-righthidden', rightHidden ? '1' : '0'); } catch (e) {} }
+
+  // --- fullscreen (native window in Tauri, Fullscreen API on the web) + focus mode ---
+  async function applyFullscreen(v) {
+    try {
+      if (isTauri) { const { getCurrentWindow } = await import('@tauri-apps/api/window'); await getCurrentWindow().setFullscreen(v); }
+      else if (v) { await document.documentElement.requestFullscreen?.(); }
+      else if (document.fullscreenElement) { await document.exitFullscreen?.(); }
+    } catch (e) {}
+  }
+  // an explicit user fullscreen toggle detaches the Focus coupling, so leaving Focus never force-exits a
+  // fullscreen the user turned on (or off) by hand afterwards
+  function toggleFullscreen() { fsFocusDriven = false; fullscreen = !fullscreen; applyFullscreen(fullscreen); }
+  // Focus mode strips the app to the read/write column and the open reader; it also enters fullscreen,
+  // but the two stay independently reversible — leaving Focus only exits fullscreen if Focus turned it on.
+  function setFocus(v) {
+    focus = v; topReveal = false;
+    if (v) { if (!fullscreen) { fsFocusDriven = true; fullscreen = true; applyFullscreen(true); } }
+    else if (fsFocusDriven) { fsFocusDriven = false; if (fullscreen) { fullscreen = false; applyFullscreen(false); } }
+  }
+  function toggleFocus() { setFocus(!focus); }
+  // reveal the top bar while the pointer is at the very top edge; hysteresis so it doesn't flicker while
+  // the cursor is over the (revealed) bar itself
+  function onFocusMouseMove(e) { if (focus) topReveal = e.clientY <= (topReveal ? 60 : 8); }
+  // reconcile our flag when fullscreen is toggled outside the app (browser Esc/F11, or the native window)
+  $effect(() => {
+    const onWebFs = () => { const real = !!document.fullscreenElement; if (real !== fullscreen) { fullscreen = real; if (!real && fsFocusDriven) fsFocusDriven = false; } };
+    document.addEventListener('fullscreenchange', onWebFs);
+    let un = null, disposed = false;
+    if (isTauri) (async () => {
+      try {
+        const { getCurrentWindow } = await import('@tauri-apps/api/window');
+        const w = getCurrentWindow();
+        const u = await w.onResized(async () => { try { const real = await w.isFullscreen(); if (real !== fullscreen) { fullscreen = real; if (!real && fsFocusDriven) fsFocusDriven = false; } } catch (e) {} });
+        if (disposed) u(); else un = u;   // if the effect was torn down mid-await, unlisten immediately
+      } catch (e) {}
+    })();
+    return () => { disposed = true; document.removeEventListener('fullscreenchange', onWebFs); if (un) un(); };
+  });
   function setZoom(z) { zoom = Math.max(70, Math.min(160, z)); }
   function setTheme(tv) { theme = tv; document.documentElement.setAttribute('data-theme', tv); try { localStorage.setItem('arf-theme', tv); } catch (e) {} }
   $effect(() => { try { document.documentElement.style.zoom = String(zoom / 100); localStorage.setItem('arf-zoom', zoom); } catch (e) {} });
+  $effect(() => { try { document.documentElement.style.setProperty('--readmax', READ_W[readWidth] || READ_W.middle); localStorage.setItem('arf-readwidth', readWidth); } catch (e) {} });
   // Open the styled connect modal (replaces the native window.prompt). Appends to note A on confirm.
   function linkPair(aId, bId, terms) {
     const a = idx.byId[aId], b = idx.byId[bId]; if (!a || !b) return;
@@ -1226,6 +1278,16 @@
     const nl = e.target.closest('[data-newlink]'); if (nl) { e.preventDefault(); createNamed(nl.getAttribute('data-newlink')); return; }
     const tg = e.target.closest('[data-tag]'); if (tg) { e.preventDefault(); tagFilter = tg.getAttribute('data-tag'); return; }
     const ck = e.target.closest('[data-cite]'); if (ck) { e.preventDefault(); openReference(ck.getAttribute('data-cite')); return; }
+    const im = e.target.closest('img[data-imw]');
+    if (im) {
+      e.preventDefault();
+      const imgs = [...e.currentTarget.querySelectorAll('img[data-imw]')];
+      const r = im.getBoundingClientRect(), w = im.getAttribute('data-imw');
+      const fc = im.closest('figure')?.querySelector('figcaption');
+      const cap = fc ? (fc.textContent || '').replace(/^Figure\s+\d+\s+—\s+/, '') : (im.getAttribute('alt') || '');
+      imgCtl = { index: imgs.indexOf(im), x: Math.round(r.left), y: Math.round(r.top), w, cap };
+      return;
+    }
   }
   // toggle the i-th task line in the current note (clicked in the read view). The marker set must
   // match exactly what marked renders as a checkbox — bullets AND ordered items (1. / 1)) — or the
@@ -1260,7 +1322,7 @@
   // references.json), so highlights travel with the vault and can re-sync — like references.json.
   const READER_HL_KEY = 'arf-reader-hl-v0';
   function loadReaderHlMap() { try { const m = JSON.parse(localStorage.getItem(READER_HL_KEY) || '{}'); return m && typeof m === 'object' ? m : {}; } catch (e) { return {}; } }
-  function loadReaderHls(k) { const m = loadReaderHlMap(); return Array.isArray(m[k]) ? m[k] : []; }
+  function loadReaderHls(k) { const m = loadReaderHlMap(); return (Array.isArray(m[k]) ? m[k] : []).map(coerceHl); }   // coerce legacy string[] → {text,color}
   function saveReaderHls(k, list) {
     try { const m = loadReaderHlMap(); if (list && list.length) m[k] = list; else delete m[k]; localStorage.setItem(READER_HL_KEY, JSON.stringify(m)); } catch (e) {}
     clearTimeout(hlsTimer); hlsTimer = setTimeout(hlsToVault, 500);
@@ -1273,15 +1335,24 @@
       const remote = JSON.parse(raw); if (!remote || typeof remote !== 'object') return;
       const merged = mergeHls(loadReaderHlMap(), remote);
       localStorage.setItem(READER_HL_KEY, JSON.stringify(merged));
-      const k = readerSource?.key; if (k) readerHls = Array.isArray(merged[k]) ? merged[k] : [];
+      const k = readerSource?.key; if (k) readerHls = loadReaderHls(k);
     } catch (e) {}
   }
   $effect(() => { const k = readerSource?.key; readerHls = k ? loadReaderHls(k) : []; });
   function openReaderNote(id) { if (idx.byId[id] || notes.some((n) => n.id === id)) { reader = { kind: 'note', id }; view = 'notes'; rightHidden = false; } }
   function closeReader() { reader = null; }
-  function addHighlight(text) {
-    const k = readerSource?.key, t = (text || '').trim(); if (!k || t.length < 3) return;
-    if (!readerHls.includes(t)) { readerHls = [...readerHls, t]; saveReaderHls(k, readerHls); }
+  function addHighlight(text, color) {
+    const k = readerSource?.key, t = (text || '').trim(); if (!k || t.replace(/\s/g, '').length < 3) return;
+    const c = HL_COLORS.includes(color) ? color : HL_DEFAULT;
+    const at = readerHls.findIndex((h) => coerceHl(h).text === t);
+    if (at >= 0) readerHls = readerHls.map((h, i) => (i === at ? { text: t, color: c } : h));   // re-highlighting recolours
+    else readerHls = [...readerHls, { text: t, color: c }];
+    saveReaderHls(k, readerHls);
+  }
+  function removeHighlight(text) {
+    const k = readerSource?.key, t = (text || '').trim(); if (!k) return;
+    readerHls = readerHls.filter((h) => coerceHl(h).text !== t);
+    saveReaderHls(k, readerHls);
   }
   // insert the selected passage as a Markdown blockquote at the cursor in the open note, attributed
   // to its source ([[note]] or [@citekey]). This is the reader → note quote path.
@@ -1323,6 +1394,24 @@
   }
   // store an inserted image as a content-addressed file under the vault; returns its relative path.
   // Null → the editor falls back to an inline data URI (web, or if the write fails).
+  // read-view image controls: rewrite the Nth inline ![alt](src) in the body to set its width hint or
+  // caption, so the change shows in the read view and travels into exports (both render from the same
+  // Markdown). Fenced/inline code is masked first so image markdown inside a code block is never counted
+  // or rewritten — keeping this index aligned with the rendered images the control clicks. (Reference-
+  // style ![alt][id] images aren't inline-rewritable and are the one remaining index edge.)
+  function rewriteNthImage(imgIndex, fn) {
+    const n = current; if (!n) return; let i = -1, changed = false;
+    const body = (n.body || '').replace(/(```[\s\S]*?```|`[^`\n]*`)|!\[([^\]]*)\]\(([^)]*)\)/g, (m, code, alt, src) => {
+      if (code != null) return code;              // leave code spans/fences untouched and uncounted
+      i++; if (i !== imgIndex) return m;
+      changed = true; return '![' + fn(alt) + '](' + src + ')';
+    });
+    if (changed && body !== n.body) { n.body = body; n.updated = new Date().toISOString(); markDirty(n.id); flushSave(); }
+  }
+  function setImageWidth(imgIndex, w) { rewriteNthImage(imgIndex, (alt) => withSizeHint(alt, w)); if (imgCtl) imgCtl = { ...imgCtl, w: String(w || 'full') }; }
+  function setImageCaption(imgIndex, cap) {
+    rewriteNthImage(imgIndex, (alt) => { const { w } = parseImageAlt(alt); const c = (cap || '').replace(/[|\]]/g, ' ').trim(); return w ? (c ? c + '|' + w : '|' + w) : c; });
+  }
   async function saveNoteImage(file) {
     if (!vaultBackend) return null;
     try {
@@ -1554,8 +1643,16 @@
   const editable = (t) => !!(t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable || (t.closest && t.closest('.cm-editor'))));
   function onKey(e) {
     if (e.defaultPrevented) return; // let the editor/inputs claim a key before the global shortcuts run
-    // Escape always closes whatever is open, then stops
-    if (e.key === 'Escape') { paletteOpen = false; digestOpen = false; connect = null; graphFull = false; docExport = false; settingsOpen = false; focus = false; movePick = null; citePick = null; closeCtx(); return; }
+    // Escape closes the topmost open thing, then stops — one Escape shouldn't both dismiss an overlay
+    // AND drop out of focus/fullscreen. Only fall through to focus/fullscreen when nothing was open.
+    if (e.key === 'Escape') {
+      const hadOverlay = paletteOpen || digestOpen || !!connect || graphFull || docExport || settingsOpen || !!movePick || !!citePick || !!imgCtl || !!ctxMenu;
+      paletteOpen = false; digestOpen = false; connect = null; graphFull = false; docExport = false; settingsOpen = false; movePick = null; citePick = null; imgCtl = null; closeCtx();
+      if (hadOverlay) return;
+      if (focus) setFocus(false); else if (fullscreen) { fullscreen = false; applyFullscreen(false); }
+      return;
+    }
+    if (e.key === 'F11') { e.preventDefault(); toggleFullscreen(); return; }
     // an open overlay owns the keyboard — don't let a global shortcut mutate hidden state behind it
     if (paletteOpen || settingsOpen || digestOpen || connect || graphFull || docExport || movePick || citePick) return;
     const mod = IS_MAC ? e.metaKey : e.ctrlKey; // ⌘ on macOS, Ctrl elsewhere — leaves Ctrl free for caret shortcuts on Mac
@@ -1574,7 +1671,7 @@
 <!-- with the OS drag-drop handler off (tauri dragDropEnabled:false, required for HTML5 DnD on Windows),
      an unhandled file drop would otherwise make the webview navigate to file:// and replace the app.
      These bubble-phase guards neutralise any drop the row/editor handlers didn't already accept. -->
-<svelte:window onkeydown={onKey} bind:innerWidth={winW} ondragover={(e) => e.preventDefault()} ondrop={(e) => e.preventDefault()} />
+<svelte:window onkeydown={onKey} bind:innerWidth={winW} onmousemove={onFocusMouseMove} ondragover={(e) => e.preventDefault()} ondrop={(e) => e.preventDefault()} />
 
 {#if needVault}
   <div class="welcome">
@@ -1592,7 +1689,7 @@
     </div>
   </div>
 {:else}
-<div class="shell" class:focus={focus}>
+<div class="shell" class:focus={focus} class:reveal-top={topReveal}>
   <header class="top">
     <button class="wm" onclick={() => (view = 'notes')}>Arf<span class="dot">.</span></button>
     <div class="viewtoggle">
@@ -1609,7 +1706,8 @@
     <div class="topacts">
       <button class="tbtn" onclick={() => (digestOpen = true)}>Synthesis</button>
       <button class="tbtn" onclick={() => (graphFull = true)}>Graph</button>
-      <button class="tbtn" class:on={focus} onclick={() => (focus = !focus)}>Focus</button>
+      <button class="tbtn" class:on={focus} onclick={toggleFocus}>Focus</button>
+      <button class="tbtn" class:on={fullscreen} onclick={toggleFullscreen} title="Fullscreen (F11)">Fullscreen</button>
       <button class="tbtn" onclick={toggleTheme}>Theme</button>
       <button class="tbtn" onclick={() => (settingsOpen = true)}>Settings</button>
       {#if view === 'notes' && !focus && winW > 900}
@@ -1639,7 +1737,7 @@
     <Library bind:this={libraryRef} {notes} {idx} onopen={open} bind:refs bind:libFolders jumpTo={refJump} onjumped={() => (refJump = null)} onrefsdelete={() => queueMicrotask(refsToVault)}
       hasVault={!!vaultBackend} onopenreader={openReferenceInReader} onattach={attachLocalFile} onfetchpdf={fetchPdfForRef} ondetach={detachFromRef} />
   {:else}
-    <div class="ws" class:lhide={leftHidden} class:rhide={rightHidden} style="--leftw:{appliedLeftW}px; --rightw:{appliedRightW}px">
+    <div class="ws" class:lhide={leftHidden} class:rhide={rightHidden} class:hasreader={!!reader} style="--leftw:{appliedLeftW}px; --rightw:{appliedRightW}px">
       <button type="button" class="resizer rz-l" aria-label="Resize left sidebar"
         style="left:{appliedLeftW - 5}px" onpointerdown={(e) => startResize('l', e)} onpointermove={onResizeMove} onpointerup={endResize} onpointercancel={endResize} onkeydown={(e) => nudgeResize('l', e)}></button>
       <button type="button" class="resizer rz-r" aria-label="Resize right sidebar"
@@ -1749,7 +1847,7 @@
 
       {#if reader}
         <aside class="rail readerpane">
-          <Reader source={readerSource} highlights={readerHls} canQuote={!!current} onclose={closeReader} onquote={quoteIntoNote} onhighlight={addHighlight} />
+          <Reader source={readerSource} highlights={readerHls} canQuote={!!current} onclose={closeReader} onquote={quoteIntoNote} onhighlight={addHighlight} onunhighlight={removeHighlight} />
         </aside>
       {:else}
       <aside class="rail">
@@ -1933,6 +2031,9 @@
       <div class="setrow"><span class="sk">View zoom</span>
         <div class="zoomctl"><button onclick={() => setZoom(zoom - 8)} aria-label="Smaller">−</button><span class="zval">{zoom}%</span><button onclick={() => setZoom(zoom + 8)} aria-label="Larger">+</button><button class="zreset" onclick={() => setZoom(100)}>reset</button></div>
       </div>
+      <div class="setrow"><span class="sk">Reading width <span class="sh">Width of the writing and reading column — scales with the side panels</span></span>
+        <div class="seg"><button class:on={readWidth === 'tight'} onclick={() => setReadWidth('tight')}>Tight</button><button class:on={readWidth === 'middle'} onclick={() => setReadWidth('middle')}>Middle</button><button class:on={readWidth === 'comfy'} onclick={() => setReadWidth('comfy')}>Comfy</button></div>
+      </div>
 
       <div class="setlabel">On-device machine</div>
       <div class="setrow"><span class="sk">Connection suggestions <span class="sh">{mlModel === 'multi' ? 'Multilingual model — runs on your device, ~120 MB once' : 'MiniLM — runs on your device, ~23 MB once'}</span></span>
@@ -1970,6 +2071,24 @@
         <span class="setstat"><a href="https://tunabirgun.github.io/arf/" target="_blank" rel="noopener">Docs</a> · <a href="https://github.com/tunabirgun/arf" target="_blank" rel="noopener">Source</a></span>
       </div>
     </div>
+  </div>
+{/if}
+
+{#if imgCtl}
+  <div class="imgctlback" onclick={() => (imgCtl = null)} oncontextmenu={(e) => { e.preventDefault(); imgCtl = null; }} onkeydown={(e) => { if (e.key === 'Escape') imgCtl = null; }} role="button" tabindex="-1" aria-label="Close image controls"></div>
+  <div class="imgctl" style="left:{imgCtl.x}px; top:{imgCtl.y}px">
+    <div class="imgctl-row">
+      <span class="imgctl-lbl">Size</span>
+      <button class:on={imgCtl.w === '240'} onclick={() => setImageWidth(imgCtl.index, 240)}>S</button>
+      <button class:on={imgCtl.w === '400'} onclick={() => setImageWidth(imgCtl.index, 400)}>M</button>
+      <button class:on={imgCtl.w === '600'} onclick={() => setImageWidth(imgCtl.index, 600)}>L</button>
+      <button class:on={imgCtl.w === 'full'} onclick={() => setImageWidth(imgCtl.index, null)}>Full</button>
+    </div>
+    <!-- svelte-ignore a11y_autofocus -->
+    <input class="imgctl-cap" autofocus placeholder="Figure caption (auto-numbered)…" value={imgCtl.cap}
+      oninput={(e) => (imgCtl = { ...imgCtl, cap: e.currentTarget.value })}
+      onkeydown={(e) => { if (e.key === 'Enter') { setImageCaption(imgCtl.index, imgCtl.cap); imgCtl = null; } else if (e.key === 'Escape') { e.stopPropagation(); imgCtl = null; } }}
+      onblur={() => imgCtl && setImageCaption(imgCtl.index, imgCtl.cap)} />
   </div>
 {/if}
 

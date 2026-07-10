@@ -99,7 +99,7 @@
 .read .bib ol { padding-left: 1.4em; margin: 0; }
 .read .bib li { margin: .4em 0; font-size: .9em; color: var(--fg-muted); line-height: 1.5; }
 
-.center > .crumbs, .center > .titlebar, .center > .read, .center > .editor { max-width: 34em; margin-left: auto; margin-right: auto; }
+.center > .crumbs, .center > .titlebar, .center > .read, .center > .editor { max-width: var(--readmax, 34em); margin-left: auto; margin-right: auto; }
 .savebanner { flex: none; background: color-mix(in srgb, var(--accent) 14%, var(--surface)); border-bottom: 1px solid var(--accent); color: var(--fg-bright); font-family: var(--sans); font-size: 13px; padding: .5rem clamp(.7rem, 2vw, 1.2rem); }
 .savebanner .bnrbtn { font-family: var(--sans); font-size: 11px; color: var(--fg-bright); background: none; border: 1px solid currentColor; border-radius: 3px; padding: .05rem .45rem; margin-left: .4rem; cursor: pointer; }
 .savebanner .mono { font-family: var(--mono); font-size: 11px; }
@@ -139,7 +139,21 @@
 .read th, .read td { border: 1px solid var(--line); padding: .35rem .6rem; text-align: left; }
 .read .math-display { text-align: center; margin: 1.1rem 0; overflow-x: auto; }
 /* images: block, centered, fit the column width and keep their aspect ratio */
-.read img { display: block; max-width: 100%; height: auto; margin: 1.1rem auto; border-radius: 3px; }
+.read img { display: block; max-width: 100%; height: auto; margin: 1.1rem auto; border-radius: 3px; cursor: pointer; }
+.read figure.fig { margin: 1.3rem auto; text-align: center; }
+.read figure.fig img { margin: 0 auto; }
+.read figure.fig figcaption { margin-top: .5rem; font-family: var(--sans); font-size: 12.5px; color: var(--fg-muted); line-height: 1.45; }
+.read figure.fig figcaption .fign { color: var(--fg-bright); font-weight: 600; }
+/* read-view image size/caption control */
+.imgctlback { position: fixed; inset: 0; z-index: 59; }
+.imgctl { position: fixed; z-index: 60; transform: translateY(-100%) translateY(-10px); background: var(--surface); border: 1px solid var(--line-strong); border-radius: 8px; box-shadow: 0 8px 26px rgba(0,0,0,.24); padding: .45rem; display: flex; flex-direction: column; gap: .4rem; min-width: 216px; }
+.imgctl-row { display: flex; align-items: center; gap: .25rem; }
+.imgctl-lbl { font-family: var(--sans); font-size: 11px; color: var(--fg-muted); margin-right: .25rem; }
+.imgctl-row button { font-family: var(--sans); font-size: 12px; color: var(--fg-muted); background: none; border: 1px solid var(--line); border-radius: 5px; padding: .2rem .55rem; cursor: pointer; }
+.imgctl-row button:hover { color: var(--fg-bright); border-color: var(--line-strong); }
+.imgctl-row button.on { background: var(--accent-soft); color: var(--accent); border-color: var(--accent-soft); }
+.imgctl-cap { font-family: var(--sans); font-size: 12.5px; color: var(--fg-bright); background: var(--canvas); border: 1px solid var(--line-strong); border-radius: 5px; padding: .3rem .5rem; }
+.imgctl-cap:focus { outline: none; border-color: var(--accent); }
 
 /* rail */
 .rh { font-family: var(--sans); font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: var(--fg-faint); margin: 0 0 .5rem; display: flex; justify-content: space-between; align-items: center; }
@@ -249,13 +263,16 @@
 .ovclose { background: none; border: 1px solid var(--line-strong); border-radius: 3px; color: var(--fg-muted); padding: .3rem .6rem; cursor: pointer; font-family: var(--sans); font-size: 12px; }
 .ovclose:hover { border-color: var(--accent); color: var(--fg-bright); }
 
-/* focus mode */
-.shell.focus .list, .shell.focus .rail, .shell.focus .resizer { display: none; }
-.shell.focus .ws { grid-template-columns: 1fr; }
-.shell.focus .center { padding-top: 3rem; grid-column: 1; }
+/* focus mode: only the read/write column and the open reader remain. Everything else is hidden, and the
+   top bar is lifted out of view until the pointer reaches the top edge (reveal-top, driven by JS). */
+.shell.focus .list, .shell.focus .resizer, .shell.focus .rail:not(.readerpane) { display: none; }
+.shell.focus .ws { grid-template-columns: minmax(0, 1fr); }
+.shell.focus .ws.hasreader { grid-template-columns: minmax(0, 1fr) var(--rightw); }
+.shell.focus .rail.readerpane { grid-column: 2; }
+.shell.focus .center { padding-top: 2.6rem; grid-column: 1; }
 /* focus keeps the note itself at full contrast; only the surrounding chrome recedes */
-.shell.focus .top { opacity: .4; transition: opacity .3s; }
-.shell.focus .top:hover { opacity: 1; }
+.shell.focus .top { position: absolute; top: 0; left: 0; right: 0; z-index: 40; background: var(--canvas); border-bottom: 1px solid var(--line); transform: translateY(-100%); opacity: 0; pointer-events: none; transition: transform .22s ease, opacity .22s ease; }
+.shell.focus.reveal-top .top { transform: translateY(0); opacity: 1; pointer-events: auto; }
 
 /* graph elements (created via innerHTML, so global) */
 .eg-edge { stroke: var(--line-strong); stroke-width: 1.2; }

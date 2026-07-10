@@ -6,6 +6,21 @@ All notable changes to Arf are recorded here. The format follows
 below matches a `v*` git tag and a GitHub Release; the release notes are generated
 from the matching section of this file.
 
+## [1.9.0] - 2026-07-11
+
+### Added
+- **Highlighter colours.** Mark a passage in the reader in one of five colours from the swatch row; click a highlight to remove it. Highlights travel with your vault and sync as before, and old single-colour highlights are kept.
+- **Figures with automatic numbering.** A standalone image with a caption becomes a numbered figure — *Figure 1*, *Figure 2*, … — in the reading view and in exported PDF and HTML. Click any image to set its caption.
+- **Image sizing.** Click an image in the reading view and choose Small, Medium, Large, or Full; the size is written into the note (`![caption|width](…)`) so it holds in the reader and in exports. You can also type the width by hand.
+- **Fullscreen.** A Fullscreen control in the top bar (and F11) fills the screen. Focus mode now also goes fullscreen, and the two can be turned off independently.
+- **A reading-width setting.** Choose Tight, Middle, or Comfy for the writing and reading column; each scales with the side panels, so the text uses the room it has without the lines ever running too long.
+
+### Fixed
+- **Highlighting a sentence with brackets or a link now works.** The reader matches text without being thrown off by parentheses, square brackets, or a citation or wikilink inside the passage — cases that previously left no mark.
+
+### Changed
+- **Focus mode shows only your writing.** It hides everything but the read/write column and the open reader; the top bar stays out of the way and slides in when you move the pointer to the top edge.
+
 ## [1.8.0] - 2026-07-10
 
 ### Added
