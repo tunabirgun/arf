@@ -103,7 +103,7 @@ Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for the dev
 
 ## Built with
 
-Svelte 5 + Vite, CodeMirror 6, KaTeX, marked, DOMPurify, MiniSearch, [pdf.js](https://mozilla.github.io/pdf.js/) (the side reader), [Transformers.js](https://github.com/huggingface/transformers.js) (all-MiniLM-L6-v2 and paraphrase-multilingual-MiniLM-L12-v2), and Tauri 2 for the desktop app.
+Svelte 5 + Vite, CodeMirror 6, KaTeX, marked, DOMPurify, MiniSearch, [pdf.js](https://mozilla.github.io/pdf.js/) and [fflate](https://github.com/101arrowz/fflate) (the PDF and EPUB reader), [Transformers.js](https://github.com/huggingface/transformers.js) (all-MiniLM-L6-v2 and paraphrase-multilingual-MiniLM-L12-v2), and Tauri 2 for the desktop app.
 
 ## License
 
