@@ -18,6 +18,8 @@
 .tbtn { font-family: var(--sans); font-size: 12.5px; color: var(--fg-muted); background: none; border: 0; border-radius: 6px; padding: .36rem .55rem; cursor: pointer; white-space: nowrap; }
 .tbtn:hover { background: var(--accent-soft); color: var(--fg-bright); }
 .tbtn.on { color: var(--accent); }
+.iconbtn { display: inline-flex; align-items: center; justify-content: center; padding: .34rem .44rem; }
+.iconbtn svg { display: block; }
 .iconbar { display: inline-flex; gap: 2px; border: 1px solid var(--line); border-radius: 8px; padding: 2px; }
 .ic { width: 31px; height: 28px; display: inline-flex; align-items: center; justify-content: center; font-size: 15px; color: var(--fg-muted); background: none; border: 0; border-radius: 6px; cursor: pointer; }
 .ic:hover { background: var(--accent-soft); color: var(--fg-bright); }
@@ -26,6 +28,9 @@
 .newbtn:hover { opacity: .9; }
 
 .ws { flex: 1; display: grid; grid-template-columns: var(--leftw, 220px) minmax(0, 1fr) var(--rightw, 268px); overflow: hidden; position: relative; }
+/* a hidden sidebar collapses its column (width var → 0) and drops its panel + resizer out of flow */
+.ws.lhide .list, .ws.lhide .rz-l { display: none; }
+.ws.rhide .rail, .ws.rhide .rz-r { display: none; }
 .resizer { position: absolute; top: 0; bottom: 0; width: 10px; cursor: col-resize; z-index: 6; background: none; border: 0; padding: 0; }
 .resizer::after { content: ''; position: absolute; top: 0; bottom: 0; left: 4px; width: 2px; background: transparent; transition: background .15s; }
 .resizer:hover::after, .resizer:focus-visible::after { background: var(--accent); }
@@ -317,7 +322,7 @@
 .exparea { width: 100%; min-height: 200px; font-family: var(--mono); font-size: 12px; line-height: 1.5; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); color: var(--fg); padding: .7rem; white-space: pre; margin-top: .6rem; }
 .expsel { font-family: var(--sans); font-size: 13px; padding: .35rem; border: 1px solid var(--line-strong); border-radius: 4px; background: var(--surface); color: var(--fg-bright); }
 
-@media (max-width: 900px) { .ws { grid-template-columns: 190px minmax(0,1fr); } .rail { display: none; } .resizer { display: none; } .libview { grid-template-columns: 1fr; } }
+@media (max-width: 900px) { .ws { grid-template-columns: 190px minmax(0,1fr); } .ws.lhide { grid-template-columns: 0 minmax(0,1fr); } .rail { display: none; } .resizer { display: none; } .libview { grid-template-columns: 1fr; } }
 
 /* ===== motion: subtle, uniform entrances + hover easing (design-token colors only) ===== */
 @keyframes arf-fade { from { opacity: 0; } to { opacity: 1; } }

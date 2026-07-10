@@ -19,7 +19,7 @@
 
   const IS_MAC = /Mac|iPhone|iPad|iPod/.test((navigator.platform || '') + ' ' + (navigator.userAgent || ''));
   const MOD = IS_MAC ? '⌘' : 'Ctrl';
-  const APP_VERSION = '1.7.0';   // keep in sync with package.json / tauri.conf.json / Cargo.toml
+  const APP_VERSION = '1.8.0';   // keep in sync with package.json / tauri.conf.json / Cargo.toml
 
   let notes = $state(loadNotes());
   let refs = $state(loadRefs());        // shared reference library (also used by [@citekey] citations)
@@ -56,6 +56,9 @@
   let reconnected = false;
   let leftW = $state(loadNum('arf-leftw', 220));   // resizable sidebar widths
   let rightW = $state(loadNum('arf-rightw', 268));
+  let leftHidden = $state(loadBool('arf-lefthidden', false));   // sidebars can be collapsed out of the way
+  let rightHidden = $state(loadBool('arf-righthidden', false));
+  let winW = $state(typeof window !== 'undefined' ? window.innerWidth : 1280);   // live viewport width (bound below)
   let dragging = null;             // 'l' | 'r' while resizing
   let settingsOpen = $state(false);
   let zoom = $state(loadNum('arf-zoom', 108)); // UI scale (%), a touch above 100 by default
@@ -659,6 +662,16 @@
   // embedded raster. Sits in the top-right corner of the page; nothing else is added to header/footer.
   const ARF_LOGO_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 46 40" role="img" aria-label="Arf"><text x="0" y="33" font-family="Georgia,\'Times New Roman\',serif" font-size="40" font-weight="700" fill="#1a1a1a">A</text><circle cx="37" cy="30" r="4.6" fill="#2c4a6e"/></svg>';
   const ARF_LOGO_HTML = '<div class="arf-logo" aria-hidden="true">' + ARF_LOGO_SVG + '</div>';
+  // sidebar-toggle glyphs: a framed rectangle with the side rail marked; the rail is filled when the
+  // panel is open, hollow when it's hidden — so state reads at a glance without relying on colour.
+  const panelIcon = (side, open) => {
+    const x = side === 'l' ? 6 : 10, fx = side === 'l' ? 1.7 : 10.6;
+    return '<svg viewBox="0 0 16 14" width="15" height="13" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" aria-hidden="true">'
+      + '<rect x="1" y="1.6" width="14" height="10.8" rx="1.8"/>'
+      + '<line x1="' + x + '" y1="1.6" x2="' + x + '" y2="12.4"/>'
+      + (open ? '<rect x="' + fx + '" y="2.3" width="3.7" height="9.4" rx="0.8" fill="currentColor" stroke="none"/>' : '')
+      + '</svg>';
+  };
   // export CSS, with an optional scope prefix so the same rules serve a standalone document (scope='')
   // and an in-page print container (scope='#arf-printroot ') without clobbering the app's own styles
   function buildExportCSS(scope) {
@@ -1078,20 +1091,38 @@
   function toggleTheme() { theme = theme === 'dark' ? 'light' : 'dark'; document.documentElement.setAttribute('data-theme', theme); try { localStorage.setItem('arf-theme', theme); } catch (e) {} }
 
   function loadNum(k, d) { try { const v = +localStorage.getItem(k); return v && v > 0 ? v : d; } catch (e) { return d; } }
+  function loadBool(k, d) { try { const v = localStorage.getItem(k); return v == null ? d : v === '1'; } catch (e) { return d; } }
+  // sidebar width caps are window-relative, not fixed: a panel can grow until the note column would
+  // fall below MIN_CENTER — so the reader/PDF pane can take most of the window when you want it to.
+  const MIN_CENTER = 300, MIN_LEFT = 170, MIN_RIGHT = 200;
+  function maxLeftW(wsW) { return Math.max(MIN_LEFT, wsW - MIN_CENTER - (rightHidden ? 0 : rightW)); }
+  function maxRightW(wsW) { return Math.max(MIN_RIGHT, wsW - MIN_CENTER - (leftHidden ? 0 : leftW)); }
+  // The *rendered* track widths, clamped to the live workspace so a width saved on a wider window — or
+  // grown while the other panel was hidden — can never collapse the note column when the window shrinks
+  // or that panel is revealed. Non-destructive: the stored leftW/rightW are untouched, so widening the
+  // window restores them. Layout px = viewport / zoom-factor (the resize handlers use the same relation).
+  const wsW = $derived((winW || 1280) / ((zoom || 100) / 100));
+  const appliedLeftW = $derived(leftHidden ? 0 : Math.max(MIN_LEFT, Math.min(maxLeftW(wsW), leftW)));
+  const appliedRightW = $derived(rightHidden ? 0 : Math.max(MIN_RIGHT, Math.min(maxRightW(wsW), rightW)));
   function startResize(which, e) { dragging = which; try { e.currentTarget.setPointerCapture(e.pointerId); } catch (x) {} e.preventDefault(); }
   function onResizeMove(e) {
     if (!dragging) return;
     const zf = (zoom || 100) / 100; // getBoundingClientRect/clientX are in zoomed px; store widths in layout px
     const ws = e.currentTarget.parentElement.getBoundingClientRect();
-    if (dragging === 'l') leftW = Math.max(170, Math.min(460, Math.round((e.clientX - ws.left) / zf)));
-    else rightW = Math.max(200, Math.min(480, Math.round((ws.right - e.clientX) / zf)));
+    const wsW = (ws.right - ws.left) / zf;
+    if (dragging === 'l') leftW = Math.max(MIN_LEFT, Math.min(maxLeftW(wsW), Math.round((e.clientX - ws.left) / zf)));
+    else rightW = Math.max(MIN_RIGHT, Math.min(maxRightW(wsW), Math.round((ws.right - e.clientX) / zf)));
   }
   function endResize() { if (!dragging) return; dragging = null; try { localStorage.setItem('arf-leftw', leftW); localStorage.setItem('arf-rightw', rightW); } catch (e) {} }
   function nudgeResize(which, e) {
     const step = e.key === 'ArrowLeft' ? -16 : e.key === 'ArrowRight' ? 16 : 0; if (!step) return; e.preventDefault();
-    if (which === 'l') leftW = Math.max(170, Math.min(460, leftW + step)); else rightW = Math.max(200, Math.min(480, rightW - step));
+    const ws = e.currentTarget.parentElement.getBoundingClientRect();
+    const zf = (zoom || 100) / 100, wsW = (ws.right - ws.left) / zf;
+    if (which === 'l') leftW = Math.max(MIN_LEFT, Math.min(maxLeftW(wsW), leftW + step)); else rightW = Math.max(MIN_RIGHT, Math.min(maxRightW(wsW), rightW - step));
     try { localStorage.setItem('arf-leftw', leftW); localStorage.setItem('arf-rightw', rightW); } catch (e2) {}
   }
+  function toggleLeftPanel() { leftHidden = !leftHidden; try { localStorage.setItem('arf-lefthidden', leftHidden ? '1' : '0'); } catch (e) {} }
+  function toggleRightPanel() { rightHidden = !rightHidden; try { localStorage.setItem('arf-righthidden', rightHidden ? '1' : '0'); } catch (e) {} }
   function setZoom(z) { zoom = Math.max(70, Math.min(160, z)); }
   function setTheme(tv) { theme = tv; document.documentElement.setAttribute('data-theme', tv); try { localStorage.setItem('arf-theme', tv); } catch (e) {} }
   $effect(() => { try { document.documentElement.style.zoom = String(zoom / 100); localStorage.setItem('arf-zoom', zoom); } catch (e) {} });
@@ -1246,7 +1277,7 @@
     } catch (e) {}
   }
   $effect(() => { const k = readerSource?.key; readerHls = k ? loadReaderHls(k) : []; });
-  function openReaderNote(id) { if (idx.byId[id] || notes.some((n) => n.id === id)) { reader = { kind: 'note', id }; view = 'notes'; } }
+  function openReaderNote(id) { if (idx.byId[id] || notes.some((n) => n.id === id)) { reader = { kind: 'note', id }; view = 'notes'; rightHidden = false; } }
   function closeReader() { reader = null; }
   function addHighlight(text) {
     const k = readerSource?.key, t = (text || '').trim(); if (!k || t.length < 3) return;
@@ -1272,7 +1303,7 @@
     if (att && att.path && vaultBackend) {
       const bytes = await vaultBackend.readBinary(att.path);
       if (bytes) {
-        view = 'notes';
+        view = 'notes'; rightHidden = false;
         if (att.kind === 'pdf') reader = { kind: 'pdf', key: 'ref:' + ref.id, title: ref.title || att.name, citekey: ref.citekey, bytes };
         else if (att.kind === 'html') reader = { kind: 'html', key: 'ref:' + ref.id, title: ref.title || att.name, citekey: ref.citekey, html: new TextDecoder().decode(bytes) };
         else if (att.kind === 'epub') reader = { kind: 'epub', key: 'ref:' + ref.id, title: ref.title || att.name, citekey: ref.citekey, bytes };
@@ -1280,7 +1311,7 @@
         return;
       }
     }
-    if (ref.abstract) { view = 'notes'; reader = { kind: 'text', key: 'refabs:' + ref.id, title: ref.title || 'Abstract', citekey: ref.citekey, body: ref.abstract }; return; }
+    if (ref.abstract) { view = 'notes'; rightHidden = false; reader = { kind: 'text', key: 'refabs:' + ref.id, title: ref.title || 'Abstract', citekey: ref.citekey, body: ref.abstract }; return; }
     notify('Nothing to read yet — attach a file to this reference or add an abstract.');
   }
   // --- note images: organized files in the vault (attachments/images/), data-URI on the web ---
@@ -1543,7 +1574,7 @@
 <!-- with the OS drag-drop handler off (tauri dragDropEnabled:false, required for HTML5 DnD on Windows),
      an unhandled file drop would otherwise make the webview navigate to file:// and replace the app.
      These bubble-phase guards neutralise any drop the row/editor handlers didn't already accept. -->
-<svelte:window onkeydown={onKey} ondragover={(e) => e.preventDefault()} ondrop={(e) => e.preventDefault()} />
+<svelte:window onkeydown={onKey} bind:innerWidth={winW} ondragover={(e) => e.preventDefault()} ondrop={(e) => e.preventDefault()} />
 
 {#if needVault}
   <div class="welcome">
@@ -1568,6 +1599,9 @@
       <button class:on={view === 'notes'} onclick={() => (view = 'notes')}>Notes</button>
       <button class:on={view === 'library'} onclick={() => (view = 'library')}>Library</button>
     </div>
+    {#if view === 'notes' && !focus}
+      <button class="tbtn iconbtn" class:on={!leftHidden} aria-pressed={!leftHidden} title={leftHidden ? 'Show the notes sidebar' : 'Hide the notes sidebar'} aria-label="Toggle notes sidebar" onclick={toggleLeftPanel}>{@html panelIcon('l', !leftHidden)}</button>
+    {/if}
     <span class="sp"></span>
     <button class="searchpill" onclick={() => { paletteOpen = true; query = ''; }}>
       <span class="mag">⌕</span><span class="lbl">Search</span><kbd>{MOD} K</kbd>
@@ -1578,6 +1612,9 @@
       <button class="tbtn" class:on={focus} onclick={() => (focus = !focus)}>Focus</button>
       <button class="tbtn" onclick={toggleTheme}>Theme</button>
       <button class="tbtn" onclick={() => (settingsOpen = true)}>Settings</button>
+      {#if view === 'notes' && !focus && winW > 900}
+        <button class="tbtn iconbtn" class:on={!rightHidden} aria-pressed={!rightHidden} title={rightHidden ? 'Show the right panel' : 'Hide the right panel'} aria-label="Toggle right panel" onclick={toggleRightPanel}>{@html panelIcon('r', !rightHidden)}</button>
+      {/if}
     </div>
     <button class="newbtn" onclick={create}>＋&nbsp;New</button>
   </header>
@@ -1602,11 +1639,11 @@
     <Library bind:this={libraryRef} {notes} {idx} onopen={open} bind:refs bind:libFolders jumpTo={refJump} onjumped={() => (refJump = null)} onrefsdelete={() => queueMicrotask(refsToVault)}
       hasVault={!!vaultBackend} onopenreader={openReferenceInReader} onattach={attachLocalFile} onfetchpdf={fetchPdfForRef} ondetach={detachFromRef} />
   {:else}
-    <div class="ws" style="--leftw:{leftW}px; --rightw:{rightW}px">
+    <div class="ws" class:lhide={leftHidden} class:rhide={rightHidden} style="--leftw:{appliedLeftW}px; --rightw:{appliedRightW}px">
       <button type="button" class="resizer rz-l" aria-label="Resize left sidebar"
-        style="left:{leftW - 5}px" onpointerdown={(e) => startResize('l', e)} onpointermove={onResizeMove} onpointerup={endResize} onpointercancel={endResize} onkeydown={(e) => nudgeResize('l', e)}></button>
+        style="left:{appliedLeftW - 5}px" onpointerdown={(e) => startResize('l', e)} onpointermove={onResizeMove} onpointerup={endResize} onpointercancel={endResize} onkeydown={(e) => nudgeResize('l', e)}></button>
       <button type="button" class="resizer rz-r" aria-label="Resize right sidebar"
-        style="right:{rightW - 5}px" onpointerdown={(e) => startResize('r', e)} onpointermove={onResizeMove} onpointerup={endResize} onpointercancel={endResize} onkeydown={(e) => nudgeResize('r', e)}></button>
+        style="right:{appliedRightW - 5}px" onpointerdown={(e) => startResize('r', e)} onpointermove={onResizeMove} onpointerup={endResize} onpointercancel={endResize} onkeydown={(e) => nudgeResize('r', e)}></button>
       <aside class="list" ondragover={(e) => { listAutoScroll(e); if (e.target === e.currentTarget) onDragOver(e, ''); }} ondrop={(e) => { stopAutoScroll(); if (e.target === e.currentTarget) onDrop(e, ''); }} role="group">
         <div class="vaultbar">
           {#if vaultBackend}

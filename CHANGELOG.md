@@ -6,6 +6,15 @@ All notable changes to Arf are recorded here. The format follows
 below matches a `v*` git tag and a GitHub Release; the release notes are generated
 from the matching section of this file.
 
+## [1.8.0] - 2026-07-10
+
+### Added
+- **Show or hide either side panel.** A button in the top bar collapses the notes sidebar, and another collapses the right panel (backlinks, Resonance, and the local graph — or the reader when a document is open). Each choice is remembered between sessions, and opening something in the reader brings the right panel back on its own.
+
+### Changed
+- **The side panels resize much wider.** The old fixed width limit is gone. A panel now grows until the note column reaches a readable minimum, so a PDF or a reference can take most of the window when you want to read it. The note column never collapses: a width saved on a larger window, or set while the other panel was hidden, is reined back within the current window when the window shrinks or the panel returns.
+- **A PDF fits the reader's width as you resize it.** The page rescales to the panel on every drag and stays fit-width by default. A manual zoom (− / +, Ctrl-scroll, or the percentage) pins the scale until you press Fit again; a newly opened PDF starts fit-width.
+
 ## [1.7.0] - 2026-07-10
 
 ### Added

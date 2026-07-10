@@ -7,6 +7,7 @@
   //    highlights wrapped in <mark>. EPUB is unzipped to reflowable, selectable chapter HTML.
   // We own bodyEl imperatively (not a reactive {@html}) so highlight DOM mutation can't corrupt it.
   import { renderMarkdown } from './markdown.js';
+  import { computeFitScale } from './pdffit.js';
   import DOMPurify from 'dompurify';
 
   let { source = null, highlights = [], canQuote = true, onclose = null, onquote = null, onhighlight = null } = $props();
@@ -65,7 +66,8 @@
   let pdfStatus = $state('');     // '', 'loading', 'error'
   let pdfScale = $state(0);       // CSS-px scale (0 until fit-width is computed)
   let pdfPages = $state(0);
-  let _pdfDoc = null, _pdfjs = null, _viewerKey = '', _renderSeq = 0, _zoomTimer;
+  let fitMode = $state(true);     // true → pages track the panel width; a manual zoom turns it off
+  let _pdfDoc = null, _pdfjs = null, _viewerKey = '', _renderSeq = 0, _zoomTimer, _lastFitW = 0;
 
   $effect(() => {
     const s = source;
@@ -76,7 +78,7 @@
   });
   async function loadPdf(s) {
     teardownPdf();
-    pdfStatus = 'loading'; pdfScale = 0; pdfPages = 0;
+    pdfStatus = 'loading'; pdfScale = 0; pdfPages = 0; fitMode = true; _lastFitW = 0;
     if (bodyEl) bodyEl.innerHTML = '<p class="rmuted" style="padding:1rem 1.1rem">Opening the document…</p>';
     try {
       const pdfjs = await import('pdfjs-dist');
@@ -99,7 +101,9 @@
     const prevRatio = bodyEl.scrollHeight ? bodyEl.scrollTop / bodyEl.scrollHeight : 0;
     const page1 = await doc.getPage(1);
     const base = page1.getViewport({ scale: 1 });
-    if (!pdfScale) { const avail = (bodyEl.clientWidth || 620) - 30; pdfScale = Math.max(0.25, Math.min(3, avail / base.width)); }
+    // fit-width by default: recompute the scale from the panel's current width on every render so
+    // the pages track the reader as it's resized. A manual zoom (fitMode=false) keeps its scale.
+    if (fitMode || !pdfScale) { pdfScale = computeFitScale(bodyEl.clientWidth, base.width); _lastFitW = bodyEl.clientWidth; }
     const dpr = window.devicePixelRatio || 1;
     const wrap = document.createElement('div'); wrap.className = 'pdfpages';
     for (let p = 1; p <= doc.numPages; p++) {
@@ -131,10 +135,10 @@
     if (seq !== _renderSeq) return;
     bodyEl.scrollTop = prevRatio * bodyEl.scrollHeight;
   }
-  function applyZoom(next) { pdfScale = Math.max(0.3, Math.min(4, next)); clearTimeout(_zoomTimer); _zoomTimer = setTimeout(renderPdf, 140); }
+  function applyZoom(next) { fitMode = false; pdfScale = Math.max(0.3, Math.min(4, next)); clearTimeout(_zoomTimer); _zoomTimer = setTimeout(renderPdf, 140); }
   function zoomIn() { applyZoom((pdfScale || 1) * 1.15); }
   function zoomOut() { applyZoom((pdfScale || 1) / 1.15); }
-  function zoomFit() { pdfScale = 0; clearTimeout(_zoomTimer); _zoomTimer = setTimeout(renderPdf, 60); }
+  function zoomFit() { fitMode = true; clearTimeout(_zoomTimer); _zoomTimer = setTimeout(renderPdf, 60); }
   function onWheel(e) { if (source?.kind !== 'pdf' || !e.ctrlKey) return; e.preventDefault(); applyZoom((pdfScale || 1) * (e.deltaY < 0 ? 1.1 : 0.9)); }
 
   // highlight the text-layer spans covered by each stored snippet. Whitespace-collapsed char map so a
@@ -157,11 +161,22 @@
   }
   // re-apply highlights to a live PDF when the highlight set changes (e.g. just added one)
   $effect(() => { highlights; if (source?.kind === 'pdf' && bodyEl) bodyEl.querySelectorAll('.textLayer').forEach((tl) => applyPdfHighlights(tl, highlights)); });
-  // Ctrl-wheel zoom (non-passive so preventDefault works) + teardown on unmount
+  // Ctrl-wheel zoom (non-passive so preventDefault works), autofit-on-resize, + teardown on unmount
   $effect(() => {
     if (!bodyEl) return;
     bodyEl.addEventListener('wheel', onWheel, { passive: false });
-    return () => { bodyEl.removeEventListener('wheel', onWheel); teardownPdf(); clearTimeout(_zoomTimer); };
+    // re-fit the PDF when the panel width actually changes (resize / toggle / window). The scrollbar
+    // gutter is reserved in CSS so clientWidth doesn't shift when the scrollbar appears; the zero-width
+    // bail ignores a hidden panel (display:none → clientWidth 0), and the >=5px guard skips no-op fires.
+    let _rt;
+    const ro = new ResizeObserver(() => {
+      if (source?.kind !== 'pdf' || !fitMode || !_pdfDoc) return;
+      const w = bodyEl.clientWidth;
+      if (!w || Math.abs(w - _lastFitW) < 5) return;
+      clearTimeout(_rt); _rt = setTimeout(renderPdf, 120);
+    });
+    ro.observe(bodyEl);
+    return () => { bodyEl.removeEventListener('wheel', onWheel); ro.disconnect(); clearTimeout(_rt); teardownPdf(); clearTimeout(_zoomTimer); };
   });
 
   function currentSelection() {
@@ -185,7 +200,7 @@
     {#if isPdf && pdfStatus !== 'error'}
       <span class="zoom">
         <button class="rbtn zb" title="Zoom out" aria-label="Zoom out" onclick={zoomOut}>−</button>
-        <button class="rbtn zb" title="Fit width" onclick={zoomFit}>{pdfScale ? Math.round(pdfScale * 100) + '%' : 'Fit'}</button>
+        <button class="rbtn zb" class:on={fitMode} title="Fit to panel width" onclick={zoomFit}>{fitMode ? 'Fit' : Math.round(pdfScale * 100) + '%'}</button>
         <button class="rbtn zb" title="Zoom in" aria-label="Zoom in" onclick={zoomIn}>+</button>
       </span>
     {/if}
@@ -205,11 +220,12 @@
   .rsp { flex: 1; }
   .zoom { display: inline-flex; align-items: center; gap: .1rem; margin-right: .2rem; }
   .zoom .zb { min-width: 1.6rem; text-align: center; padding: .22rem .3rem; }
+  .zoom .zb.on { color: var(--accent); border-color: var(--accent-soft); background: var(--accent-soft); }
   .rbtn { font-family: var(--sans); font-size: 11.5px; color: var(--fg-muted); background: none; border: 1px solid transparent; border-radius: 5px; padding: .22rem .45rem; cursor: pointer; white-space: nowrap; transition: background .15s, color .15s, border-color .15s; }
   .rbtn:hover:not(:disabled) { background: var(--accent-soft); color: var(--fg-bright); border-color: var(--line-strong); }
   .rbtn:disabled { opacity: .4; cursor: default; }
   .rbtn.x { border: 0; font-size: 14px; }
-  .readerbody { flex: 1; min-height: 0; overflow-y: auto; padding: 1rem 1.1rem 3rem; font-family: var(--serif); font-size: 15.5px; line-height: 1.6; color: var(--fg); scroll-behavior: smooth; overscroll-behavior: contain; scrollbar-width: thin; }
+  .readerbody { flex: 1; min-height: 0; overflow-y: auto; scrollbar-gutter: stable; padding: 1rem 1.1rem 3rem; font-family: var(--serif); font-size: 15.5px; line-height: 1.6; color: var(--fg); scroll-behavior: smooth; overscroll-behavior: contain; scrollbar-width: thin; }
   /* PDF page view: darker gutter, centered pages, no serif column padding */
   .readerbody.pdfmode { padding: 14px 0 40px; background: color-mix(in srgb, var(--canvas) 30%, #000 6%); }
   .readerbody :global(.pdfpages) { display: flex; flex-direction: column; align-items: center; gap: 14px; }
