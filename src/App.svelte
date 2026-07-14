@@ -20,7 +20,7 @@
 
   const IS_MAC = /Mac|iPhone|iPad|iPod/.test((navigator.platform || '') + ' ' + (navigator.userAgent || ''));
   const MOD = IS_MAC ? '⌘' : 'Ctrl';
-  const APP_VERSION = '1.9.0';   // keep in sync with package.json / tauri.conf.json / Cargo.toml
+  const APP_VERSION = '1.9.1';   // keep in sync with package.json / tauri.conf.json / Cargo.toml
 
   let notes = $state(loadNotes());
   let refs = $state(loadRefs());        // shared reference library (also used by [@citekey] citations)

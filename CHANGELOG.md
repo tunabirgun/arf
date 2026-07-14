@@ -6,10 +6,13 @@ All notable changes to Arf are recorded here. The format follows
 below matches a `v*` git tag and a GitHub Release; the release notes are generated
 from the matching section of this file.
 
-## [Unreleased]
+## [1.9.1] - 2026-07-14
 
 ### Added
 - **Signed release manifests.** Every release now ships a `SHA256SUMS.txt` covering all assets, with a detached GPG signature made by the Arf release key (`RELEASE_SIGNING_KEY.asc` in the repository). Verification steps are in SECURITY.md.
+
+### Changed
+- The macOS first-launch instruction in the release notes now matches macOS 15 and later (*System Settings → Privacy & Security → Open Anyway*).
 
 ## [1.9.0] - 2026-07-11
 
