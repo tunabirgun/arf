@@ -42,6 +42,20 @@ Things especially worth reporting: a way to make note rendering execute script, 
 lets a crafted note or filename escape the vault folder, or a data-loss path in save, sync,
 rename, move, or import/export.
 
+## Verifying a release
+
+The installers are unsigned for now, but every release carries a signed manifest:
+`SHA256SUMS.txt` lists the SHA-256 digest of every release asset and is accompanied by a
+detached GPG signature, `SHA256SUMS.txt.asc`, made with the Arf release key
+([`RELEASE_SIGNING_KEY.asc`](RELEASE_SIGNING_KEY.asc), fingerprint
+`D121 6D39 F6C0 8D3F A83C 4D38 2085 EA4C 79CC 7FBA`). To verify a download:
+
+```bash
+gpg --import RELEASE_SIGNING_KEY.asc
+gpg --verify SHA256SUMS.txt.asc SHA256SUMS.txt
+sha256sum -c SHA256SUMS.txt --ignore-missing
+```
+
 ## Supported versions
 
 Arf ships fixes on the latest release. Please reproduce on the most recent version before

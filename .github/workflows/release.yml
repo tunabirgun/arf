@@ -67,8 +67,9 @@ jobs:
             echo ''
             echo '**Installing** — these builds are unsigned (no paid certificate yet):'
             echo '- **Windows** — SmartScreen may warn: *More info → Run anyway*.'
-            echo '- **macOS** — right-click the app → *Open* the first time (Gatekeeper).'
+            echo '- **macOS** — open the app once, dismiss the warning, then allow it under *System Settings → Privacy & Security → Open Anyway*.'
             echo '- **Linux** — the `.AppImage` is portable: `chmod +x` and run.'
+            echo '- **Verify (optional)** — every asset is listed in [`SHA256SUMS.txt`](https://github.com/tunabirgun/arf/releases/download/${{ github.ref_name }}/SHA256SUMS.txt), signed with the [release key](https://github.com/tunabirgun/arf/blob/master/RELEASE_SIGNING_KEY.asc): `gpg --verify SHA256SUMS.txt.asc SHA256SUMS.txt`'
             echo ''
             echo 'Free and open source. Read the source, not the privacy policy.'
             echo 'CHANGELOG_EOF'
@@ -85,3 +86,34 @@ jobs:
           releaseDraft: false
           prerelease: false
           args: ${{ matrix.args }}
+
+  # Once every platform's assets are on the release, publish a signed manifest of them:
+  # SHA256SUMS.txt + a detached GPG signature made with the key in RELEASE_SIGNING_KEY.asc.
+  checksums:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release download '${{ github.ref_name }}' --repo '${{ github.repository }}' --dir assets
+          rm -f assets/SHA256SUMS.txt assets/SHA256SUMS.txt.asc
+
+      - name: Checksum and sign
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: |
+          (cd assets && sha256sum *) > SHA256SUMS.txt
+          printf '%s' "$GPG_PRIVATE_KEY" | gpg --batch --import
+          gpg --batch --yes --pinentry-mode loopback --passphrase "$GPG_PASSPHRASE" \
+              --armor --detach-sign --output SHA256SUMS.txt.asc SHA256SUMS.txt
+          gpg --verify SHA256SUMS.txt.asc SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Upload to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload '${{ github.ref_name }}' SHA256SUMS.txt SHA256SUMS.txt.asc --clobber --repo '${{ github.repository }}'
