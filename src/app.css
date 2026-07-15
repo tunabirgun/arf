@@ -22,6 +22,50 @@ html[data-theme="dark"] {
   --accent:#7fa8c9; --accent-soft:#7fa8c92e; --ser-wght:440;
   --danger:#e08585; --danger-soft:#e0858522;
 }
+/* ===== R0a tokens (redesign 2026) — derived from the anchors above; no new hues ===== */
+:root {
+  /* elevation ladder: 0 sits on the canvas, 3 is a fully raised sheet (formalizes the existing mixes) */
+  --surface-0: color-mix(in srgb, var(--canvas) 55%, var(--surface));
+  --surface-1: color-mix(in srgb, var(--canvas) 45%, var(--surface));
+  --surface-2: color-mix(in srgb, var(--canvas) 40%, var(--surface));
+  --surface-3: var(--surface);
+  /* motion — declared in R0a, consumed from R1/R2 on */
+  --dur-exit: 80ms; --dur-fast: 120ms; --dur-base: 200ms; --dur-slow: 260ms;
+  --ease-out: cubic-bezier(.16, 1, .3, 1);
+  --ease-move: cubic-bezier(.77, 0, .175, 1);
+  --ease-drawer: cubic-bezier(.32, .72, 0, 1);
+  --spring-settle: var(--ease-out);   /* upgraded to a real spring below when linear() is supported */
+  /* material — declared in R0a, consumed from R1 on */
+  --glass-alpha: .88; --glass-blur: 14px; --glass-filter: blur(var(--glass-blur));
+  --edge-hi: rgba(255, 255, 255, .22); --edge-lo: rgba(0, 0, 0, .08);
+  /* z ladder — identical to the previous literal values; the scrim/focus-top tie at 40 is intentional (DOM order resolves it) */
+  --z-pdf-text: 2; --z-editor-hint: 3; --z-resizer: 6; --z-overlay: 34;
+  --z-scrim: 40; --z-focus-top: 40; --z-ctxback: 49; --z-ctxmenu: 50;
+  --z-imgctlback: 59; --z-imgctl: 60;
+  /* live top-bar height — a ResizeObserver on .top keeps it current (the bar wraps to two rows when narrow); 52px = the old hardcode as pre-mount fallback */
+  --topbar-h: 52px;
+}
+/* ===== R0b tokens: hairlines, radii, shadows (normalization; alphas APCA-calibrated per theme) ===== */
+:root {
+  /* alpha hairlines sit correctly on any elevation; 10/16% matches the visual weight of --line/--line-strong (APCA Lc 9.2/16.2 vs 8.5/19.7) */
+  --rule-1: color-mix(in srgb, var(--fg) 10%, transparent);
+  --rule-2: color-mix(in srgb, var(--fg) 16%, transparent);
+  --r-s: 4px; --r-m: 6px; --r-l: 8px;
+  /* ink-tinted shadows (warmer than neutral black on paper) */
+  --shadow-raise: 0 10px 36px color-mix(in srgb, var(--fg) 20%, transparent);
+  --shadow-overlay: 0 18px 50px color-mix(in srgb, var(--fg) 25%, transparent);
+}
+html[data-theme="dark"] {
+  /* light ink over near-black needs stronger alphas to match the old line weights; shadows stay black and deepen to read on a dark canvas */
+  --rule-1: color-mix(in srgb, var(--fg) 12%, transparent);
+  --rule-2: color-mix(in srgb, var(--fg) 24%, transparent);
+  --shadow-raise: 0 10px 36px rgba(0, 0, 0, .45);
+  --shadow-overlay: 0 18px 50px rgba(0, 0, 0, .5);
+}
+/* damped spring (zeta .8, ~1.5% settle) precomputed into linear() stops; older engines keep the --ease-out fallback */
+@supports (transition-timing-function: linear(0, 1)) {
+  :root { --spring-settle: linear(0, 0.0423 3.3%, 0.1425 6.7%, 0.2698 10%, 0.4034 13.3%, 0.5305 16.7%, 0.6437 20%, 0.7397 23.3%, 0.8178 26.7%, 0.8791 30%, 0.9255 33.3%, 0.9592 36.7%, 0.9828 40%, 0.9983 43.3%, 1.0077 46.7%, 1.0129 50%, 1.0149 53.3%, 1.015 56.7%, 1.0139 60%, 1.0121 63.3%, 1.0101 66.7%, 1.0081 70%, 1.0063 73.3%, 1.0047 76.7%, 1.0034 80%, 1.0023 83.3%, 1.0015 86.7%, 1.0009 90%, 1.0004 93.3%, 1.0001 96.7%, 1); }
+}
 * { box-sizing: border-box; }
 input[type="checkbox"] { accent-color: var(--accent); width: 15px; height: 15px; }
 html, body { margin: 0; height: 100%; }
@@ -32,10 +76,10 @@ body {
 }
 #app { height: 100vh; }
 
-/* Custom scrollbar — Arf aesthetic: thin, ink-on-paper, theme-aware */
-::-webkit-scrollbar { width: 8px; height: 8px; }
+/* Custom scrollbar — Arf aesthetic: thin, ink-on-paper, hairline-token thumb, transparent track */
+::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--line-strong); border-radius: 4px; }
+::-webkit-scrollbar-thumb { background: var(--rule-2); border-radius: var(--r-s); }
 ::-webkit-scrollbar-thumb:hover { background: var(--fg-faint); }
 ::-webkit-scrollbar-corner { background: transparent; }
-@supports (scrollbar-width: thin) { * { scrollbar-width: thin; scrollbar-color: var(--line-strong) transparent; } }
+@supports (scrollbar-width: thin) { * { scrollbar-width: thin; scrollbar-color: var(--rule-2) transparent; } }

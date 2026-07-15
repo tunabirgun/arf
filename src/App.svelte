@@ -17,10 +17,26 @@
   import GraphView from './lib/GraphView.svelte';
   import Library from './lib/Library.svelte';
   import Reader from './lib/Reader.svelte';
+  import { fade, fly } from 'svelte/transition';
+  import { flip } from 'svelte/animate';
+  import { quintOut, cubicOut } from 'svelte/easing';
+  import { prefersReducedMotion } from 'svelte/motion';
+  import { dur, dist, DUR } from './lib/motion.svelte.js';
 
   const IS_MAC = /Mac|iPhone|iPad|iPod/.test((navigator.platform || '') + ' ' + (navigator.userAgent || ''));
   const MOD = IS_MAC ? '⌘' : 'Ctrl';
-  const APP_VERSION = '1.9.1';   // keep in sync with package.json / tauri.conf.json / Cargo.toml
+  const APP_VERSION = '2.0.0';   // keep in sync with package.json / tauri.conf.json / Cargo.toml
+
+  // Material tier: Linux defaults to the opaque "flat" tier (WebKitGTK backdrop-filter is unreliable
+  // before 2.46). A ?material= query param or arf-material localStorage overrides it, so CI can exercise
+  // the glass tier on Linux. Set before first paint so glass never flashes on then off.
+  const IS_LINUX = /Linux|X11/.test(navigator.userAgent || '') && !/Android/.test(navigator.userAgent || '');
+  (() => { try {
+    const q = new URLSearchParams(location.search).get('material');
+    const mat = q || localStorage.getItem('arf-material') || (IS_LINUX ? 'flat' : '');
+    if (mat === 'flat') document.documentElement.setAttribute('data-material', 'flat');
+    else document.documentElement.removeAttribute('data-material');
+  } catch (e) {} })();
 
   let notes = $state(loadNotes());
   let refs = $state(loadRefs());        // shared reference library (also used by [@citekey] citations)
@@ -63,6 +79,9 @@
   let dragging = null;             // 'l' | 'r' while resizing
   let settingsOpen = $state(false);
   let zoom = $state(loadNum('arf-zoom', 108)); // UI scale (%), a touch above 100 by default
+  let reduceTransparency = $state(loadBool('arf-reduce-transparency', false));   // in-app opaque tier (WebKit never fires prefers-reduced-transparency)
+  let centerScrolled = $state(false);   // true once the reading column scrolls under the top bar (scroll-edge)
+  let centerEl = $state(null);
   // reading-column width preset. clamp(floor, %, ceiling): the % resolves against .center — which
   // already narrows/widens with the side panels — so the column scales both ways, with a readable
   // floor and a line-length ceiling.
@@ -503,6 +522,43 @@
   });
   function editBody(v) { const n = notes.find((x) => x.id === currentId); if (!n) return; n.body = v; n.updated = new Date().toISOString(); markDirty(currentId); persist(); }
   function editTitle(v) { const n = notes.find((x) => x.id === currentId); if (!n) return; n.title = v; n.updated = new Date().toISOString(); markDirty(currentId); persist(); }
+  // Retitling a note rewrites every inbound [[Old Title]] in other notes to [[New Title]], so links
+  // (which resolve by title, not id) survive a rename in-app the way a file rename already does.
+  // The title input updates live per keystroke, so this runs only on commit (blur), comparing the
+  // title captured on focus with the title on blur.
+  let titleEditStart = null;
+  function rewriteInboundLinks(oldTitle, newTitle) {
+    const from = (oldTitle || '').trim().toLowerCase(), to = (newTitle || '').trim();
+    if (!from || !to) return 0;
+    // a new title with '|' or ']' can't round-trip through the [[Target|Display]] grammar — rewriting would
+    // corrupt the link (and any alias). Leave inbound links as they are (they just dangle, recoverable).
+    if (/[\]|]/.test(to)) return 0;
+    // only the note [[old]] actually resolved to should be rewritten. byTitle resolves a duplicate title to
+    // the lowest id; if a lower-id note shares the old title, those links pointed at it, not here — leave them.
+    for (const n of notes) { if (n.id < currentId && String(n.title == null ? '' : n.title).trim().toLowerCase() === from) return 0; }
+    // match code first so [[...]] inside a fence or inline code is never rewritten (same regions the index ignores)
+    const CODE_OR_LINK = /(^|\n)(```|~~~)[\s\S]*?(?:\n\2|$)|`[^`]*`|\[\[([^\]]+?)\]\]/g;
+    let changed = 0;
+    for (const n of notes) {
+      if (!n.body || n.body.indexOf('[[') < 0) continue;
+      const next = n.body.replace(CODE_OR_LINK, (m, _p1, _p2, inner) => {
+        if (inner === undefined) return m;                           // a code span/fence — leave verbatim
+        const bar = inner.indexOf('|');                              // [[Target|Display]] — rewrite Target, keep Display
+        const target = (bar < 0 ? inner : inner.slice(0, bar)).trim();
+        if (target.toLowerCase() !== from) return m;
+        return '[[' + to + (bar < 0 ? '' : inner.slice(bar)) + ']]';
+      });
+      if (next !== n.body) { n.body = next; n.updated = new Date().toISOString(); markDirty(n.id); changed++; }
+    }
+    return changed;
+  }
+  function commitTitleRename() {
+    const old = titleEditStart; titleEditStart = null;
+    if (old == null || !current) return;
+    const now = (current.title || '').trim();
+    if (!now || !old.trim() || now === old) return;
+    if (rewriteInboundLinks(old, now)) persist();
+  }
   // edit the note's own tags (the chips above the title) — separate from the #tags typed in the body
   function addNoteTag(v) {
     const t = (v || '').trim().replace(/^#/, '').toLowerCase().replace(/[^\p{L}\p{N}/_-]/gu, '');   // keep Unicode letters (ğ ş ü …)
@@ -838,7 +894,9 @@
     return generalMenu();
   }
   function noteMenu(id) {
-    const n = idx.byId[id]; if (!n) return generalMenu();
+    // fall back to live notes when the index hasn't rebuilt yet (180ms debounce after a change/boot),
+    // so a right-click during that window still shows the note menu, not the general one
+    const n = idx.byId[id] || notes.find((x) => x.id === id); if (!n) return generalMenu();
     return [
       { label: 'Open', run: () => open(id) },
       { label: 'Open & edit', run: () => { open(id); mode = 'write'; } },
@@ -1101,7 +1159,15 @@
   function invDot(id) { return hasLinks(id, idx) ? '●' : '○'; }
   function dotTitle(id) { return hasLinks(id, idx) ? 'Linked to other notes' : 'Orphan — not linked to any note yet'; }
 
-  function toggleTheme() { theme = theme === 'dark' ? 'light' : 'dark'; document.documentElement.setAttribute('data-theme', theme); try { localStorage.setItem('arf-theme', theme); } catch (e) {} }
+  // one-time property-whitelisted cross-fade on theme change: color/border/fill/stroke ease over --dur-base,
+  // while --ser-wght (400<->440) snaps with the text color so the variable font never shimmers
+  let themeFadeTimer = null;
+  function applyTheme(tv) {
+    const de = document.documentElement;
+    if (dur(1) > 0) { de.classList.add('theming'); clearTimeout(themeFadeTimer); themeFadeTimer = setTimeout(() => de.classList.remove('theming'), DUR.base + 60); }
+    theme = tv; de.setAttribute('data-theme', tv); try { localStorage.setItem('arf-theme', tv); } catch (e) {}
+  }
+  function toggleTheme() { applyTheme(theme === 'dark' ? 'light' : 'dark'); }
 
   function loadNum(k, d) { try { const v = +localStorage.getItem(k); return v && v > 0 ? v : d; } catch (e) { return d; } }
   function loadBool(k, d) { try { const v = localStorage.getItem(k); return v == null ? d : v === '1'; } catch (e) { return d; } }
@@ -1175,8 +1241,31 @@
     return () => { disposed = true; document.removeEventListener('fullscreenchange', onWebFs); if (un) un(); };
   });
   function setZoom(z) { zoom = Math.max(70, Math.min(160, z)); }
-  function setTheme(tv) { theme = tv; document.documentElement.setAttribute('data-theme', tv); try { localStorage.setItem('arf-theme', tv); } catch (e) {} }
+  function setTheme(tv) { applyTheme(tv); }
   $effect(() => { try { document.documentElement.style.zoom = String(zoom / 100); localStorage.setItem('arf-zoom', zoom); } catch (e) {} });
+  // in-app "Reduce transparency" — flips the material tokens to opaque via a documentElement attribute
+  $effect(() => { try { document.documentElement.toggleAttribute('data-reduce-transparency', reduceTransparency); localStorage.setItem('arf-reduce-transparency', reduceTransparency ? '1' : '0'); } catch (e) {} });
+  // scroll-edge: opening a note (or switching view) starts at the top, so the top-bar shadow resets
+  $effect(() => { currentId; view; if (centerEl) centerEl.scrollTop = 0; centerScrolled = false; });
+  function onCenterScroll(e) { const on = e.currentTarget.scrollTop > 4; if (on !== centerScrolled) centerScrolled = on; }
+  // list-reorder FLIP: sqrt-scaled, capped at --dur-slow; off under reduced motion or above ~400 rows (jank guard).
+  // rows also fly in / fade out on add/remove (a move keeps its key, so it's a flip, not add+remove — DnD is unaffected).
+  let flipBig = $derived((folderRows?.length || 0) > 400 || (listNotes?.length || 0) > 400);
+  const flipMs = (d) => (prefersReducedMotion.current || flipBig ? 0 : Math.min(30 + Math.sqrt(d) * 14, DUR.slow));
+  const rowIn = () => (flipBig ? 0 : dur(DUR.base));
+  const rowOut = () => (flipBig ? 0 : dur(DUR.fast));
+  // --topbar-h tracks the real .top height (it wraps to two rows when narrow), so the graph overlay
+  // inset and focus-mode padding stay correct. CSS keeps a 52px fallback for pre-mount frames.
+  let topEl = $state(null);
+  $effect(() => {
+    if (!topEl) return;
+    const ro = new ResizeObserver((entries) => {
+      const h = entries[entries.length - 1]?.borderBoxSize?.[0]?.blockSize ?? topEl.offsetHeight;
+      if (h > 0) document.documentElement.style.setProperty('--topbar-h', h + 'px');
+    });
+    ro.observe(topEl);
+    return () => ro.disconnect();
+  });
   $effect(() => { try { document.documentElement.style.setProperty('--readmax', READ_W[readWidth] || READ_W.middle); localStorage.setItem('arf-readwidth', readWidth); } catch (e) {} });
   // Open the styled connect modal (replaces the native window.prompt). Appends to note A on confirm.
   function linkPair(aId, bId, terms) {
@@ -1604,21 +1693,24 @@
     return best;
   }
 
-  // command palette
+  // command palette. Titles are carried on the items from the live `notes` array so the render never
+  // reads idx.byId (rebuilt on a 180ms debounce) — a stale index during boot/edits would otherwise
+  // throw on .title and brick the palette.
   const palItems = $derived.by(() => {
     const q = query.trim().toLowerCase();
+    const titleOf = new Map(notes.map((n) => [n.id, n.title || 'Untitled']));
     let lex = notes.map((n) => {
       let score = 0, why = '';
       if (!q) { score = 1; why = ''; }
       else if ((n.title || '').toLowerCase().includes(q)) { score = 3; why = 'Title'; }
       else if ((idx.noteTags[n.id] || []).some((t) => t.includes(q))) { score = 2; why = 'Tag'; }
       else if ((n.body || '').toLowerCase().includes(q)) { score = 1; why = 'Text'; }
-      return { id: n.id, score, why };
+      return { id: n.id, title: n.title || 'Untitled', score, why };
     }).filter((x) => x.score).sort((a, b) => b.score - a.score).slice(0, 8);
     let sem = [];
     if (q && lex.length) {
       const anchor = lex[0].id, shown = new Set(lex.map((l) => l.id));
-      sem = related(anchor, vecs, notes, { exclude: shown, max: 3 });
+      sem = related(anchor, vecs, notes, { exclude: shown, max: 3 }).map((s) => ({ ...s, title: titleOf.get(s.id) || 'Untitled' }));
     }
     return { lex, sem };
   });
@@ -1690,7 +1782,7 @@
   </div>
 {:else}
 <div class="shell" class:focus={focus} class:reveal-top={topReveal}>
-  <header class="top">
+  <header class="top" class:scrolled={centerScrolled && view === 'notes' && !focus} bind:this={topEl}>
     <button class="wm" onclick={() => (view = 'notes')}>Arf<span class="dot">.</span></button>
     <div class="viewtoggle">
       <button class:on={view === 'notes'} onclick={() => (view = 'notes')}>Notes</button>
@@ -1765,14 +1857,16 @@
         {#if tagFilter}
           <button class="clearfilter" onclick={() => (tagFilter = null)}>← clear #{tagFilter}</button>
           {#each listNotes as n (n.id)}
-            <button class="item" class:on={n.id === currentId} data-nid={n.id} draggable="true"
+            <button class="item" class:on={n.id === currentId} data-nid={n.id} draggable="true" animate:flip={{ duration: flipMs, easing: cubicOut }}
+              in:fly={{ y: dist(6), duration: rowIn(), easing: quintOut }} out:fade={{ duration: rowOut() }}
               ondragstart={(e) => onDragStart(e, { type: 'note', id: n.id })} ondragend={onDragEnd} onclick={() => open(n.id)}>
               <span class="dot2" class:orphan={invDot(n.id) === '○'}>{invDot(n.id)}</span>
               <span class="txt"><span class="t">{n.title || 'Untitled'}</span></span>
             </button>
           {/each}
         {:else}
-          {#each folderRows as r}
+          {#each folderRows as r (r.type === 'folder' ? 'f:' + r.path : 'n:' + r.note.id)}
+            <div class="rowhost" animate:flip={{ duration: flipMs, easing: cubicOut }} in:fly={{ y: dist(6), duration: rowIn(), easing: quintOut }} out:fade={{ duration: rowOut() }}>
             {#if r.type === 'folder'}
               <button class="frow" class:active={activeFolder === r.path} class:dropon={dropOn === r.path} class:dropbefore={isEdge('folder', r.path, 'before')} class:dropafter={isEdge('folder', r.path, 'after')} class:dragging={dragItem && dragItem.type === 'folder' && dragItem.path === r.path}
                 data-folder={r.path} style="padding-left:{6 + r.depth * 12}px" draggable="true"
@@ -1793,6 +1887,7 @@
                 <span class="txt"><span class="t">{r.note.title || 'Untitled'}</span></span>
               </button>
             {/if}
+            </div>
           {/each}
         {/if}
 
@@ -1806,7 +1901,7 @@
         {/if}
       </aside>
 
-      <main class="center">
+      <main class="center" bind:this={centerEl} onscroll={onCenterScroll}>
         {#if current}
           <div class="crumbs">
             <select class="fmove" value={current.folder || ''} onchange={(e) => moveNote(current.id, e.currentTarget.value)} title="Move to folder">
@@ -1823,7 +1918,7 @@
           </div>
           <div class="titlebar">
             {#if mode === 'write'}
-              <input class="title" value={current.title} oninput={(e) => editTitle(e.currentTarget.value)} aria-label="title" />
+              <input class="title" value={current.title} oninput={(e) => editTitle(e.currentTarget.value)} onfocus={() => (titleEditStart = current?.title ?? null)} onblur={commitTitleRename} aria-label="title" />
             {:else}
               <h1 class="title ro">{current.title}<span class="inv" class:orphan={invDot(current.id) === '○'} title={dotTitle(current.id)}>{invDot(current.id)}</span></h1>
             {/if}
@@ -1838,7 +1933,8 @@
           {#if mode === 'write'}
             {#key currentId}<div class="editor"><Editor bind:this={editorRef} value={current.body} onchange={editBody} resemble={resembleParagraph} oncite={openCitePicker} onimage={saveNoteImage} /></div>{/key}
           {:else}
-            <div class="read" onclick={readClick}>{@html readHTML}{@html bibHTML}</div>
+            <!-- note switch: opacity-only fade, in-only (never add out: — a dying read view is fine, but the editor key block must never fire onchange for the old note). Keyboard nav stays near-instant at 80ms. -->
+            {#key currentId}<div class="read" onclick={readClick} in:fade={{ duration: dur(DUR.exit) }}>{@html readHTML}{@html bibHTML}</div>{/key}
           {/if}
         {:else}
           <p class="empty">No note selected. Create one with “＋ New”.</p>
@@ -1902,10 +1998,10 @@
       <input autofocus placeholder="Search notes, tags, or ideas…" bind:value={query} onkeydown={(e) => { if (e.key === 'Enter' && (palItems.lex[0] || palItems.sem[0])) open((palItems.lex[0] || palItems.sem[0]).id); }} />
       <div class="presults">
         <div class="pg">Notes</div>
-        {#each palItems.lex as l}<button class="prow" onclick={() => open(l.id)}><span class="pt">{idx.byId[l.id].title}</span><span class="pm">{l.why}</span></button>{:else}<div class="prow none">No matches</div>{/each}
+        {#each palItems.lex as l}<button class="prow" onclick={() => open(l.id)}><span class="pt">{l.title}</span><span class="pm">{l.why}</span></button>{:else}<div class="prow none">No matches</div>{/each}
         {#if palItems.sem.length}
           <div class="pg sem">Related · on-device</div>
-          {#each palItems.sem as s}<button class="prow" onclick={() => open(s.id)}><span class="pt i">{idx.byId[s.id].title}</span><span class="psim">{s.s.toFixed(2)}</span></button>{/each}
+          {#each palItems.sem as s}<button class="prow" onclick={() => open(s.id)}><span class="pt i">{s.title}</span><span class="psim">{s.s.toFixed(2)}</span></button>{/each}
         {/if}
       </div>
     </div>
@@ -2033,6 +2129,9 @@
       </div>
       <div class="setrow"><span class="sk">Reading width <span class="sh">Width of the writing and reading column — scales with the side panels</span></span>
         <div class="seg"><button class:on={readWidth === 'tight'} onclick={() => setReadWidth('tight')}>Tight</button><button class:on={readWidth === 'middle'} onclick={() => setReadWidth('middle')}>Middle</button><button class:on={readWidth === 'comfy'} onclick={() => setReadWidth('comfy')}>Comfy</button></div>
+      </div>
+      <div class="setrow"><span class="sk">Reduce transparency <span class="sh">Make menus and the command palette solid instead of frosted glass</span></span>
+        <div class="seg"><button class:on={!reduceTransparency} onclick={() => (reduceTransparency = false)}>Off</button><button class:on={reduceTransparency} onclick={() => (reduceTransparency = true)}>On</button></div>
       </div>
 
       <div class="setlabel">On-device machine</div>

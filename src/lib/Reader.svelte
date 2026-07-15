@@ -254,15 +254,16 @@
 </div>
 
 <style>
-  .reader { display: flex; flex-direction: column; height: 100%; min-height: 0; background: color-mix(in srgb, var(--canvas) 55%, var(--surface)); }
-  .rhead { flex: none; display: flex; align-items: center; gap: .4rem; padding: .5rem .7rem; border-bottom: 1px solid var(--line); }
-  .rkind { font-family: var(--mono); font-size: 9.5px; letter-spacing: .05em; text-transform: uppercase; color: var(--accent); border: 1px solid var(--accent-soft); border-radius: 3px; padding: 0 .3rem; flex: none; }
+  .reader { display: flex; flex-direction: column; height: 100%; min-height: 0; background: var(--surface-0); }
+  .rhead { flex: none; display: flex; align-items: center; gap: .4rem; padding: .5rem .7rem; border-bottom: 1px solid var(--rule-1); }
+  /* shares the .rtype badge recipe (appshell.css) — same mono/uppercase/accent-outline chip, flex-pinned for the header row */
+  .rkind { font-family: var(--mono); font-size: 10px; letter-spacing: .05em; text-transform: uppercase; color: var(--accent); border: 1px solid var(--accent-soft); border-radius: var(--r-s); padding: 0 .3rem; flex: none; }
   .rtitle { font-family: var(--serif); font-size: 14px; color: var(--fg-bright); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .rsp { flex: 1; }
   .zoom { display: inline-flex; align-items: center; gap: .1rem; margin-right: .2rem; }
   .zoom .zb { min-width: 1.6rem; text-align: center; padding: .22rem .3rem; }
   .zoom .zb.on { color: var(--accent); border-color: var(--accent-soft); background: var(--accent-soft); }
-  .rbtn { font-family: var(--sans); font-size: 11.5px; color: var(--fg-muted); background: none; border: 1px solid transparent; border-radius: 5px; padding: .22rem .45rem; cursor: pointer; white-space: nowrap; transition: background .15s, color .15s, border-color .15s; }
+  .rbtn { font-family: var(--sans); font-size: 11.5px; color: var(--fg-muted); background: none; border: 1px solid transparent; border-radius: var(--r-s); padding: .22rem .45rem; cursor: pointer; white-space: nowrap; transition: background .15s, color .15s, border-color .15s; }
   .rbtn:hover:not(:disabled) { background: var(--accent-soft); color: var(--fg-bright); border-color: var(--line-strong); }
   .rbtn:disabled { opacity: .4; cursor: default; }
   .rbtn.x { border: 0; font-size: 14px; }
@@ -273,18 +274,18 @@
   .readerbody :global(.pdfpage) { position: relative; background: #fff; box-shadow: 0 1px 8px rgba(0,0,0,.30); }
   .readerbody :global(.pdfpage canvas) { display: block; }
   /* pdf.js text layer: transparent selectable text positioned over the canvas */
-  .readerbody :global(.textLayer) { position: absolute; inset: 0; overflow: clip; opacity: 1; line-height: 1; text-align: initial; transform-origin: 0 0; z-index: 2; forced-color-adjust: none; }
+  .readerbody :global(.textLayer) { position: absolute; inset: 0; overflow: clip; opacity: 1; line-height: 1; text-align: initial; transform-origin: 0 0; z-index: var(--z-pdf-text); forced-color-adjust: none; }
   .readerbody :global(.textLayer span), .readerbody :global(.textLayer br) { color: transparent; position: absolute; white-space: pre; cursor: text; transform-origin: 0% 0%; }
   .readerbody :global(.textLayer span.rhlspan) { border-radius: 2px; cursor: pointer; }
   .readerbody :global(.textLayer ::selection) { background: color-mix(in srgb, var(--accent) 42%, transparent); }
-  .readerbody :global(hr.epub-sep) { border: 0; border-top: 1px solid var(--line); margin: 1.8rem 0; }
+  .readerbody :global(hr.epub-sep) { border: 0; border-top: 1px solid var(--rule-1); margin: 1.8rem 0; }
   .readerbody :global(ul), .readerbody :global(ol) { margin: 0 0 .7rem; padding-left: 1.4rem; }
   .readerbody :global(li) { margin: .2rem 0; }
   .readerbody :global(h1), .readerbody :global(h2), .readerbody :global(h3) { color: var(--fg-bright); font-weight: 600; line-height: 1.2; margin: 1.1rem 0 .4rem; }
   .readerbody :global(h1) { font-size: 20px; } .readerbody :global(h2) { font-size: 17px; } .readerbody :global(h3) { font-size: 15.5px; }
   .readerbody :global(p) { margin: 0 0 .7rem; }
   .readerbody :global(a) { color: var(--accent); }
-  .readerbody :global(pre) { background: color-mix(in srgb, var(--canvas) 45%, var(--surface)); border: 1px solid var(--line); border-radius: 6px; padding: .6rem .8rem; overflow-x: auto; font-family: var(--mono); font-size: 12.5px; }
+  .readerbody :global(pre) { background: var(--surface-1); border: 1px solid var(--line); border-radius: var(--r-m); padding: .6rem .8rem; overflow-x: auto; font-family: var(--mono); font-size: 12.5px; }
   .readerbody :global(blockquote) { margin: .8rem 0; padding-left: 1rem; border-left: 2px solid var(--line-strong); color: var(--fg-muted); font-style: italic; }
   .readerbody :global(img) { max-width: 100%; height: auto; }
   /* highlighter palette — semi-transparent so both the black PDF text and themed note text read through */

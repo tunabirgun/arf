@@ -284,22 +284,22 @@
 
 <style>
   .editorwrap { height: 100%; display: flex; flex-direction: column; position: relative; }
-  .resemble { position: absolute; right: 0; z-index: 3; display: flex; align-items: center; gap: .35rem; background: none; border: 0; padding: .1rem; cursor: pointer; animation: resfade 5.5s ease-out forwards; }
+  .resemble { position: absolute; right: 0; z-index: var(--z-editor-hint); display: flex; align-items: center; gap: .35rem; background: none; border: 0; padding: .1rem; cursor: pointer; animation: resfade 5.5s ease-out forwards; }
   .resemble:hover { animation-play-state: paused; }
   .resemble .rdot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); flex: none; }
   .resemble .rlabel { font-family: var(--sans); font-size: 11px; color: var(--fg-faint); opacity: 0; transition: opacity .15s; white-space: nowrap; max-width: 12em; overflow: hidden; text-overflow: ellipsis; }
   .resemble:hover .rlabel { opacity: 1; }
   @keyframes resfade { 0% { opacity: 0; } 8% { opacity: .9; } 65% { opacity: .8; } 100% { opacity: 0; } }
   @media (prefers-reduced-motion: reduce) { .resemble { animation: none; opacity: .7; } }
-  .fmtbar { flex: none; display: flex; align-items: center; gap: 1px; flex-wrap: wrap; padding: 0 0 .5rem 0; margin-bottom: .5rem; border-bottom: 1px solid var(--line); }
-  .fmtbar button { font-family: var(--sans); font-size: 12px; color: var(--fg-muted); background: none; border: 0; border-radius: 5px; padding: .28rem .5rem; cursor: pointer; line-height: 1; }
+  .fmtbar { flex: none; display: flex; align-items: center; gap: 1px; flex-wrap: wrap; padding: 0 0 .5rem 0; margin-bottom: .5rem; border-bottom: 1px solid var(--rule-1); }
+  .fmtbar button { font-family: var(--sans); font-size: 12px; color: var(--fg-muted); background: none; border: 0; border-radius: var(--r-s); padding: .28rem .5rem; cursor: pointer; line-height: 1; }
   .fmtbar button:hover { background: var(--accent-soft); color: var(--fg-bright); }
   .fmtbar button.fb { font-weight: 700; }
   .fmtbar button.fi { font-style: italic; }
   .fmtbar button.fst { text-decoration: line-through; }
   .fmtbar button.fm { font-family: var(--mono); font-size: 11px; }
   .fmtbar button.fsym { font-size: 13px; min-width: 1.6em; }
-  .fsep { width: 1px; height: 15px; background: var(--line); margin: 0 .35rem; }
+  .fsep { width: 1px; height: 15px; background: var(--rule-1); margin: 0 .35rem; }
   .cm-host { flex: 1; min-height: 0; }
   .cm-host :global(.cm-editor) { height: 100%; }
 </style>

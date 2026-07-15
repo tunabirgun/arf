@@ -6,6 +6,20 @@ All notable changes to Arf are recorded here. The format follows
 below matches a `v*` git tag and a GitHub Release; the release notes are generated
 from the matching section of this file.
 
+## [2.0.0] - 2026-07-15
+
+### Changed
+- **A redesigned interface.** Arf's surfaces have been reworked while the ink-on-paper palette, EB Garamond, and the single iron-gall accent stay exactly as they were. The command palette and right-click menus now rest on a soft frosted glass; hairlines, shadows, and corners were retuned so every panel reads the same way; and chrome buttons press in like letterpress. Motion is deliberate throughout — notes cross-fade as you move between them, the sidebar animates when you reorder notes and folders, the segmented toggles slide, and a theme change fades instead of snapping. All of it honors your reduced-motion setting.
+
+### Added
+- **Reduce transparency.** A setting in Settings → Appearance makes the frosted menus and command palette solid, for anyone who prefers opaque surfaces. Arf also applies it on its own under Windows High Contrast and the system "reduce transparency" preference.
+
+### Fixed
+- **Renaming a note keeps its links.** When you change a note's title, every `[[link]]` in your other notes that pointed to it is rewritten to the new title, so an in-app rename no longer leaves those links dangling. Aliased links (`[[Title|shown as]]`) keep their display text, and links written inside code stay untouched. (Renaming or moving the file on disk was already safe.)
+- **The command palette opens reliably right after launch.** Summoning it with `Ctrl/⌘+K` or the search box in the first moment after the app started could leave it blank; it now opens with your notes every time.
+- **The right-click menu on a note is correct right after launch.** In that same first moment, right-clicking a note could show the general menu instead of the note's own actions; it now shows the right one.
+- **Frosted surfaces stay solid in High Contrast mode.** Under Windows High Contrast the glass menus and palette now render opaque, so nothing shows through the text.
+
 ## [1.9.1] - 2026-07-14
 
 ### Added

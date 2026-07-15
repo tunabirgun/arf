@@ -84,7 +84,7 @@ If the local cache ever becomes unreadable, Arf backs it up under a separate key
 
 ## Build from source
 
-Arf is a [Tauri 2](https://tauri.app) desktop app. You need [Node.js](https://nodejs.org) 18+, the [Rust toolchain](https://rustup.rs), and, on Windows, the MSVC C++ build tools.
+Arf is a [Tauri 2](https://tauri.app) desktop app. You need [Node.js](https://nodejs.org) 20 or newer (the project pins Node 24 in `.nvmrc`, which CI uses), the [Rust toolchain](https://rustup.rs), and, on Windows, the MSVC C++ build tools.
 
 ```bash
 npm install
