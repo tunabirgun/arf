@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>The on-device machine — Arf</title>
-<meta name="description" content="Arf's private machine-learning layer: on-device embeddings, Resonance, the weekly Synthesis digest, and why your text never leaves your computer.">
+<meta name="description" content="Arf's optional on-device embedding models: the model picker, ArfLLM and ArfLLM_Multi, how suggestion thresholds are set, and why your note text never leaves your computer.">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%23faf9f7'/%3E%3Ctext x='50' y='73' text-anchor='middle' font-family='Georgia,serif' font-size='74' font-weight='700' fill='%230a0a0a'%3EA%3C/text%3E%3Ccircle cx='79' cy='67' r='8' fill='%232c4a6e'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="assets/arf-docs.css">
 <script>(function(){try{var t=localStorage.getItem("arf-docs-theme");if(!t&&window.matchMedia&&matchMedia("(prefers-color-scheme: dark)").matches)t="dark";if(t)document.documentElement.setAttribute("data-theme",t);}catch(e){}})();</script>
@@ -23,31 +23,53 @@
 <main>
   <div class="eyebrow">The quiet machine</div>
   <h1>The on-device machine</h1>
-  <p class="lede">Small, open, and it never phones home.</p>
+  <p class="lede">Small, open, optional, and your notes never leave the device.</p>
 
-  <p>The reason note collections fail is rarely that capture was too hard. It is that notes pile up faster than anyone connects them, and the insight that was supposed to emerge stays buried in a heap. Arf's machine exists to fight exactly that — not to write for you, but to notice when two of your own thoughts belong together.</p>
+  <p>The reason note collections fail is rarely that capture was too hard. It is that notes pile up faster than anyone connects them, and the insight that was supposed to emerge stays buried in a heap. Arf's suggestions are meant to help with that: not to write for you, but to point out when two of your own notes belong together.
+</p>
 
   <h2>How it works, briefly</h2>
-  <p>Turn it on and Arf fetches a small open-source language model, <a href="https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2" target="_blank" rel="noopener">all-MiniLM-L6-v2</a> — about twenty-three megabytes, downloaded once and kept. For each note the model reads the text and produces a short list of 384 numbers that stands for the note's meaning. Notes about the same idea land close together in this space even when they share few words, which is what lets Arf notice a connection you never spelled out.</p>
-  <p>Finding related notes is then arithmetic. The closeness of two notes is the cosine of the angle between their number-lists — a value from zero to one, which is the score you see. Resonance ranks the notes nearest the one you are reading; the Synthesis digest looks for near pairs you have not linked. The model runs in the background on your own hardware, through the graphics card where there is one and the processor otherwise, and each note's numbers are cached, so nothing is recomputed until you change the text.</p>
-  <p>Until the model is downloaded, or if you never turn it on, a lighter classic method fills in from shared distinctive words — instant, but it only sees words, not meaning. The model is the upgrade that reads for sense.</p>
-  <p>The default model reads English. If you write in other languages, Settings offers a <strong>multilingual</strong> model (about 120 MB) that understands 50-plus languages, Turkish among them — so Resonance and Synthesis recognise connections across your notes whatever language you think in.</p>
-  <div class="note"><span class="nlabel">Private by construction</span><p>The model runs on your device. Your notes are never uploaded, there is no account, and there is no server that could see your text even if it wanted to. Only the public model file is fetched; the reading of your notes happens entirely on your machine. Privacy here is not a policy you have to trust; it is the architecture.</p></div>
+  <p>A sentence-embedding model reads a note and produces a list of 384 numbers that stands for what the note is about. Notes about the same idea end up with similar lists even when they share few words, which is how Arf can notice a connection you never spelled out. The closeness of two notes is the cosine of the angle between their lists: values near 1 mean the notes are about the same thing, values near 0 that they are unrelated.</p>
+  <p>The model runs in the background on your own hardware. Each note's numbers are cached on your device, so nothing is recomputed until you change the text.</p>
+  <p>The model is optional. With connection suggestions off, which is how Arf starts, Resonance and Synthesis compare notes by the distinctive words they share. That is instant and needs no download, but it only sees words, not meaning.</p>
+
+  <h2>Choosing a model</h2>
+  <p>No model ships inside the installer. Open <strong>Settings → Connection suggestions</strong>, turn suggestions on, and pick a model from the list; Arf downloads it once and keeps it. Each row shows the model's languages, download size and licence, with buttons to download it without switching to it, to use it, and to remove its files again.</p>
+  <p>The model runs on the computer's processor (WebAssembly), so no graphics card is needed. The first time a model is used, Arf embeds every note once and shows <em>Indexing n / N</em> in the side panel; in the desktop app with a 304-note test vault this took about 0.3 s per note with ArfLLM and 0.5 s with ArfLLM_Multi. After that, only notes you change are embedded again.</p>
+  <div class="tbl">
+  <table>
+    <thead><tr><th>Model</th><th>Languages</th><th>Download</th><th>What it is</th></tr></thead>
+    <tbody>
+      <tr><td><a href="https://huggingface.co/tunabirgun/ArfLLM" target="_blank" rel="noopener">ArfLLM</a> (recommended)</td><td>English</td><td>~23 MB</td><td>The unmodified weights of all-MiniLM-L6-v2, exported to an int8 ONNX file for Arf and limited to the first 256 tokens of a note, the base model's own setting. Its quality is that of the base model; no improvement is claimed.</td></tr>
+      <tr><td><a href="https://huggingface.co/tunabirgun/ArfLLM_Multi" target="_blank" rel="noopener">ArfLLM_Multi</a></td><td>Multilingual, incl. Turkish</td><td>~135 MB</td><td>A fine-tuned paraphrase-multilingual-MiniLM-L12-v2. On the SCIDOCS scientific retrieval benchmark it scores 1.3 nDCG@10 points above its base model at the base's default settings (95% CI +0.6 to +2.0). Against the multilingual option of Arf 2.0, which ran the base model with different settings, it scores 5.3 points higher on SCIDOCS and 12.5 points higher on NFCorpus.</td></tr>
+      <tr><td>all-MiniLM-L6-v2</td><td>English</td><td>~24 MB</td><td>The English model earlier versions of Arf used.</td></tr>
+      <tr><td>paraphrase-multilingual-MiniLM-L12-v2</td><td>50+ languages</td><td>~135 MB</td><td>The multilingual model earlier versions of Arf offered.</td></tr>
+      <tr><td>Other model</td><td>—</td><td>varies</td><td>Any Hugging Face repository in the Transformers.js layout with <code>onnx/model_quantized.onnx</code>. Type its id (<span class="mono">owner/name</span>) and press Validate; Arf checks that the files are there and that it can apply the model's pooling before adding it to the list.</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p>The two Arf models are described in full on their model cards, including training data, evaluation, and limitations. In short: fine-tuned English candidates did not pass the acceptance rule fixed before training, so ArfLLM is published as an export of the base model and makes no quality claim. ArfLLM_Multi was trained on English arXiv titles and abstracts and on short sentence pairs in 12 languages; no improvement is claimed for non-English scientific text, and only the first 256 tokens of a long note are read.</p>
+
+  <h2>When a suggestion appears</h2>
+  <p>Each model places notes on its own scale of similarity, so a cut-off that suits one model is too strict or too loose for another. Arf therefore gives every listed model its own two thresholds: a lower one for Resonance and a higher, stricter one for Synthesis. They were set on a collection of English arXiv notes so that the share of unrelated note pairs clearing each threshold is the same for every model. Switching models changes which notes look related, but not how often unrelated pairs slip through.</p>
+  <p>A model you add yourself has no such calibration. For it, Arf looks at your own vault: it compares random pairs of your notes, which are mostly unrelated to each other, and places the Resonance threshold above 90&nbsp;% of those similarities and the Synthesis threshold above 99&nbsp;%. This needs at least 29 notes with some text in them; with fewer, Arf keeps using word overlap.</p>
+
+  <div class="note"><span class="nlabel">Private by construction</span><p>The model runs on your device, and note text never leaves it. Turning suggestions on contacts <span class="mono">huggingface.co</span> and its file CDN for the model files, and <span class="mono">cdn.jsdelivr.net</span> for the onnxruntime-web runtime that executes the model (up to about 27 MB, once). Arf checks every runtime file against a SHA-384 hash recorded when the app was built and refuses any file that differs, and model files are pinned to the repository version current at download. These are plain file downloads; nothing about your notes is sent.</p></div>
 
   <h2>Where it shows up</h2>
-  <p>The machine is deliberately quiet. It never interrupts, and it never fills a panel with noise. It appears at four moments:</p>
+  <p>The suggestions are deliberately quiet. They never interrupt, and they appear in four places:</p>
   <div class="grid grid2">
-    <div class="cell"><span class="k">While writing</span><h3>A faint mark</h3><p>When a paragraph resembles an older note, a small mark appears in the margin. Keep typing and it fades.</p></div>
-    <div class="cell"><span class="k">On the page</span><h3>Resonance</h3><p>A short list of the notes most similar to the one you are reading that you have not linked yet — each with a similarity score.</p></div>
-    <div class="cell"><span class="k">Every week</span><h3>Synthesis digest</h3><p>A handful of note pairs that clearly belong together but were never connected, each with one prompt: write the sentence that joins them.</p></div>
-    <div class="cell"><span class="k">Left alone</span><h3>Orphan nudge</h3><p>A note with no links carries a hollow mark — an invitation to place it before it is forgotten.</p></div>
+    <div class="cell"><span class="k">While writing</span><h3>A faint mark</h3><p>When the paragraph you are writing shares distinctive words with a note it does not link to, a small mark appears in the margin; click it to insert the link. Keep typing and it fades. This mark always uses word overlap.</p></div>
+    <div class="cell"><span class="k">On the page</span><h3>Resonance</h3><p>Up to five notes most similar to the one you are reading that you have not linked yet, each with a <span class="mono">+ link</span> button. They also appear in the graph as dashed edges.</p></div>
+    <div class="cell"><span class="k">Across the vault</span><h3>Synthesis</h3><p>Opened from the top bar: a handful of note pairs that are alike but were never connected, with the words they share and a button to link them.</p></div>
+    <div class="cell"><span class="k">Left alone</span><h3>Orphan mark</h3><p>A note with no links carries a hollow mark, so you can see what has not yet been placed.</p></div>
   </div>
 
   <h2>Reading the scores</h2>
-  <p>The numbers beside Resonance and Synthesis suggestions are <strong>similarity scores</strong>, from zero to one: how alike two notes are according to the model. One means nearly the same idea; higher means more related. Resonance ranks the notes most like the one you are reading; Synthesis ranks pairs that are alike but unlinked. They are drawn in iron-gall blue because that single accent marks every connection in Arf.</p>
+  <p>With a model in use, Resonance shows each note's similarity score, the cosine described above, rounded to two decimals, and the panel heading names the model. Without a model the scores measure word overlap on a different scale, so they are kept out of sight and shown only when you point at a row.</p>
 
   <h2>Honest about its limits</h2>
-  <p>Two things are worth stating plainly. General text models are weak at reading source code, so fenced code blocks are set aside from the prose fingerprints rather than allowed to muddy them. And the suggestions are exactly that — suggestions: a suggestion is only ever an invitation to look, never a claim that two notes must be joined.</p>
+  <p>General text models read source code poorly, so fenced code blocks are set aside rather than allowed to blur a note's meaning. The thresholds were calibrated on English research notes, not on your notes or on other languages. And a suggestion is only an invitation to look, never a claim that two notes must be joined.</p>
 
   <div class="pager">
     <a class="prev" href="linking.html"><span class="dir">Previous</span>← Links &amp; the graph</a>

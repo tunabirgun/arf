@@ -2,7 +2,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import {
   ulid, loadNotes, saveNotes, seedNotes, newNote,
-  loadFolders, saveFolders, toMarkdown, corruptBackupKey,
+  loadFolders, saveFolders, toMarkdown, corruptBackupKey, hasLegacyNotes, removeLegacyNotes,
 } from '../../src/lib/vault.js';
 
 beforeEach(() => localStorage.clear());
@@ -31,6 +31,13 @@ describe('notes cache', () => {
     expect(key).toMatch(/^arf-vault-v0-corrupt-/);
     expect(localStorage.getItem(key)).toBe('not valid json{');
   });
+  it('reports and removes the legacy key', () => {
+    expect(hasLegacyNotes()).toBe(false);
+    saveNotes([{ id: 'a' }]);
+    expect(hasLegacyNotes()).toBe(true);
+    expect(removeLegacyNotes()).toBe(true);
+    expect(hasLegacyNotes()).toBe(false);
+  });
   it('treats a non-array payload as corrupt', () => {
     localStorage.setItem('arf-vault-v0', JSON.stringify({ not: 'an array' }));
     expect(loadNotes()).toEqual([]);
@@ -46,7 +53,9 @@ describe('seedNotes / newNote', () => {
       expect(n.folder).toBe('');
       expect(n.created).toBeTruthy();
     });
-    expect(loadNotes()).toHaveLength(3);
+    // seeding no longer writes the legacy localStorage cache; the app persists seeds through cache.js
+    expect(hasLegacyNotes()).toBe(false);
+    expect(loadNotes()).toEqual([]);
   });
   it('newNote lands in the requested folder', () => {
     expect(newNote('Inbox').folder).toBe('Inbox');

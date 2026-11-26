@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { canonFolder, allFolderPaths, folderList, buildFolderRows, planFolderMove } from '../../src/lib/folders.js';
+import { canonFolder, allFolderPaths, folderList, buildFolderRows, planFolderMove, isReservedRoot, mapReservedRoot } from '../../src/lib/folders.js';
 
 describe('canonFolder', () => {
   it('normalizes separators and trailing slash', () => {
@@ -89,5 +89,21 @@ describe('planFolderMove', () => {
     expect(r.newPath).toBe('Concepts/Sub');
     expect(r.newFolders.sort()).toEqual(['Concepts', 'Concepts/Sub', 'Concepts/Sub/Deep']);
     expect(r.noteMoves).toEqual([{ id: 'n1', to: 'Concepts/Sub/Deep' }]);
+  });
+});
+
+describe('reserved root folder (attachments)', () => {
+  it('isReservedRoot matches the root segment only, any case, after canonicalising', () => {
+    expect(['attachments', 'Attachments/x', 'ATTACHMENTS.', 'attachments '].map(isReservedRoot)).toEqual([true, true, true, true]);
+    expect(['attachments-notes', 'a/attachments', '', 'attach'].map(isReservedRoot)).toEqual([false, false, false, false]);
+  });
+  it('mapReservedRoot renames only the root segment', () => {
+    expect(mapReservedRoot('attachments')).toBe('attachments-notes');
+    expect(mapReservedRoot('Attachments/Sub')).toBe('Attachments-notes/Sub');
+    expect(mapReservedRoot('Notes/attachments')).toBe('Notes/attachments');
+  });
+  it('planFolderMove refuses to move a folder named attachments to the root', () => {
+    expect(planFolderMove('Old/attachments', '', ['Old', 'Old/attachments'], [])).toMatchObject({ ok: false, reason: 'reserved' });
+    expect(planFolderMove('Old/attachments', 'New', ['Old', 'Old/attachments', 'New'], []).ok).toBe(true);
   });
 });

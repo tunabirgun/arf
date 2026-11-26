@@ -1,31 +1,35 @@
 <script>
-  import { loadNotes, seedNotes, saveNotes, newNote, toMarkdown, loadFolders, saveFolders, corruptBackupKey, ulid } from './lib/vault.js';
-  import { buildFolderRows, folderList, canonFolder, planFolderMove } from './lib/folders.js';
-  import { mergeByUpdated, syncChanged, conflictDecision } from './lib/sync.js';
+  import { seedNotes, saveNotes, newNote, toMarkdown, loadFolders, saveFolders, corruptBackupKey, ulid } from './lib/vault.js';
+  import { bootNotes, changedIds } from './lib/cache.js';
+  import { toggleTaskAt as toggleTaskBody } from './lib/tasks.js';
+  import { buildFolderRows, folderList, canonFolder, planFolderMove, isReservedRoot, mapReservedRoot } from './lib/folders.js';
+  import { mergeByUpdated, syncChanged, conflictDecision, reconnectMerge, adoptDiskStamps, fullReadGate } from './lib/sync.js';
   import { buildBundle, readBundle, normalizeNotes, mergeFolders, mergeRefs, mergeHls } from './lib/workspace.js';
-  import { buildIndex, buildVectorizer, related, hasLinks, digestPairs, cosine, sharedTerms } from './lib/graphindex.js';
-  import { renderMarkdown, setLinkResolver, setCiteResolver, parseImageAlt, withSizeHint } from './lib/markdown.js';
-  import katexCss from 'katex/dist/katex.min.css?inline';   // inlined into exports so math positions correctly outside the app
+  import { buildIndex, buildVectorizer, related, hasLinks, digestPairs, cosine, sharedTerms, TFIDF_FLOOR } from './lib/graphindex.js';
+  import { renderMarkdown, setLinkResolver, setCiteResolver, parseImageAlt, withSizeHint, loadMath, mathPending, onMathReady } from './lib/markdown.js';
   import { loadRefs, saveRefs, loadLibFolders, saveLibFolders } from './lib/references.js';
   import { fetchOaPdf, looksLikePdf, looksLikeEpub, OA_CONTACT } from './lib/openaccess.js';
   import { formatRef, BIB_STYLES } from './lib/cite.js';
   import { coerceHl, HL_COLORS, HL_DEFAULT } from './lib/highlight.js';
-  import { initEmbedder, embedNotes, cosine as mlCosine, resetEmbedder } from './lib/ml.js';
-  const ML_MODELS = { en: 'Xenova/all-MiniLM-L6-v2', multi: 'Xenova/paraphrase-multilingual-MiniLM-L12-v2' };
+  import { initEmbedder, embedNotes, cosine as mlCosine, resetEmbedder, download as downloadModel, cancelDownload, downloadedSet, remove as removeModelFiles, embedGeneration, embeddedText } from './lib/ml.js';
+  import { confirmAsk } from './lib/confirm.js';
+  import { MODELS, RECOMMENDED_ID, findModel, customEntry, migrateModelKey, adaptiveThresholds, repoInfo, validateRepo } from './lib/models.js';
+  import { icon } from './lib/icons.js';
+  import { importKind, stripTopFolder, rewriteImageLinks, planImport, importSummary, hashedImagePath, composeKeyMaps, rewriteCitekeys, attachmentPaths, localDate } from './lib/importflow.js';
+  import { linkContext, previewText } from './lib/linkcontext.js';
   import { connectVault, reconnectVault, lastKnownVaultPath, isTauri } from './lib/vaultadapter.js';
-  import Editor from './lib/Editor.svelte';
-  import GraphView from './lib/GraphView.svelte';
-  import Library from './lib/Library.svelte';
-  import Reader from './lib/Reader.svelte';
+  import GraphView from './lib/GraphView.svelte';   // static: the ego graph renders in the right rail at boot
+  import { untrack, tick } from 'svelte';
   import { fade, fly } from 'svelte/transition';
   import { flip } from 'svelte/animate';
   import { quintOut, cubicOut } from 'svelte/easing';
   import { prefersReducedMotion } from 'svelte/motion';
   import { dur, dist, DUR } from './lib/motion.svelte.js';
+  import { step as navStep, rove, NAV_KEYS } from './lib/listnav.js';
 
   const IS_MAC = /Mac|iPhone|iPad|iPod/.test((navigator.platform || '') + ' ' + (navigator.userAgent || ''));
   const MOD = IS_MAC ? '⌘' : 'Ctrl';
-  const APP_VERSION = '2.0.0';   // keep in sync with package.json / tauri.conf.json / Cargo.toml
+  const APP_VERSION = '3.0.0';   // keep in sync with package.json / tauri.conf.json / Cargo.toml
 
   // Material tier: Linux defaults to the opaque "flat" tier (WebKitGTK backdrop-filter is unreliable
   // before 2.46). A ?material= query param or arf-material localStorage overrides it, so CI can exercise
@@ -38,21 +42,38 @@
     else document.documentElement.removeAttribute('data-material');
   } catch (e) {} })();
 
-  let notes = $state(loadNotes());
+  let notes = $state([]);               // filled from the note cache (cache.js) at boot; cacheReady gates the UI
+  let cacheReady = $state(false);
   let refs = $state(loadRefs());        // shared reference library (also used by [@citekey] citations)
   let libFolders = $state(loadLibFolders());   // the Library's folder tree (persisted; travels via library.json)
   let refJump = $state(null);           // { key } → Library selects that reference
   let bibEnabled = $state((() => { try { return localStorage.getItem('arf-bib') === '1'; } catch (e) { return false; } })());   // append a reference list to notes
   let bibStyle = $state((() => { try { return localStorage.getItem('arf-bibstyle') || 'APA'; } catch (e) { return 'APA'; } })());
-  let currentId = $state(notes[0]?.id ?? null);
+  let currentId = $state(null);
   let mode = $state('read');            // 'read' | 'write'
   let theme = $state(document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light');
   let view = $state('notes');           // 'notes' | 'library'
   let tagFilter = $state(null);
-  let vectorizer = buildVectorizer(notes);  // { vecs, vectorize } — TF-IDF, refreshed on the debounce
-  let vecs = $state(vectorizer.vecs);       // seeded so Resonance is never blank on load
+  let vectorizer = buildVectorizer([]);     // { vecs, vectorize } — TF-IDF, refreshed on the debounce
+  let vecs = $state(vectorizer.vecs);       // seeded at boot so Resonance is never blank on load
   let mlEnabled = $state((() => { try { return localStorage.getItem('arf-ml') === '1'; } catch (e) { return false; } })());
-  let mlModel = $state((() => { try { return localStorage.getItem('arf-mlmodel') === 'multi' ? 'multi' : 'en'; } catch (e) { return 'en'; } })());
+  // active embedding model (a Hugging Face repo id) or null; old 'en'/'multi' values migrate to their Xenova ids,
+  // so an upgraded install keeps its model and its IndexedDB vectors
+  let mlModel = $state((() => {
+    try {
+      const raw = localStorage.getItem('arf-mlmodel'), id = migrateModelKey(raw, localStorage.getItem('arf-ml'));
+      if (id && id !== raw) localStorage.setItem('arf-mlmodel', id);
+      return id;
+    } catch (e) { return null; }
+  })());
+  // user-added repos: [{ id, pooling, dims, q8Bytes, fileBytes, licence }]
+  let customModels = $state((() => { try { const v = JSON.parse(localStorage.getItem('arf-custommodels') || '[]'); return Array.isArray(v) ? v.filter((c) => c && typeof c.id === 'string') : []; } catch (e) { return []; } })());
+  const modelList = $derived([...MODELS, ...customModels.map(customEntry)]);
+  const activeEntry = $derived(mlModel ? findModel(mlModel, customModels) : null);
+  // per-model file state: id -> { state: 'absent' | 'present' | 'downloading' | 'error', pct, error }
+  let mlFiles = $state({});
+  // repo file sizes learned from the Hugging Face API for entries the registry has no size for (the Arf repos until published)
+  let mlSizes = $state((() => { try { return JSON.parse(localStorage.getItem('arf-modelsizes') || '{}') || {}; } catch (e) { return {}; } })());
   let mlStatus = $state('off');   // off | loading | ready | error
   let mlPct = $state(0);
   let mlVecs = $state({});         // MiniLM embeddings (id -> 384-dim), when ready
@@ -100,13 +121,27 @@
   let ctxMenu = $state(null);   // { x, y, items } — the context-aware right-click menu
   let ctxSub = $state(null);    // reserved for future submenus
   let editorRef = $state(null); // Editor.svelte instance, for clipboard/format from the ctx menu
+  // Editor, Library and Reader load on demand (prefetched at idle after boot) to keep them out of the entry chunk
+  let EditorC = $state.raw(null), LibraryC = $state.raw(null), ReaderC = $state.raw(null);
+  function lazy(imp, set) { let p = null; return () => p || (p = imp().then((m) => set(m.default), () => { p = null; })); }
+  const loadEditor = lazy(() => import('./lib/Editor.svelte'), (c) => (EditorC = c));
+  const loadLibrary = lazy(() => import('./lib/Library.svelte'), (c) => (LibraryC = c));
+  const loadReader = lazy(() => import('./lib/Reader.svelte'), (c) => (ReaderC = c));
+  function whenIdle(fn) { if (typeof requestIdleCallback === 'function') requestIdleCallback(fn, { timeout: 2000 }); else setTimeout(fn, 200); }   // WKWebView/WebKitGTK lack requestIdleCallback
+  // KaTeX loads lazily too: a render that met math shows a placeholder until it arrives, then re-renders
+  let mathVersion = $state(0);
+  onMathReady(() => mathVersion++);
   let libraryRef = $state(null); // Library.svelte instance, so the global menu can drive its folder actions
   let reader = $state(null);    // side-reader descriptor: { kind:'note', id } or a full source object
   let readerHls = $state([]);   // highlight snippets for the current reader source
   let query = $state('');
   let tagInput = $state('');   // the "+ tag" field in the crumbs bar
   let folders = $state(loadFolders());
-  let collapsed = $state({});
+  // folder collapse state persists per machine (paths only); rename/move/delete already re-key it
+  let collapsed = $state((() => { try { const p = JSON.parse(localStorage.getItem('arf-collapsed-v1') || '{}'); return p && typeof p === 'object' && !Array.isArray(p) ? p : {}; } catch (e) { return {}; } })());
+  $effect(() => { const keep = {}; for (const k in collapsed) if (collapsed[k]) keep[k] = true; try { localStorage.setItem('arf-collapsed-v1', JSON.stringify(keep)); } catch (e) {} });
+  // focus an input after the current frame, so a closing context menu's focus restore cannot take it back
+  function focusLater(node) { const f = (sel) => { try { if (document.activeElement !== node) node.focus(); if (sel) node.select?.(); } catch (e) {} }; f(true); queueMicrotask(() => f(true)); const r = requestAnimationFrame(() => f(false)); return { destroy() { cancelAnimationFrame(r); } }; }   // the microtask pass selects a prefilled value (bind:value fills it after mount) before any keystroke; the frame pass only re-focuses
   let orders = $state(loadOrders());   // manual sidebar order: { notes:{id:rank}, folders:{path:rank} }, sidecar order.json
   let dropEdge = $state(null);         // { kind:'note'|'folder', id?/path?, edge:'before'|'after' } while reordering
   let activeFolder = $state('');
@@ -129,9 +164,15 @@
   // the link/tag/title index. Debounced (not a live $derived) so a keystroke doesn't re-parse the
   // whole vault's text on every press — the `current` note view reads `notes` directly and is unaffected;
   // only backlinks/tags/resonance/palette lag ~180ms, which is imperceptible.
-  let idx = $state(buildIndex(notes));
+  let idx = $state(buildIndex([]));
   const current = $derived(notes.find((n) => n.id === currentId) ?? null);
   const backlinks = $derived((idx.back[currentId] || []).map((id) => idx.byId[id]).filter(Boolean));
+  // the sentence around the [[link]] in each backlinking note (null when it can't be located, e.g. a link
+  // the index read differently): computed for the open note only, when its backlinks change
+  const backContext = $derived.by(() => {
+    const t = current ? current.title : '';
+    return new Map(backlinks.map((b) => [b.id, linkContext(b.body, t)]));
+  });
   // disambiguate same-first-author + same-year references with a/b/c suffixes, so their in-text
   // citations read "Guth 1981a" / "Guth 1981b" instead of two identical "Guth 1981"
   const citeDisambig = $derived.by(() => {
@@ -157,8 +198,10 @@
     setLinkResolver((t) => byTitle[t] || null);  // resolve wikilinks before parsing
     citeDisambig;                                // depend on refs/disambiguation so citations re-render
     setCiteResolver(citeResolver);
+    mathVersion;                                 // re-render once KaTeX has loaded
     return rewriteVaultImages(current ? renderMarkdown(current.body) : '');
   });
+  $effect(() => { readHTML; if (mathPending()) loadMath().catch(() => {}); });
   // optional end-of-note bibliography: the references this note cites via [@key], in the chosen style
   function buildBibHTML(n) {
     if (!bibEnabled || !n) return '';
@@ -230,8 +273,9 @@
   const allFolders = $derived(folderList(folders, notes));
 
   // one-time cleanup for installs upgraded from before 1.3.2: drop the old demo seed folders
-  // (Concepts/Methods) if no note actually lives in them, now that a fresh vault seeds none
-  (() => {
+  // (Concepts/Methods) if no note actually lives in them, now that a fresh vault seeds none.
+  // Runs at boot once the cached notes are loaded.
+  function cleanupSeedFolders() {
     try {
       if (localStorage.getItem('arf-seedfolders-cleaned')) return;
       const legacy = ['Concepts', 'Concepts/Decoherence', 'Methods'];
@@ -240,23 +284,43 @@
       if (next.length !== folders.length) { folders = next; saveFolders(folders); }
       localStorage.setItem('arf-seedfolders-cleaned', '1');
     } catch (e) {}
-  })();
+  }
 
+  // cut-offs for the model in use: its measured values when calibrated, else adaptive quantiles of this
+  // vault's random note pairs (models.js adaptiveThresholds); null until there are two vectors to compare
+  const mlThresholds = $derived.by(() => {
+    if (mlStatus !== 'ready' || !activeEntry) return null;
+    // adaptive cut-offs need enough comparable notes (null below models.js's minimum): then Resonance stays on TF-IDF
+    return activeEntry.thresholds.calibrated ? activeEntry.thresholds : adaptiveThresholds(mlVecs, { textOf: embeddedText });
+  });
+  // which method produced the Resonance list: the model once this note has a vector, else TF-IDF word overlap
+  const resonanceByModel = $derived(mlStatus === 'ready' && !!activeEntry && !!mlVecs[currentId] && !!mlThresholds);
   const resonance = $derived.by(() => {
     if (!current) return [];
     const excl = new Set([...(idx.fwd[currentId] || []), ...(idx.back[currentId] || [])]);
-    if (mlStatus === 'ready' && mlVecs[currentId]) {
-      const v = mlVecs[currentId];
+    if (resonanceByModel) {
+      if (!mlThresholds) return [];
+      const v = mlVecs[currentId], floor = mlThresholds.resonance;
       return notes.filter((n) => n.id !== currentId && !excl.has(n.id) && mlVecs[n.id])
         .map((n) => ({ note: n, s: mlCosine(v, mlVecs[n.id]) }))
-        .filter((x) => x.s >= 0.28).sort((a, b) => b.s - a.s).slice(0, 5);
+        .filter((x) => x.s >= floor).sort((a, b) => b.s - a.s).slice(0, 5);
     }
-    return related(currentId, vecs, notes, { exclude: excl, max: 5 })
+    return related(currentId, vecs, notes, { exclude: excl, max: 5, min: TFIDF_FLOOR })
       .map((r) => ({ note: idx.byId[r.id], s: r.s })).filter((x) => x.note);
   });
+  // the Resonance list as unlinked pairs: both graphs draw them as dashed suggestion edges. An unchanged
+  // list keeps its identity, so a vector refresh that moved nothing doesn't rebuild the graphs.
+  let prevSuggest = [];
+  const graphSuggest = $derived.by(() => {
+    const next = resonance.map((r) => ({ a: currentId, b: r.note.id, s: r.s }));
+    const same = next.length === prevSuggest.length && next.every((p, i) => p.a === prevSuggest[i].a && p.b === prevSuggest[i].b && p.s === prevSuggest[i].s);
+    return same ? prevSuggest : (prevSuggest = next);
+  });
 
-  // debounce vector recompute so typing never triggers a full-vault rescan per keystroke
-  const sig = $derived(notes.map((n) => n.id + n.updated).join('|'));
+  // debounce vector recompute so typing never triggers a full-vault rescan per keystroke. `rev` counts
+  // wholesale replacements (adopt), so an external edit that kept `updated` still rebuilds idx/vectors/ML.
+  let rev = $state(0);
+  const sig = $derived(rev + '#' + notes.map((n) => n.id + n.updated).join('|'));
   // rebuild the link/tag index off the same debounced signal (see the `idx` declaration above)
   let idxTimer;
   $effect(() => { sig; clearTimeout(idxTimer); idxTimer = setTimeout(() => { idx = buildIndex(notes); }, 180); return () => clearTimeout(idxTimer); });
@@ -268,28 +332,165 @@
     return () => clearTimeout(vecTimer);
   });
 
-  // on-device MiniLM embeddings (opt-in; TF-IDF above serves instantly meanwhile)
+  // on-device sentence embeddings (opt-in; TF-IDF above serves instantly meanwhile)
   function mlText(n) { return (n.title || '') + '\n' + (n.body || '').replace(/```[\s\S]*?```/g, ' '); }
   let _mlRun = 0;
-  async function recomputeML() { if (mlStatus !== 'ready') return; const run = ++_mlRun; try { const v = await embedNotes(notes, mlText); if (run === _mlRun) mlVecs = v; } catch (e) {} } // drop a stale result if a newer recompute started
+  // A result is dropped when a newer recompute started (_mlRun) or the model changed meanwhile: setModel, disableML and
+  // removeModel bump _mlRun, and ml.js's run generation (bumped by initEmbedder/resetEmbedder) rejects a stale run
+  // with StaleRunError, so another model's vectors can never land in mlVecs.
+  async function recomputeML() {
+    if (mlStatus !== 'ready') return;
+    const run = ++_mlRun, gen = embedGeneration();
+    const prog = (done, total) => { if (run === _mlRun) mlIndex = done < total ? { done, total } : null; };
+    try { const v = await embedNotes(notes, mlText, prog); if (run === _mlRun && gen === embedGeneration() && mlStatus === 'ready') mlVecs = v; } catch (e) {} finally { if (run === _mlRun) mlIndex = null; }
+  }
+  let mlIndex = $state(null);   // { done, total } while notes are being embedded for the first time (or after edits)
+  // the rail header's model label: the repo name without its owner (the full name is in the title)
+  const shortModelName = (m) => String((m && (m.name || m.id)) || '').split('/').pop();
+  const modelSpec = (m) => ({ model: m.id, pooling: m.pooling, prefix: m.prefix.passage, dtype: 'q8' });
+  const setFiles = (id, v) => { mlFiles = { ...mlFiles, [id]: v }; };
+  // Transformers.js reports a missing or private repo as an HTTP error on the first file
+  const modelError = (msg) => (/\b(401|403|404)\b|unauthori[sz]ed|not found|could not locate/i.test(msg || '') ? 'Not found, or not public yet' : 'Download failed');
+  function persistModel() { try { if (mlModel) localStorage.setItem('arf-mlmodel', mlModel); else localStorage.removeItem('arf-mlmodel'); } catch (e) {} }
   function startML() {
     if (mlStatus !== 'off') return;
-    mlStatus = 'loading';
+    const m = activeEntry; if (!m) return;
+    mlStatus = 'loading'; mlPct = 0;
     initEmbedder((s) => {
-      if (s.status === 'loading') mlPct = s.pct || mlPct;
-      else if (s.status === 'ready') { mlStatus = 'ready'; recomputeML(); }
-      else if (s.status === 'error') mlStatus = 'error';
-    }, ML_MODELS[mlModel]);
+      if (s.status === 'loading') { mlPct = s.pct || mlPct; setFiles(m.id, { state: 'downloading', pct: mlPct }); }
+      else if (s.status === 'ready') { mlStatus = 'ready'; setFiles(m.id, { state: 'present' }); recomputeML(); }
+      else if (s.status === 'error') { mlStatus = 'error'; setFiles(m.id, { state: 'error', error: modelError(s.error), detail: s.error }); }
+    }, modelSpec(m));
   }
-  function enableML() { mlEnabled = true; try { localStorage.setItem('arf-ml', '1'); } catch (e) {} startML(); }
+  // Turning suggestions on with no model chosen picks a downloaded one, else the recommended model. Like the
+  // picker, a model that is not on this device goes through fetchModel first (Hub availability and size check,
+  // then the download, shown in the rail); when that repo is unavailable the registry's recommended entry is
+  // used instead. mlEnabled turns true only once the files are in, so the (mlEnabled && off) effect can't skip this.
+  let mlEnabling = $state(false), mlEnablingId = $state(null);   // the model enableML is fetching (the rail shows its progress)
+  async function enableML() {
+    if (mlEnabled || mlEnabling) return;
+    mlEnabling = true;
+    const failed = (x) => { const st = mlFiles[x.id]; if (st?.state === 'error') notify('Couldn’t load ' + x.name + ': ' + (st.error || 'Download failed') + '. Connection suggestions stay off.'); };
+    try {
+      if (!activeEntry) {
+        const have = await downloadedSet(modelList.map((m) => m.id));
+        mlModel = (modelList.find((m) => have.has(m.id)) || findModel(RECOMMENDED_ID)).id; persistModel();
+      }
+      const m = activeEntry; if (!m) return;
+      mlEnablingId = m.id;
+      if (!(await downloadedSet([m.id])).has(m.id) && !(await fetchModel(m))) {
+        const rec = findModel(RECOMMENDED_ID);
+        if (mlFiles[m.id]?.state === 'absent') return;                     // cancelled
+        if (!rec || rec.id === m.id) { failed(m); return; }                // nothing else to try
+        mlEnablingId = rec.id;
+        if (!(await downloadedSet([rec.id])).has(rec.id) && !(await fetchModel(rec))) { failed(rec); return; }
+        mlModel = rec.id; persistModel();
+        notify(m.name + ' is not available; using ' + rec.name + ' instead.');
+      }
+      mlEnabled = true; try { localStorage.setItem('arf-ml', '1'); } catch (e) {} startML();
+    } finally { mlEnabling = false; mlEnablingId = null; }
+  }
+  // the rail's progress while enableML downloads (before the worker loads) or the worker loads
+  const railPct = $derived(mlEnabling ? (mlFiles[mlEnablingId]?.pct || 0) : mlPct);
   // turn the on-device model off again: tear down the worker, drop its vectors, fall back to TF-IDF.
   // mlEnabled must go false before mlStatus so the (mlEnabled && off → startML) effect can't relaunch it.
-  function disableML() { mlEnabled = false; try { localStorage.setItem('arf-ml', '0'); } catch (e) {} resetEmbedder(); mlStatus = 'off'; mlPct = 0; mlVecs = {}; }
-  // switch embedding model (English vs multilingual): reload the worker and re-embed under the new key
-  function setModel(m) {
-    if (m === mlModel) return;
-    mlModel = m; try { localStorage.setItem('arf-mlmodel', m); } catch (e) {}
+  function disableML() { _mlRun++; mlEnabled = false; try { localStorage.setItem('arf-ml', '0'); } catch (e) {} resetEmbedder(); mlStatus = 'off'; mlPct = 0; mlVecs = {}; }
+  // switch embedding model: reload the worker and re-embed under the new model's cache key
+  function setModel(id) {
+    if (id === mlModel) return;
+    _mlRun++;
+    mlModel = id; persistModel();
     if (mlEnabled) { resetEmbedder(); mlStatus = 'off'; mlPct = 0; mlVecs = {}; startML(); }
+  }
+
+  // --- model files (Settings, Connection suggestions) ---
+  // Download without activating. A repo the registry has no size for is checked against the Hugging Face API
+  // first: that records its size and stops early when it is not public yet.
+  async function fetchModel(m) {
+    const id = m.id;
+    setFiles(id, { state: 'downloading', pct: 0 });
+    if (m.fileBytes == null && mlSizes[id] == null) {
+      const info = await repoInfo(id);
+      if (mlFiles[id]?.state !== 'downloading') return false;   // cancelled meanwhile
+      if (!info.ok) { setFiles(id, { state: 'error', error: info.error }); return false; }
+      mlSizes = { ...mlSizes, [id]: info.fileBytes }; try { localStorage.setItem('arf-modelsizes', JSON.stringify(mlSizes)); } catch (e) {}
+    }
+    try {
+      await downloadModel(modelSpec(m), (p) => setFiles(id, { state: 'downloading', pct: p.pct }));
+      setFiles(id, { state: 'present' }); return true;
+    } catch (e) {
+      setFiles(id, e.message === 'cancelled' ? { state: 'absent' } : { state: 'error', error: modelError(e.message), detail: e.message });
+      return false;
+    }
+  }
+  // Use: download first if needed, then make it the active model and turn suggestions on
+  async function useModel(m) {
+    if (mlFiles[m.id]?.state !== 'present' && !(await fetchModel(m))) return;
+    setModel(m.id);
+    if (!mlEnabled) enableML();
+  }
+  // the Download button leaves the row once the files are in; keep keyboard focus in the row (on Use)
+  async function fetchFromButton(m, btn) {
+    const row = btn.closest('.mrow');
+    await fetchModel(m);
+    await tick();
+    const a = document.activeElement;
+    if (row && row.isConnected && (!a || a === document.body || !a.isConnected)) { const u = row.querySelector('[data-act="use"]'); if (u) u.focus(); }
+  }
+  function cancelModel(m) {
+    if (m.id === mlModel && mlStatus === 'loading') disableML();
+    cancelDownload(m.id);   // also stops a download that enableML or Use started
+    setFiles(m.id, { state: 'absent' });
+  }
+  async function removeModel(m) {
+    if (m.id === mlModel && mlEnabled) return;   // the model in use stays until suggestions are off
+    _mlRun++;   // no recompute that started before the removal may land afterwards
+    if (!(await confirmAsk('Remove ' + m.name + ' from this device?' + (m.custom ? '\n\nIts downloaded files are deleted and it leaves the model list.' : '\n\nIts downloaded files are deleted; you can download it again later.'), { okLabel: 'Remove' }))) return;
+    try { await removeModelFiles(m.id); } catch (e) {}
+    setFiles(m.id, { state: 'absent' });
+    if (m.custom) {
+      customModels = customModels.filter((c) => c.id !== m.id);
+      try { localStorage.setItem('arf-custommodels', JSON.stringify(customModels)); } catch (e) {}
+      if (m.id === mlModel) { mlModel = null; persistModel(); }
+    }
+  }
+  // which models are on this device: read from Cache Storage only (no network) whenever Settings opens
+  async function refreshModelFiles(ids) {
+    const have = await downloadedSet(ids), next = { ...mlFiles };
+    for (const id of ids) {
+      if (next[id]?.state === 'downloading') continue;
+      next[id] = have.has(id) ? { state: 'present' } : next[id]?.state === 'error' ? next[id] : { state: 'absent' };
+    }
+    mlFiles = next;
+  }
+  $effect(() => { if (settingsOpen) refreshModelFiles(modelList.map((m) => m.id)); });
+  function modelStatus(m) {
+    const f = mlFiles[m.id], active = m.id === mlModel && mlEnabled;
+    if (f?.state === 'downloading') return 'Downloading ' + (f.pct || 0) + '%';
+    if (active && mlStatus === 'ready') return 'In use';
+    if (active && mlStatus === 'loading') return 'Loading';
+    if (f?.state === 'error') return f.error;
+    if (f?.state === 'present') return m.id === mlModel ? 'Downloaded, selected' : 'Downloaded';
+    return 'Not downloaded';
+  }
+  function modelSize(m) { const b = m.fileBytes ?? mlSizes[m.id]; return b ? Math.round(b / 1e5) / 10 + ' MB' : 'size shown after first check'; }
+  // custom repo: validate against the Hugging Face API, then add with the pooling its 1_Pooling config names
+  let customId = $state(''), customCheck = $state(null), customPooling = $state('mean'), customPrefix = $state('');
+  async function checkCustom() {
+    const id = customId.trim();
+    if (!id) return;
+    customCheck = { busy: true };
+    const r = await validateRepo(id);
+    if (customId.trim() !== id) return;   // the field changed while the check ran
+    customCheck = r.ok && modelList.some((m) => m.id === r.id) ? { ok: false, error: 'Already in the list' } : r;
+    customPooling = r.ok ? r.pooling : 'mean';
+  }
+  function addCustom() {
+    const r = customCheck; if (!r || !r.ok) return;
+    // the optional passage prefix (e5 'passage: ', nomic 'search_document: ') is part of the model's cache space
+    customModels = [...customModels, { id: r.id, pooling: customPooling, dims: r.dims, q8Bytes: r.q8Bytes, fileBytes: r.fileBytes, licence: r.licence, prefix: customPrefix }];
+    try { localStorage.setItem('arf-custommodels', JSON.stringify(customModels)); } catch (e) {}
+    customId = ''; customCheck = null; customPrefix = '';
   }
   $effect(() => { if (mlEnabled && mlStatus === 'off') startML(); });
   let mlTimer;
@@ -304,31 +505,77 @@
   let saveError = $state(false);
   let exportError = $state('');   // a file export/save-dialog failure — distinct from the localStorage cache error
   let exportErrTimer;
-  let vaultCorrupt = $state(!!corruptBackupKey()); // saved notes couldn't be parsed on load
+  let vaultCorrupt = $state(false); // saved notes couldn't be parsed on load (set at boot)
   let flashTimer, saveTimer;
+  // The always-on local note cache (cache.js): IndexedDB, written per changed note, with a synchronous
+  // localStorage journal of those notes until the IndexedDB commit lands. noteCache null = the legacy
+  // whole-vault localStorage path (IndexedDB unavailable). saveError means an edit is persisted nowhere:
+  // a failed cache write only raises it when no vault folder took the edit either.
+  let noteCache = null;
+  let readFailed = false;          // cached notes may exist but couldn't be read — never seed over them
+  const cacheDirty = new Set();    // note ids changed since the last cache write (the vault's `dirty` tracks file flushes)
+  let cacheFull = false;           // notes were replaced wholesale: the next cache write replaces the store
+  let cacheOrder = [];             // the note order the cache last stored
+  let cacheChain = Promise.resolve(true), cacheQueued = false;
+  function syncCache() {
+    if (!cacheReady) return Promise.resolve(true);
+    if (!noteCache) { cacheDirty.clear(); cacheFull = false; return Promise.resolve(saveNotes(notes)); }
+    if (cacheDirty.size) { const live = new Map(notes.map((n) => [n.id, n])); noteCache.journal([...cacheDirty].map((id) => [id, live.get(id) || null])); }
+    return (cacheChain = cacheChain.then(commitCache, commitCache));   // serialized, so IndexedDB applies writes in call order
+  }
+  async function commitCache() {
+    const full = cacheFull, ids = [...cacheDirty];
+    if (!full && !ids.length) return true;
+    cacheFull = false; cacheDirty.clear();   // snapshot taken now, so the write carries the newest state
+    const order = notes.map((n) => n.id);
+    let ok = false;
+    try {
+      if (full) ok = await noteCache.replaceAll(notes, order);
+      else {
+        const live = new Map(notes.map((n) => [n.id, n]));
+        const reordered = order.length !== cacheOrder.length || order.some((id, i) => id !== cacheOrder[i]);
+        ok = await noteCache.write(ids.filter((id) => live.has(id)).map((id) => live.get(id)), ids.filter((id) => !live.has(id)), reordered ? order : null);
+      }
+    } catch (e) { ok = false; }
+    if (ok) cacheOrder = order;
+    else { if (full) cacheFull = true; for (const id of ids) cacheDirty.add(id); }   // retried by the next write
+    return ok;
+  }
+  // background cache write (adopted notes, confirmed file flushes): no "saved" flash
+  function queueCache() {
+    if (cacheQueued) return; cacheQueued = true;
+    queueMicrotask(() => { cacheQueued = false; syncCache().then((ok) => { saveError = !ok && (!vaultBackend || vaultErr); }); });
+  }
+  function flashSaved() { saved = true; clearTimeout(flashTimer); flashTimer = setTimeout(() => (saved = false), 800); }
   function writeNow() {
-    const ok = saveNotes(notes);       // localStorage stays as an always-on local cache
-    saveError = !ok;
-    if (ok) { saved = true; clearTimeout(flashTimer); flashTimer = setTimeout(() => (saved = false), 800); }
-    flushVault();                       // and mirror changed notes to real files, if connected
+    if (!cacheReady) return;
+    const c = syncCache();
+    const v = flushVault();             // and mirror changed notes to real files, if connected
+    c.then((ok) => {
+      if (ok) { saveError = false; flashSaved(); return; }
+      if (!vaultBackend) { saveError = true; return; }
+      v.then(() => { saveError = vaultErr; if (!vaultErr) flashSaved(); });   // the folder holds the edit even though the cache missed it
+    });
   }
   function persist() { clearTimeout(saveTimer); saveTimer = setTimeout(writeNow, 400); }
   function flushSave() { clearTimeout(saveTimer); writeNow(); }
-  function markDirty(id) { if (vaultBackend && id) dirty.add(id); }
+  function markDirty(id) { if (!id) return; cacheDirty.add(id); if (vaultBackend) dirty.add(id); }
   let flushChain = Promise.resolve();
   function flushVault() { flushChain = flushChain.then(doFlush).catch(() => {}); return flushChain; } // serialize: never two overlapping flushes
   async function doFlush() {
     if (!vaultBackend || !dirty.size) return;
     const ids = [...dirty];
-    let failed = false;
+    let failed = false, wrote = false;
     for (const id of ids) {
       const n = notes.find((x) => x.id === id);
       if (!n) { dirty.delete(id); continue; }
       const stamp = n.updated;   // a keystroke during the await bumps this — then keep it dirty so the newest edit is written next tick
-      // only drop from the retry queue on a confirmed write of the version we actually saved
-      try { await vaultBackend.saveNote(n); if (n.updated === stamp) dirty.delete(id); } catch (e) { failed = true; }
+      // only drop from the retry queue on a confirmed write of the version we actually saved.
+      // _flushed records that version as on disk (F5b: a later absence from disk then means an external delete).
+      try { await vaultBackend.saveNote(n); if (n.updated === stamp) dirty.delete(id); n._flushed = stamp; cacheDirty.add(id); wrote = true; } catch (e) { failed = true; }
     }
     vaultErr = failed;
+    if (wrote) queueCache();   // persist the new _path/_flushed
   }
   // choose a vault folder — first run merges migration-safe; switching clears to the new folder
   async function connectFolder() {
@@ -342,12 +589,13 @@
       if (b) {
         flushSave();
         const existing = await b.loadAll();
+        for (const n of existing) n._flushed = n.updated;   // read straight from this folder
         const switching = !!vaultBackend;
         if (switching) {
           // the new vault's notes already live on disk — adopt them straight away so the
           // sidebar repaints instantly; do NOT re-save them (that would churn/rename files
           // in the folder we just opened). Clear all old-vault state for a clean slate.
-          refsLoading = true; _conflicts.clear(); pendingDelete.clear(); saveTombstones(); activeFolder = ''; tagFilter = null;
+          refsLoading = true; _conflicts.clear(); pendingDelete.clear(); saveTombstones(); deletedAt.clear(); activeFolder = ''; tagFilter = null;
           orders = { notes: {}, folders: {} }; reader = null;   // start the new vault's sidecar order/reader clean; ordersFromVault re-reads its own
           adopt(existing);
           folders = [...new Set(existing.map((n) => n.folder).filter(Boolean))]; saveFolders(folders);
@@ -362,7 +610,9 @@
           for (const n of merged) {
             if (fromDisk.has(n)) continue;      // byte-for-byte the disk copy → skip the write to avoid needless churn
             if (n._path && diskPathById.get(n.id) !== n._path) n._path = undefined;
-            try { await b.saveNote(n); } catch (e) { vaultErr = true; dirty.add(n.id); } // a failed write stays dirty and retries on the next sync tick
+            n._flushed = undefined;             // a marker from another folder says nothing about this one
+            const stamp = n.updated;
+            try { await b.saveNote(n); n._flushed = stamp; } catch (e) { vaultErr = true; dirty.add(n.id); } // a failed write stays dirty and retries on the next sync tick
           }
           adopt(merged);
           folders = [...new Set([...folders, ...merged.map((n) => n.folder).filter(Boolean)])]; saveFolders(folders); // merge — keep empty user folders through the migration
@@ -384,19 +634,39 @@
       await getCurrentWindow().setTitle(name ? 'Arf — ' + name : 'Arf');
     } catch (e) {}
   }
-  function adopt(list) { notes = list; if (!list.some((n) => n.id === currentId)) currentId = list[0]?.id ?? null; }
+  // replace the note set wholesale (vault load, sync merge, import, seed); the cache store follows
+  // the notes it adds or changes are journaled first (changedIds, by content), so a hard quit before the
+  // IndexedDB commit can't lose an import or seed; a journal that doesn't fit is skipped quietly
+  function adopt(list) {
+    if (noteCache) { try { const live = new Map(list.map((n) => [n.id, n])); noteCache.journal(changedIds(notes, list).map((id) => [id, live.get(id)])); } catch (e) {} }
+    notes = list; rev++; cacheFull = true; queueCache(); if (!list.some((n) => n.id === currentId)) currentId = list[0]?.id ?? null;
+  }
+  // the live note object: idx.byId lags ~180 ms behind a create and still holds replaced objects after an adopt
+  function noteById(id) { return notes.find((n) => n.id === id) || idx.byId[id] || null; }
 
   // continuous two-way sync: push local edits out, pull external ones in, honour deletions.
   // Runs on a short interval and whenever the app regains focus, so a folder kept in
   // Dropbox / iCloud / Syncthing / Git stays in step across devices with no user action.
   let _conflicts = new Set(); // remote versions already stashed, so we don't re-copy every tick
-  async function syncFromFolder() {
+  // F5c: a delete made while a tick's loadAll is in flight must not come back from that tick's stale
+  // snapshot. Each tick takes an epoch before its read; a delete records the epoch current when it
+  // happened and again when its file removal settled. A tick excludes ids recorded at or after its own
+  // epoch, and forgets records older than the epoch of a tick that completed.
+  let tickEpoch = 0;
+  const deletedAt = new Map();   // note id -> epoch
+  const fullGate = fullReadGate(); // full re-reads requested (focus regained, Ctrl+R); focus + visibilitychange coalesce into one
+  async function syncFromFolder(opts) {
+    if (opts && opts.full) fullGate.request();
     if (!vaultBackend || syncing || vaultBusy) return;
     if (document.hidden) return;   // don't re-read the whole vault every 4s while the window is hidden; the focus/visibility listeners pull on regain
     syncing = true;
+    const full = fullGate.begin();
+    let ok = false;
     try {
       await flushVault();                                   // 1) push local edits to the folder
-      const disk = await vaultBackend.loadAll();            // 2) read the folder's current state
+      const epoch = ++tickEpoch;
+      const disk = await vaultBackend.loadAll({ full });    // 2) read the folder's current state (incremental unless asked)
+      for (const n of disk) n._flushed = n.updated;
       const diskIds = new Set(disk.map((n) => n.id));
       // tombstones: retry a delete whose file removal never confirmed, and never resurrect a note the user deleted
       const reaped = new Set(); // ids whose file we removed THIS tick — `disk` still lists them, so exclude explicitly or they resurrect
@@ -405,7 +675,8 @@
         for (const id of [...pendingDelete]) if (!diskIds.has(id)) { pendingDelete.delete(id); reaped.add(id); } // already gone from disk → tombstone resolved
         saveTombstones();
       }
-      const live = (pendingDelete.size || reaped.size) ? disk.filter((n) => !pendingDelete.has(n.id) && !reaped.has(n.id)) : disk;
+      const late = (id) => (deletedAt.get(id) ?? -1) >= epoch;   // deleted after this tick's read began
+      const live = (pendingDelete.size || reaped.size || deletedAt.size) ? disk.filter((n) => !pendingDelete.has(n.id) && !reaped.has(n.id) && !late(n.id)) : disk;
       const protectedId = mode === 'write' && current ? currentId : null;
       // 3) honour deletions from another device: a note that had a file, is gone from a non-empty
       //    folder, has no unsaved edit, and isn't the note open for editing → drop it.
@@ -422,24 +693,31 @@
         if (conflict) {
           _conflicts.add(key);
           const cid = 'conflict_' + Date.now().toString(36);
-          extra.push({ ...remote, id: cid, title: (remote.title || 'Note') + ' (conflict copy)', _path: undefined });
+          extra.push({ ...remote, id: cid, title: (remote.title || 'Note') + ' (conflict copy)', _path: undefined, _flushed: undefined });
           dirty.add(cid);
         }
       }
-      const merged = mergeByUpdated(kept, protectedId ? live.filter((n) => n.id !== protectedId) : live).concat(extra);
+      const incoming = protectedId ? live.filter((n) => n.id !== protectedId) : live;
+      const local = adoptDiskStamps(kept, incoming);   // a stamped frontmatter-less file with unchanged content keeps its disk timestamps
+      const merged = mergeByUpdated(local, incoming).concat(extra);
+      // a kept local note whose exact version is on disk is confirmed flushed (covers notes cached before _flushed existed)
+      const diskUpd = new Map(live.map((n) => [n.id, n.updated]));
+      for (const n of local) if (n._flushed !== n.updated && !dirty.has(n.id) && diskUpd.get(n.id) === n.updated) { n._flushed = n.updated; cacheDirty.add(n.id); }
       if (syncChanged(notes, merged)) {
         const prevId = currentId;
         adopt(merged);
         if (currentId !== prevId && mode === 'write') mode = 'read';   // never leave the cursor on a note that was swapped out
         folders = [...new Set([...folders, ...merged.map((n) => n.folder).filter(Boolean)])];
-      }
+      } else if (cacheDirty.size) queueCache();
+      for (const [id, e] of deletedAt) if (e < epoch) deletedAt.delete(id);
       lastSync = Date.now();
-    } catch (e) { /* transient (permission prompt, mid-sync file swap) — next tick retries */ } finally { syncing = false; }
+      ok = true;
+    } catch (e) { /* transient (permission prompt, mid-sync file swap) — next tick retries, a full one again if this was */ } finally { fullGate.end(ok); syncing = false; }
   }
   $effect(() => {
     if (!vaultBackend) return;
-    const iv = setInterval(syncFromFolder, 4000);
-    const pull = () => { if (!document.hidden) syncFromFolder(); };
+    const iv = setInterval(() => syncFromFolder(), 4000);   // incremental scan
+    const pull = () => { if (!document.hidden) syncFromFolder({ full: true }); };   // focus regained: re-read everything
     window.addEventListener('focus', pull);
     document.addEventListener('visibilitychange', pull);
     return () => { clearInterval(iv); window.removeEventListener('focus', pull); document.removeEventListener('visibilitychange', pull); };
@@ -448,67 +726,299 @@
   // --- whole-workspace backup: one portable .arf file (notes + folders + references) ---
   let fileInput = $state();
   let importMsg = $state('');
-  let importMsgTimer;
   async function exportWorkspace() {
     // inline vault-stored note images into the bundle bodies so the .arf file is fully portable
     let outNotes = notes;
     if (isTauri && vaultBackend) { outNotes = []; for (const n of notes) outNotes.push({ ...n, body: await inlineVaultImagesMd(n.body || '') }); }
     const data = buildBundle(outNotes, folders, refs, APP_VERSION, new Date().toISOString(), libFolders, loadReaderHlMap());
-    await saveText('arf-workspace-' + new Date().toISOString().slice(0, 10) + '.arf', 'application/json', JSON.stringify(data, null, 2));
+    const name = 'arf-workspace-' + localDate() + '.arf';
+    reportExport(await saveText(name, 'application/json', JSON.stringify(data, null, 2)), name, outNotes.length + ' note' + (outNotes.length === 1 ? '' : 's'));
+  }
+  // one status line for an export, like an import's: what was written, or that nothing was
+  function reportExport(r, name, what) {
+    if (r === 'saved') showImportMsg('✓ Exported ' + what + ' to ' + name + '.');
+    else if (r === 'downloaded') showImportMsg('✓ Exported ' + what + ' as ' + name + ' (your browser’s downloads).');
+    else if (r === 'cancelled') showImportMsg('Export cancelled; nothing was saved.');
+    else if (r === 'failed') showImportMsg('⚠ Couldn’t save ' + name + '.');
+  }
+  // clear an import's notes from the delete tombstones, so a pending or just-made delete can't remove the
+  // file the import is about to write (and drop the note again on the next sync tick)
+  function untombstone(ids) {
+    let ch = false;
+    for (const id of ids) { if (pendingDelete.delete(id)) ch = true; deletedAt.delete(id); }
+    if (ch) saveTombstones();
   }
   async function importWorkspace(e) {
     const file = e.currentTarget.files && e.currentTarget.files[0];
     e.currentTarget.value = '';
-    if (!file) return;
+    if (file) await importArfFile(file);
+  }
+  async function importArfFile(file) {
+    if (!cacheReady) return;
     try {
       const data = readBundle(await file.text());
       const localPath = new Map(notes.map((n) => [n.id, n._path]));
-      const incoming = normalizeNotes(data.notes, localPath, ulid);
+      // a root "attachments" folder is the vault's reserved one (never scanned): such notes move to attachments-notes
+      const incoming = normalizeNotes(data.notes, localPath, ulid).map((n) => (isReservedRoot(n.folder) ? { ...n, folder: mapReservedRoot(n.folder) } : n));
       adopt(mergeByUpdated(notes, incoming)); // merge so nothing already here is lost
+      untombstone(incoming.map((n) => n.id));
       if (vaultBackend) for (const n of incoming) dirty.add(n.id); // write imported notes to the vault now, not next launch
-      if (Array.isArray(data.folders)) { folders = mergeFolders(folders, data.folders); saveFolders(folders); }
+      if (Array.isArray(data.folders)) { folders = mergeFolders(folders, data.folders.map((f) => (typeof f === 'string' ? mapReservedRoot(f) : f))); saveFolders(folders); }
       if (Array.isArray(data.libFolders)) libFolders = mergeFolders(libFolders, data.libFolders);   // library tree from an older/newer bundle merges in; absence is fine
       if (Array.isArray(data.refs)) refs = mergeRefs(refs, data.refs);
       if (data.readerHls && typeof data.readerHls === 'object') {   // merge highlights from the bundle so they survive an import and re-sync
         try { localStorage.setItem(READER_HL_KEY, JSON.stringify(mergeHls(loadReaderHlMap(), data.readerHls))); const k = readerSource?.key; if (k) readerHls = loadReaderHls(k); queueMicrotask(hlsToVault); } catch (e) {}
       }
-      importMsg = '✓ Imported ' + incoming.length + ' notes.';
+      importMsg = '✓ Imported ' + incoming.length + (incoming.length === 1 ? ' note.' : ' notes.');
     } catch (err) { importMsg = '⚠ ' + (err.message || 'Could not read that file'); }
-    finally { flushSave(); clearTimeout(importMsgTimer); importMsgTimer = setTimeout(() => (importMsg = ''), 6000); }   // persist adopted notes even if the merge threw; don't let the status stick forever as the help text
+    finally { flushSave(); }   // persist adopted notes even if the merge threw; the status stays until the next import or export
   }
+
+  // --- import from Markdown files, folders, zips and reference files; export the vault as a zip ---
+  // Sources arrive as File objects (web pickers, drops) or as path-backed stand-ins (Tauri dialogs) with
+  // the same name / webkitRelativePath / size / text() / arrayBuffer() surface. importers.js parses
+  // (loaded on first use); importflow.js routes, merges and words the result.
+  let importBusy = $state(false);
+  const MAX_IMPORT_IMAGE = 25 * 1024 * 1024;   // importers.js applies the same cap to images inside a zip
+  // the result of the last import or export stays on the status line below the buttons until the next one
+  function showImportMsg(m) {
+    importMsg = m;
+    if (!settingsOpen) notify(m);   // a drop or the Library button: Settings, where importMsg shows, is closed
+  }
+  // a relative path with no empty, '.' or '..' segment, so a stored image can't land outside attachments/images
+  const safeRel = (p) => String(p).replace(/\\/g, '/').split('/').filter((x) => x && x !== '.' && x !== '..').join('/');
+  // -> { keyMap: incoming key -> key in the library, added: the refs this merge added }
+  function mergeRefsInto(io, list, sum) {
+    const m = io.mergeImportedRefs(refs, list);
+    if (m.added.length) refs = m.refs;
+    sum.refsAdded += m.added.length; sum.refsDuplicates += m.duplicates.length;
+    return { keyMap: m.keyMap || {}, added: m.added };
+  }
+  // Reference files from Arf's own export, restored for the refs this import added. A path that another reference
+  // owns, or a file already on disk, is never reused: the file goes to a free name and the added ref points there,
+  // so no reference ever opens another work's PDF.
+  async function restoreAttachments(files, added, sum) {
+    if (!vaultBackend || !files || !files.length || !added.length) return;
+    const byPath = new Map(files.map((f) => [f.path, f]));
+    for (const r0 of added) {
+      const p = r0.attachment && r0.attachment.path, f = p && byPath.get(p);
+      if (!f) continue;
+      const claimed = (q) => refs.some((x) => x.id !== r0.id && x.attachment && x.attachment.path === q);
+      const ext = (/\.([A-Za-z0-9]+)$/.exec(p) || [])[1] || 'bin';
+      let target = p;
+      try {
+        for (let i = 1; claimed(target) || (await vaultBackend.pathExists(target)); i++) target = 'attachments/' + attachSlug(r0) + (i > 1 ? '-' + i : '') + '.' + ext.toLowerCase();
+        await vaultBackend.saveBinary(target, f.bytes);
+        if (target !== p) refs = refs.map((x) => (x.id === r0.id ? { ...x, attachment: { ...x.attachment, path: target } } : x));
+        sum.files++;
+      } catch (e) {}
+    }
+  }
+  // merge one importMarkdownFiles/importZip result into the vault; counts go into sum
+  async function applyNoteImport(io, res, sum) {
+    // references first: a key renamed (or matched to a duplicate) in the library rewrites this import's citations
+    let keyMap = res.refKeyMap || {}, addedRefs = [];
+    if (res.refs && res.refs.length) { const m = mergeRefsInto(io, res.refs, sum); keyMap = composeKeyMaps(keyMap, m.keyMap); addedRefs = m.added; }
+    let incoming = rewriteCitekeys(res.notes, keyMap);
+    // images: only those a note of this import links, stored content-addressed like a pasted image (a different
+    // image with the same name can never replace another; an identical one is written once)
+    const assets = new Map();
+    for (const a of res.assets || []) { const p = safeRel(a.path); if (p && !io.ignoredPath(p) && !assets.has(p)) assets.set(p, a); }
+    const used = rewriteImageLinks(incoming, [...assets.keys()]).used;
+    const stored = new Map();
+    let tooLarge = 0;
+    if (vaultBackend) for (const p of used) {
+      const a = assets.get(p);
+      if (!a || a.size > MAX_IMPORT_IMAGE) { if (a) tooLarge++; continue; }
+      try {
+        const bytes = a.bytes || (a.read ? await a.read() : null);
+        if (!bytes) continue;
+        if (bytes.length > MAX_IMPORT_IMAGE) { tooLarge++; continue; }   // a desktop pick reports no size until read
+        const rel = hashedImagePath(await bytesHash(bytes), p);
+        if (!(await vaultBackend.pathExists(rel))) await vaultBackend.saveBinary(rel, bytes);
+        stored.set(p, rel);
+      } catch (e) {}
+    }
+    if (stored.size) incoming = rewriteImageLinks(incoming, [...assets.keys()], stored).notes;
+    const plan = planImport(notes, incoming);
+    if (plan.added.length || plan.merged.length) {
+      adopt(plan.notes);
+      untombstone([...plan.added, ...plan.merged]);
+      if (vaultBackend) for (const id of [...plan.added, ...plan.merged]) dirty.add(id);   // write them to the folder now, not next launch
+    }
+    if (res.folders && res.folders.length) { folders = mergeFolders(folders, res.folders); saveFolders(folders); }
+    await restoreAttachments(res.attachments, addedRefs, sum);   // reference files carried by Arf's own export
+    sum.added += plan.added.length; sum.merged += plan.merged.length; sum.unchanged += plan.unchanged.length;
+    sum.skipped.push(...res.skipped); sum.images += stored.size; sum.imagesTooLarge += tooLarge;
+    sum.imagesSkipped += vaultBackend ? 0 : used.size;
+  }
+  // folder: the files came from a picked folder (keep its structure, copy its images, report what was skipped)
+  async function importFiles(list, { folder = false } = {}) {
+    if (!cacheReady || importBusy || !list.length) return;
+    importBusy = true;
+    const sum = { added: 0, merged: 0, unchanged: 0, skipped: [], refsAdded: 0, refsDuplicates: 0, images: 0, imagesSkipped: 0, imagesTooLarge: 0, files: 0, errors: [] };
+    const msgs = [];
+    importMsg = '';
+    try {
+      const io = await import('./lib/importers.js');
+      const rel = folder ? stripTopFolder(list.map((f) => f.webkitRelativePath || f.name)) : list.map((f) => f.name);
+      const md = [], assets = [], batchKeys = {};
+      for (let i = 0; i < list.length; i++) {
+        const f = list[i], kind = importKind(f.name);
+        try {
+          if (kind === 'notes') md.push({ path: rel[i], text: await f.text() });
+          else if (kind === 'zip') await applyNoteImport(io, io.importZip(new Uint8Array(await f.arrayBuffer()), { existing: notes, existingRefs: refs }), sum);
+          else if (kind === 'refs' && !folder) {
+            const r = io.importReferences(await f.text(), f.name, { existingRefs: refs });
+            // a key renamed here rewrites the citations of the Markdown files dropped or picked with it
+            if (r.refs.length) Object.assign(batchKeys, composeKeyMaps(r.keyMap, mergeRefsInto(io, r.refs, sum).keyMap));
+            sum.errors.push(...r.errors.map((m) => f.name + ': ' + m));
+          } else if (kind === 'arf' && !folder) { await importArfFile(f); if (importMsg) msgs.push(importMsg); }
+          // images are read later, and only those a note links (hidden folders and __MACOSX never)
+          else if (kind === 'image' && folder) { if (!io.ignoredPath(safeRel(rel[i]))) assets.push({ path: rel[i], size: f.size || 0, read: async () => new Uint8Array(await f.arrayBuffer()) }); }
+          else if (folder) md.push({ path: rel[i], text: null });   // listed as skipped, with its reason
+        } catch (e) { sum.errors.push('Couldn’t read ' + f.name + '.'); }
+      }
+      if (md.length || assets.length) {
+        // loose files and drops carry no folder: a note matched by id stays in its folder
+        const res = io.importMarkdownFiles(md, { existing: notes, loose: !folder });
+        res.assets = assets; res.refKeyMap = batchKeys;
+        await applyNoteImport(io, res, sum);
+      }
+    } catch (e) { sum.errors.push('Import failed: ' + (e && e.message ? e.message : e)); }
+    finally { importBusy = false; flushSave(); }
+    const summary = importSummary(sum);
+    showImportMsg(msgs.length && !sum.errors.length && summary === importSummary({}) ? msgs.join(' ') : [...msgs, summary].join(' '));
+  }
+  // pick files: a temporary <input type=file> on the web, the native dialog in the desktop app
+  const PICK = {
+    notes: { accept: '.md,.markdown', multiple: true, label: 'Markdown', ext: ['md', 'markdown'] },
+    folder: { folder: true },
+    zip: { accept: '.zip', label: 'ZIP archive', ext: ['zip'] },
+    refs: { accept: '.bib,.bibtex,.ris,.json', multiple: true, label: 'References', ext: ['bib', 'bibtex', 'ris', 'json'] },
+  };
+  async function pickImport(kind) {
+    const k = PICK[kind];
+    let list;
+    try { list = isTauri ? await pickNative(k) : await pickWeb(k); }
+    catch (e) { showImportMsg('⚠ ' + (e && e.message ? e.message : 'Couldn’t read that selection.')); return; }
+    if (list && list.length) await importFiles(list, { folder: !!k.folder });
+  }
+  function pickWeb(k) {
+    return new Promise((resolve) => {
+      const inp = document.createElement('input');
+      inp.type = 'file'; inp.style.display = 'none';
+      if (k.accept) inp.accept = k.accept;
+      if (k.multiple) inp.multiple = true;
+      if (k.folder) inp.webkitdirectory = true;
+      const done = (v) => { inp.remove(); resolve(v); };
+      inp.addEventListener('change', () => done([...(inp.files || [])]));
+      inp.addEventListener('cancel', () => done([]));
+      document.body.appendChild(inp);
+      inp.click();
+    });
+  }
+  // a file on disk with the File surface importFiles reads; bytes are read only when asked for. The size is
+  // unknown (0) until read: applyNoteImport checks an image's byte length after reading it.
+  function diskFile(fs, path, relPath) {
+    const name = String(path).split(/[\\/]/).pop();
+    return { name, webkitRelativePath: relPath || '', size: 0, text: () => fs.readTextFile(path), arrayBuffer: async () => { const b = await fs.readFile(path); return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength); } };
+  }
+  const SCOPE_MSG = 'Couldn’t read that folder. Pick one under your Home, Documents, Desktop, or Downloads folder.';
+  async function pickNative(k) {
+    const [{ open: openDialog }, fs] = await Promise.all([import('@tauri-apps/plugin-dialog'), import('@tauri-apps/plugin-fs')]);
+    if (k.folder) {
+      const root = await openDialog({ directory: true, multiple: false });
+      if (!root) return [];
+      const top = String(root).split(/[\\/]/).filter(Boolean).pop() || 'folder', out = [];
+      // like the vault loader's walk: hidden entries and symlinks are skipped
+      const walk = async (dir, rel) => {
+        let entries;
+        try { entries = await fs.readDir(dir); } catch (e) { if (!rel) throw new Error(SCOPE_MSG); return; }
+        for (const e of entries) {
+          if (!e.name || e.name.startsWith('.') || e.isSymlink) continue;
+          const p = rel ? rel + '/' + e.name : e.name, abs = dir + '/' + e.name;
+          if (e.isDirectory) await walk(abs, p); else out.push(diskFile(fs, abs, top + '/' + p));
+        }
+      };
+      await walk(String(root), '');
+      return out;
+    }
+    const sel = await openDialog({ multiple: !!k.multiple, filters: [{ name: k.label, extensions: k.ext }] });
+    if (!sel) return [];
+    return (Array.isArray(sel) ? sel : [sel]).map((p) => diskFile(fs, p));
+  }
+  async function exportVaultZipFile() {
+    try {
+      const { exportVaultZip } = await import('./lib/exporters.js');
+      const now = new Date().toISOString(), date = localDate(), name = 'arf-vault-' + date + '.zip';
+      // the vault's images and reference files travel along (desktop with a vault folder; the web build has none)
+      const attachments = [];
+      if (vaultBackend) for (const p of attachmentPaths(notes, refs)) { const bytes = await vaultBackend.readBinary(p); if (bytes) attachments.push({ path: p, bytes: bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes) }); }
+      const what = notes.length + ' note' + (notes.length === 1 ? '' : 's') + (attachments.length ? ' and ' + attachments.length + ' attached file' + (attachments.length === 1 ? '' : 's') : '');
+      reportExport(await saveBytes(name, 'application/zip', exportVaultZip(notes, folders, refs, { now, date, attachments })), name, what);
+    } catch (e) { showImportMsg('⚠ Couldn’t build the ZIP: ' + (e && e.message ? e.message : e)); }
+  }
+  // HTML5 file drops on the window (the OS drop handler is off, see the guard on <svelte:window>):
+  // notes, zips, reference files and .arf bundles import; any other drop is only kept from navigating
+  function onWindowDrop(e) {
+    e.preventDefault();
+    const files = e.dataTransfer && e.dataTransfer.files;
+    if (dragItem || !files || !files.length || needVault) return;
+    if (e.target && e.target.closest && e.target.closest('.cm-editor')) return;   // the editor takes its own drops (images inline, import files via onimport)
+    const list = [...files].filter((f) => { const k = importKind(f.name); return k && k !== 'image'; });
+    if (list.length) importFiles(list);
+  }
+  // boot: load the note cache (IndexedDB, migrating the legacy localStorage value once). Everything
+  // that reads the notes at launch — selection, index, vectors, the reconnect below — waits for it, so
+  // nothing seeds or writes over a cache that hasn't been read yet.
+  bootNotes().catch(() => ({ notes: [], cache: null, readFailed: true })).then((r) => {
+    noteCache = r.cache; readFailed = r.readFailed;
+    notes = r.notes; rev++;
+    cacheOrder = notes.map((n) => n.id);
+    currentId = notes[0]?.id ?? null;
+    idx = buildIndex(notes); vectorizer = buildVectorizer(notes); vecs = vectorizer.vecs;
+    vaultCorrupt = !!corruptBackupKey();
+    cleanupSeedFolders();
+    cacheReady = true;
+    // after first paint, prefetch the lazy pieces so opening the editor/library/reader never waits
+    requestAnimationFrame(() => whenIdle(() => { loadEditor(); loadLibrary(); loadReader(); loadMath().catch(() => {}); }));
+  });
   // launch: reopen the vault folder this app is bound to. First run (no stored path) or a
-  // path that can't be found → the welcome gate. The localStorage cache keeps the last
-  // known notes visible instantly either way, and everything merges once a folder is open.
+  // path that can't be found → the welcome gate. The local cache keeps the last known notes
+  // visible instantly either way, and everything merges once a folder is open.
   $effect(() => {
-    if (reconnected) return; reconnected = true;
+    if (!cacheReady || reconnected) return; reconnected = true;
     (async () => {
       try {
         const b = await reconnectVault();
         if (!b) {
           if (isTauri) { vaultMissing = await lastKnownVaultPath(); needVault = true; }
           // seed the getting-started notes only on a genuine first run (no vault ever chosen),
-          // never when the localStorage cache was merely wiped over an existing/known vault
-          if (!vaultMissing && !notes.length) adopt(seedNotes());
+          // never when the cache was merely wiped over an existing/known vault, or couldn't be read
+          if (!vaultMissing && !notes.length && !readFailed) adopt(seedNotes());
           return;
         }
         const ex = await b.loadAll();
+        for (const n of ex) n._flushed = n.updated;   // read straight from the folder
         vaultBackend = b;
         setWinTitle(b.name);
         // a note whose local delete never confirmed must not resurrect from its lingering file;
         // keep it tombstoned and let the sync loop reap the file through its tested path
-        const live = pendingDelete.size ? ex.filter((n) => !pendingDelete.has(n.id)) : ex;
         if (ex.length) {
-          const diskPath = new Map(ex.map((n) => [n.id, n._path]));
-          const diskUpdated = new Map(live.map((n) => [n.id, n.updated || '']));
-          adopt(mergeByUpdated(live, notes));
-          // notes only in the cache, or newer there (e.g. a hard quit beat the file flush), must reach the folder
-          for (const n of notes) {
-            if (diskPath.has(n.id)) n._path = diskPath.get(n.id);   // reconcile a stale cached _path to the real on-disk path, or a rename recreates the old file
-            const d = diskUpdated.get(n.id); if (d === undefined || (n.updated || '') > d) dirty.add(n.id);
-          }
+          // sync.js reconnectMerge: F5b external deletes drop, stamped frontmatter-less files take their
+          // disk timestamps, and only notes missing from the folder or newer in the cache are written.
+          // An empty listing never drops anything (the else branch below).
+          const r = reconnectMerge(notes, ex, pendingDelete);
+          adopt(r.notes);
+          for (const id of r.dirty) dirty.add(id);
           folders = [...new Set([...folders, ...notes.map((n) => n.folder).filter(Boolean)])];   // merge, never replace — an empty user-made folder must survive relaunch
           flushVault();
-        } else { for (const n of notes) { try { await b.saveNote(n); } catch (e) {} } } // reconnected to an emptied folder → re-seed it
+        } else { // reconnected to an emptied folder → re-seed it
+          let wrote = false;
+          for (const n of notes) { const stamp = n.updated; try { await b.saveNote(n); n._flushed = stamp; cacheDirty.add(n.id); wrote = true; } catch (e) {} }
+          if (wrote) queueCache();
+        }
         refsFromVault(b);
         libFoldersFromVault(b);
         ordersFromVault(b);
@@ -568,17 +1078,21 @@
   }
   function removeNoteTag(t) { const n = current; if (!n) return; n.tags = (n.tags || []).filter((x) => x !== t); n.updated = new Date().toISOString(); markDirty(n.id); persist(); }
   function create() {
+    if (!cacheReady) return;
     tagFilter = null;                                  // a tag filter would hide the new note; clear it so it's visible
     if (activeFolder) collapsed[activeFolder] = false;  // and expand the folder it lands in
     const n = newNote(activeFolder); notes.unshift(n); currentId = n.id; mode = 'write'; view = 'notes'; markDirty(n.id); persist();
   }
   // create a note with a given title — used when a dangling [[wikilink]] is clicked in the read view
   function createNamed(title) {
+    if (!cacheReady) return;
     title = (title || '').trim(); if (!title) { create(); return; }
     tagFilter = null;
     const n = newNote(activeFolder); n.title = title;
     notes.unshift(n); currentId = n.id; mode = 'write'; view = 'notes'; markDirty(n.id); persist();
   }
+  // the vault root's attachments/ holds images and reference files and is never read as notes
+  const RESERVED_MSG = '“attachments” is reserved at the top level for images and reference files. Choose another name.';
   function addFolder() {
     const raw = (newFolderName || '').trim(); newFolderName = null;
     if (!raw) return;
@@ -586,10 +1100,17 @@
     if (!name) return;
     const parent = canonFolder(newFolderParent);
     const path = parent ? parent + '/' + name : name;
+    if (isReservedRoot(path)) { notify(RESERVED_MSG); return; }
     if (!folders.includes(path)) folders = [...folders, path];
     saveFolders(folders); if (parent) collapsed[parent] = false;
   }
   function toggleFolder(path) { collapsed[path] = !collapsed[path]; }
+  // ArrowRight expands a folder row, ArrowLeft collapses it (the caret itself is pointer-only and aria-hidden)
+  function folderKey(e, r) {
+    if (!r.hasChildren || (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft')) return;
+    e.preventDefault();
+    collapsed[r.path] = e.key === 'ArrowLeft';
+  }
   function moveNote(id, folder) {
     const n = notes.find((x) => x.id === id); if (!n) return;
     const dest = canonFolder(folder);
@@ -600,7 +1121,7 @@
   // move/nest a folder subtree under destParent ('' = vault root); reparents its subfolders and notes
   function moveFolder(src, destParent) {
     const plan = planFolderMove(src, destParent, folders, notes);
-    if (!plan.ok) { if (plan.reason === 'collision') notify('A folder named “' + plan.leaf + '” already exists there.'); return; }
+    if (!plan.ok) { if (plan.reason === 'collision') notify('A folder named “' + plan.leaf + '” already exists there.'); else if (plan.reason === 'reserved') notify(RESERVED_MSG); return; }
     folders = plan.newFolders;
     for (const m of plan.noteMoves) {
       const n = notes.find((x) => x.id === m.id);
@@ -765,6 +1286,12 @@
     const title = deOpts.title ? '<h1>' + esc(n.title || 'Untitled') + '</h1>' : '';
     return ARF_LOGO_HTML + title + renderMarkdown(n.body) + buildBibHTML(n);
   }
+  // KaTeX and its stylesheet load lazily; exports wait for both so no math is left as a placeholder
+  let katexCss = '';
+  async function exportAssets() {
+    await loadMath();
+    if (!katexCss) katexCss = (await import('katex/dist/katex.min.css?inline')).default;   // inlined into exports so math positions correctly outside the app
+  }
   function exportHTML(n) {
     return '<!doctype html><html><head><meta charset="utf-8"><title>' + esc(n.title || 'Untitled') + '</title><style>' + katexCss + '</style><style>' + buildExportCSS('') + '</style></head><body>' + exportBody(n) + '</body></html>';
   }
@@ -773,15 +1300,35 @@
       try {
         const [{ save }, { writeTextFile }] = await Promise.all([import('@tauri-apps/plugin-dialog'), import('@tauri-apps/plugin-fs')]);
         const path = await save({ defaultPath: name });
-        if (path) await writeTextFile(path, text);
-      } catch (e) { exportError = 'Couldn’t save the file — the save was cancelled or the folder isn’t writable.'; clearTimeout(exportErrTimer); exportErrTimer = setTimeout(() => (exportError = ''), 4000); }
-      return;
+        if (!path) return 'cancelled';
+        await writeTextFile(path, text); return 'saved';
+      } catch (e) { exportError = 'Couldn’t save the file — the save was cancelled or the folder isn’t writable.'; clearTimeout(exportErrTimer); exportErrTimer = setTimeout(() => (exportError = ''), 4000); return 'failed'; }
     }
     const url = URL.createObjectURL(new Blob([text], { type: mime })); // web: Blob is robust for any size
     const a = document.createElement('a'); a.href = url; a.download = name;
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 1500);
+    return 'downloaded';
   }
+  // binary counterpart of saveText: data is a Blob or a Uint8Array
+  async function saveBytes(name, mime, data) {
+    if (isTauri) {
+      try {
+        const [{ save }, { writeFile }] = await Promise.all([import('@tauri-apps/plugin-dialog'), import('@tauri-apps/plugin-fs')]);
+        const ext = name.slice(name.lastIndexOf('.') + 1);
+        const path = await save({ defaultPath: name, filters: [{ name: ext.toUpperCase(), extensions: [ext] }] });
+        if (!path) return 'cancelled';
+        await writeFile(path, data instanceof Blob ? new Uint8Array(await data.arrayBuffer()) : data); return 'saved';
+      } catch (e) { exportError = 'Couldn’t save the file — the save was cancelled or the folder isn’t writable.'; clearTimeout(exportErrTimer); exportErrTimer = setTimeout(() => (exportError = ''), 4000); return 'failed'; }
+    }
+    const url = URL.createObjectURL(data instanceof Blob ? data : new Blob([data], { type: mime }));
+    const a = document.createElement('a'); a.href = url; a.download = name;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1500);
+    return 'downloaded';
+  }
+  // the full graph's PNG/SVG export: the webview can't download, so route it through the save dialog
+  function saveGraphExport({ name, blob }) { return saveBytes(name, blob.type, blob); }
   // PDF via the print dialog (Save as PDF). Print the TOP-LEVEL document, not an iframe: WKWebView
   // (macOS) silently ignores iframe.contentWindow.print() and WebKitGTK (Linux) is unreliable — only
   // window.print() on the main document works uniformly. A print stylesheet hides the app and shows
@@ -802,6 +1349,10 @@
   async function doExport() {
     const n = current; if (!n) return;
     const slug = (n.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')) || 'note';
+    if (deFmt !== 'Markdown') {
+      try { await exportAssets(); }
+      catch (e) { exportError = 'Couldn’t load the math renderer for the export — try again.'; clearTimeout(exportErrTimer); exportErrTimer = setTimeout(() => (exportError = ''), 4000); return; }
+    }
     if (deFmt === 'Markdown') await saveText(slug + '.md', 'text/markdown', await inlineVaultImagesMd(toMarkdown(n, { frontmatter: deOpts.frontmatter })));
     else if (deFmt === 'HTML') await saveText(slug + '.html', 'text/html', await inlineVaultImages(exportHTML(n)));
     else printDoc(await inlineVaultImages(exportBody(n)), buildExportCSS('#arf-printroot '));
@@ -820,30 +1371,54 @@
     const W = window.innerWidth / zf, H = window.innerHeight / zf;
     const rows = items.filter((i) => !i.sep).length, seps = items.filter((i) => i.sep).length;
     const mw = 260, mh = rows * 30 + seps * 9 + 12;      // matches .ctxmenu max-width; labels ellipsize so this holds
-    let x = e.clientX / zf, y = e.clientY / zf;
+    // keyboard-opened (Shift+F10 / Menu key): the event point can lie outside the focused target, so anchor below it
+    const tr = e.target && e.target.getBoundingClientRect ? e.target.getBoundingClientRect() : null;
+    const kb = tr && e.target === document.activeElement && !(e.clientX >= tr.left && e.clientX <= tr.right && e.clientY >= tr.top && e.clientY <= tr.bottom);
+    let x = (kb ? tr.left + 8 : e.clientX) / zf, y = (kb ? tr.bottom : e.clientY) / zf;
     if (x + mw > W) x = Math.max(4, W - mw - 4);
     if (y + mh > H) y = Math.max(4, H - mh - 4);
+    if (!ctxMenu) ctxOpener = document.activeElement;
     ctxMenu = { x: Math.round(x), y: Math.round(y), items };
     ctxSub = null;
+    // focus the first enabled item, so arrows, Enter and Escape work at once
+    queueMicrotask(() => { const f = document.querySelector('.ctxmenu .ctxi:not(:disabled)'); if (f) f.focus({ preventScroll: true }); });
   }
-  function closeCtx() { ctxMenu = null; ctxSub = null; }
+  let ctxOpener = null;   // focus returns here when the menu closes
+  function closeCtx() {
+    if (!ctxMenu) return;
+    ctxMenu = null; ctxSub = null;
+    const el = ctxOpener; ctxOpener = null;
+    const a = document.activeElement;
+    if (el && el.isConnected && el.focus && (!a || a === document.body || a.closest('.ctxmenu'))) { try { el.focus({ preventScroll: true }); } catch (e) {} }
+  }
+  function ctxKey(e) {
+    if (rove(e.currentTarget, e, '.ctxi')) { e.preventDefault(); return; }
+    if (e.key === 'Tab') { e.preventDefault(); closeCtx(); }   // a menu is not a tab stop; Tab dismisses it
+  }
   function runCtx(it) { if (it.disabled) return; const r = it.run; closeCtx(); if (r) r(); }
   $effect(() => { window.addEventListener('contextmenu', onContextMenu); return () => window.removeEventListener('contextmenu', onContextMenu); });
   // modal a11y: while an overlay is open, make the background inert (Tab/screen-reader can't wander
   // behind it), mark the dialog with role/aria-modal, move focus in, and restore focus to the opener on close
   let overlayReturnFocus = null;
+  let libOverlay = $state(false);   // the Library's own export modal or move picker is open (bound from Library)
+  // an overlay on its way out (exit fade) goes inert at once, so it can't take focus, clicks or the dialog role
+  const leaving = (e) => { e.currentTarget.setAttribute('inert', ''); e.currentTarget.setAttribute('data-leaving', ''); };
   $effect(() => {
     // read each overlay flag individually so the effect re-fires on ANY change — including a same-tick
     // overlay→overlay swap (e.g. graph → Search), which a single boolean would miss.
     // citePick is intentionally excluded: it's an inline tool that inserts into (and refocuses) the
     // editor, so making the editor inert would break edPaste's view.focus() and strand the caret.
-    const open = paletteOpen || settingsOpen || digestOpen || !!connect || docExport || !!movePick || graphFull;
+    const open = paletteOpen || settingsOpen || digestOpen || !!connect || docExport || !!movePick || graphFull || libOverlay;
     const shell = document.querySelector('.shell');
     if (open) {
       if (!overlayReturnFocus) overlayReturnFocus = document.activeElement;
-      if (shell) shell.setAttribute('inert', '');
       queueMicrotask(() => {
-        const dlg = document.querySelector('.palette:not(.citepicker), .modal, .overlay'); if (!dlg) return;   // skip the cite picker (excluded from inert) so a real modal opened over it still gets the dialog aria
+        // skip the cite picker (excluded from inert) so a real modal opened over it still gets the dialog aria
+        const dlg = [...document.querySelectorAll('.palette:not(.citepicker), .modal, .overlay')].find((el) => !el.closest('[inert]'));
+        // inert every part of the shell that doesn't hold the dialog: App's overlays sit outside .shell (so all of it),
+        // the Library's export modal and move picker sit inside it (so everything but their scrim)
+        if (shell) for (const c of shell.children) c.toggleAttribute('inert', c.hasAttribute('data-leaving') || !(dlg && c.contains(dlg)));
+        if (!dlg) return;
         dlg.setAttribute('role', 'dialog'); dlg.setAttribute('aria-modal', 'true');
         const h = dlg.querySelector('h3, h1, input');
         if (h && !dlg.hasAttribute('aria-label') && !dlg.hasAttribute('aria-labelledby')) {
@@ -853,14 +1428,34 @@
         if (!dlg.contains(document.activeElement)) { const f = dlg.querySelector('input,button,select,textarea,[tabindex]'); if (f && f.focus) f.focus(); else if (dlg.focus) dlg.focus(); }
       });
     } else {
-      if (shell) shell.removeAttribute('inert');
+      if (shell) for (const c of shell.children) if (!c.hasAttribute('data-leaving')) c.removeAttribute('inert');
       if (overlayReturnFocus && overlayReturnFocus.focus) {
         const el = overlayReturnFocus; overlayReturnFocus = null;
-        // restore only if focus was orphaned to body/null; if something already grabbed it (e.g. the
-        // editor after inserting a citation via edPaste's view.focus()), don't steal it back
-        queueMicrotask(() => { try { if (document.activeElement === document.body || !document.activeElement) el.focus(); } catch (e) {} });
+        // restore only if focus was orphaned (body/null, or still inside an overlay that is fading out); if
+        // something already grabbed it (e.g. the editor after edPaste's view.focus()), don't steal it back
+        queueMicrotask(() => { try { const a = document.activeElement; if (!a || a === document.body || a.closest('[inert], .scrim, .overlay')) el.focus(); } catch (e) {} });
       }
     }
+  });
+  // focus wrap inside the open dialog: Tab from its last focusable goes to its first (Shift+Tab the reverse),
+  // instead of leaving for <body> or the browser chrome on the way round (the shell behind is inert)
+  const TABBABLE = 'a[href], button, input, select, textarea, [tabindex]';
+  $effect(() => {
+    const open = paletteOpen || settingsOpen || digestOpen || !!connect || docExport || !!movePick || graphFull || libOverlay;
+    if (!open) return;
+    const onKey = (e) => {
+      if (e.key !== 'Tab' || e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey) return;
+      const dlg = [...document.querySelectorAll('.palette:not(.citepicker), .modal, .overlay')].find((el) => !el.closest('[inert]'));
+      if (!dlg) return;
+      const list = [...dlg.querySelectorAll(TABBABLE)].filter((el) => el.tabIndex >= 0 && !el.disabled && !el.closest('[inert]') && el.getClientRects().length > 0);
+      if (!list.length) return;
+      const first = list[0], last = list[list.length - 1], a = document.activeElement;
+      if (!dlg.contains(a)) { e.preventDefault(); (e.shiftKey ? last : first).focus(); }
+      else if (!e.shiftKey && a === last) { e.preventDefault(); first.focus(); }
+      else if (e.shiftKey && a === first) { e.preventDefault(); last.focus(); }
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
   });
   // clipboard: navigator.clipboard.readText() is unreliable in WKWebView/WebKitGTK (context-menu Paste
   // silently did nothing), so route through the Tauri clipboard plugin when native; fall back on web
@@ -936,9 +1531,9 @@
       { label: 'Delete reference', danger: true, run: () => deleteRefById(id) },
     ];
   }
-  function deleteRefById(id) {
+  async function deleteRefById(id) {
     const r = refs.find((x) => x.id === id); if (!r) return;
-    if (!window.confirm('Delete the reference “' + (r.title || r.citekey) + '”?\n\nCitations to it in your notes will show as unknown until you re-add it.')) return;
+    if (!(await confirmAsk('Delete the reference “' + (r.title || r.citekey) + '”?\n\nCitations to it in your notes will show as unknown until you re-add it.'))) return;
     refs = refs.filter((x) => x.id !== id);
     queueMicrotask(refsToVault);   // flush references.json now so it can't resurrect on next launch
   }
@@ -1051,41 +1646,44 @@
     ];
   }
   function dupNote(id) {
-    const n = idx.byId[id]; if (!n) return;
+    const n = noteById(id); if (!n) return;
     const copy = { ...n, id: ulid(), title: (n.title || 'Untitled') + ' (copy)', created: new Date().toISOString(), updated: new Date().toISOString() };
     delete copy._path;  // a duplicate must be written to a new file, not overwrite the original
+    delete copy._flushed;   // and has never been written
     notes.unshift(copy); markDirty(copy.id); persist();
     currentId = copy.id; mode = 'write'; view = 'notes';
     closeCtx();
   }
   function copyMd(id) {
-    const n = idx.byId[id]; if (!n) return;
+    const n = noteById(id); if (!n) return;
     copyText(toMarkdown(n)); closeCtx();
   }
   function copyWikilink(id) {
-    const n = idx.byId[id]; if (!n) return;
+    const n = noteById(id); if (!n) return;
     copyText('[[' + n.title + ']]'); closeCtx();
   }
   function renameFromCtx(id) {
-    const n = idx.byId[id]; if (!n) return;
+    const n = noteById(id); if (!n) return;
     currentId = id; view = 'notes'; mode = 'read';
     closeCtx();
     setTimeout(() => { const el = document.querySelector('.title.ro'); if (el) { mode = 'write'; requestAnimationFrame(() => { const inp = document.querySelector('.title:not(.ro)'); if (inp) { inp.focus(); inp.select(); } }); } }, 30);
   }
   async function deleteNote(id) {
-    const n = idx.byId[id]; if (!n) return;
-    if (!window.confirm('Delete “' + (n.title || 'Untitled') + '”?' + (vaultBackend ? '\n\nThis removes the file from your vault folder.' : ''))) return;
+    const n = noteById(id); if (!n) return;
+    if (!(await confirmAsk('Delete “' + (n.title || 'Untitled') + '”?' + (vaultBackend ? '\n\nThis removes the file from your vault folder.' : '')))) return;
     const note = n;
     notes = notes.filter((x) => x.id !== id);
     if (currentId === id) currentId = notes[0]?.id ?? null;
-    dirty.delete(id); clearNoteOrder(id);
+    dirty.delete(id); cacheDirty.add(id); clearNoteOrder(id);
     if (reader && reader.kind === 'note' && reader.id === id) reader = null;   // don't leave the reader pointed at a deleted note
-    if (vaultBackend) { pendingDelete.add(id); saveTombstones(); }   // tombstone first: an in-flight first-save (no _path yet) must not resurrect the note
+    if (vaultBackend) { pendingDelete.add(id); saveTombstones(); deletedAt.set(id, tickEpoch); }   // tombstone first: an in-flight first-save (no _path yet) must not resurrect the note
     closeCtx();
     writeNow();
     if (vaultBackend && note._path) {
-      if (await vaultBackend.removeNote(note)) { pendingDelete.delete(id); saveTombstones(); } // confirmed gone → clear it
+      const b = vaultBackend;
+      if (await b.removeNote(note)) { pendingDelete.delete(id); saveTombstones(); } // confirmed gone → clear it
       else vaultErr = true;                      // still on disk → stays tombstoned; syncFromFolder retries the removal
+      if (b === vaultBackend) deletedAt.set(id, tickEpoch);   // a tick that read before this point may still list the file
     }
   }
   function moveToFolder(id, folder) {
@@ -1108,6 +1706,7 @@
     const name = canonFolder(raw.replace(/[\/\\]/g, '-')); if (!name) return;
     const parent = src.includes('/') ? src.slice(0, src.lastIndexOf('/')) : '';
     const newPath = parent ? parent + '/' + name : name;
+    if (newPath !== src && isReservedRoot(newPath)) { notify(RESERVED_MSG); return; }
     if (newPath === src || folderCollision(src, newPath, name)) return;
     const re = (p) => p === src ? newPath : (p.startsWith(src + '/') ? newPath + p.slice(src.length) : p);
     folders = [...new Set(folders.map(re))];
@@ -1266,21 +1865,29 @@
     ro.observe(topEl);
     return () => ro.disconnect();
   });
-  $effect(() => { try { document.documentElement.style.setProperty('--readmax', READ_W[readWidth] || READ_W.middle); localStorage.setItem('arf-readwidth', readWidth); } catch (e) {} });
+  // --focusmax caps the focus-mode measure at 40em (a specified constant: the design audit's focus-mode cap). It
+  // narrows middle only, since tight tops out at 38em; comfy keeps its own wide preset as the explicit escape
+  $effect(() => { try {
+    const de = document.documentElement.style;
+    de.setProperty('--readmax', READ_W[readWidth] || READ_W.middle);
+    de.setProperty('--focusmax', readWidth === 'comfy' ? READ_W.comfy : '40em');
+    localStorage.setItem('arf-readwidth', readWidth);
+  } catch (e) {} });
   // Open the styled connect modal (replaces the native window.prompt). Appends to note A on confirm.
   function linkPair(aId, bId, terms) {
-    const a = idx.byId[aId], b = idx.byId[bId]; if (!a || !b) return;
+    const a = noteById(aId), b = noteById(bId); if (!a || !b) return;
     connect = { aId, bId, terms: (terms || []).filter((x) => x.length > 3).slice(0, 5), text: suggestRelation(a, b, terms) };
   }
   // Link the note being viewed to a Resonance suggestion on the right rail.
   function linkResonance(bId) {
     if (!currentId) return;
-    linkPair(currentId, bId, sharedTerms(idx.byId[currentId], idx.byId[bId], 5, vectorizer.idf));
+    const a = noteById(currentId), b = noteById(bId); if (!a || !b) return;
+    linkPair(currentId, bId, sharedTerms(a, b, 5, vectorizer.idf));
   }
   function confirmConnect() {
     if (!connect) return;
     const { aId, bId, text } = connect; connect = null;
-    const a = idx.byId[aId], b = idx.byId[bId]; if (!a || !b) return;
+    const a = noteById(aId), b = noteById(bId); if (!a || !b) return;   // write to the live note, never a stale index object
     let line = (text || '').trim();
     if (!line) line = 'Related to [[' + b.title + ']].';
     else if (line.toLowerCase().indexOf('[[' + b.title.toLowerCase() + ']]') < 0) line = line.replace(/[\s.]*$/, '') + ' — see [[' + b.title + ']].';
@@ -1378,19 +1985,119 @@
       return;
     }
   }
-  // toggle the i-th task line in the current note (clicked in the read view). The marker set must
-  // match exactly what marked renders as a checkbox — bullets AND ordered items (1. / 1)) — or the
-  // DOM checkbox index and this line count diverge and a click toggles the wrong line.
+  // --- link preview: a card for a [[wikilink]] in the read view or a note in the rail ---
+  // Shown after the pointer rests (or keyboard focus lands) on the link; one card at a time, never
+  // focused, positioned in layout px (the root is CSS-zoomed). Leaving the link starts a short grace
+  // period so the pointer can reach the card, which opens (or creates) the note on click.
+  // backlinks ("Referenced in") already show their context sentence, so only Resonance rows get a card in the rail
+  const PV_SEL = '.read a.wl, .rail .ref.ml[data-nid]';
+  const PV_DELAY = 350, PV_GRACE = 160, PV_W = 320;   // ms rest before showing; ms to cross to the card; card width (px)
+  let preview = $state(null);   // { id?, newTitle?, title, text, out, inn, x, top?, bottom? }
+  let pvShown = null, pvPending = null;   // the link whose card is up; the link waiting out the delay
+  let pvTimer = 0, pvCloseTimer = 0;
+  function pvSchedule(el) {
+    if (el === pvShown) { clearTimeout(pvCloseTimer); return; }
+    if (el === pvPending) return;
+    clearTimeout(pvTimer);
+    pvPending = el;
+    pvTimer = setTimeout(() => { pvTimer = 0; pvPending = null; pvShow(el); }, PV_DELAY);
+  }
+  // an overlay or menu took over the screen: no card over it
+  const pvBlocked = () => graphFull || paletteOpen || settingsOpen || digestOpen || !!connect || docExport || !!citePick || !!movePick || !!ctxMenu || libOverlay;
+  function pvShow(el) {
+    if (!el.isConnected || pvBlocked()) return;
+    const id = el.getAttribute('data-nav') || el.getAttribute('data-nid');
+    let card;
+    if (id) {
+      const n = noteById(id); if (!n) return;
+      card = { id, title: n.title || 'Untitled', text: previewText(n.body), out: (idx.fwd[id] || []).length, inn: (idx.back[id] || []).length };
+    } else {
+      const t = el.getAttribute('data-newlink'); if (!t) return;
+      card = { newTitle: t, title: t };
+    }
+    const zf = (zoom || 100) / 100, r = el.getBoundingClientRect();
+    const vw = window.innerWidth / zf, vh = window.innerHeight / zf;
+    const rail = el.closest('.rail');
+    if (rail) {
+      // a rail row: the card sits left of the rail, level with the row, so it never covers the rail itself
+      const rl = rail.getBoundingClientRect().left / zf;
+      card.x = Math.round(Math.max(8, rl - PV_W - 8));
+      card.top = Math.round(Math.max(8, Math.min(r.top / zf, vh - 220)));
+    } else {
+      card.x = Math.round(Math.max(8, Math.min(r.left / zf, vw - PV_W - 8)));
+      // below the link, or above it when the lower part of the window is too short for a card
+      if (r.bottom / zf + 200 > vh && r.top / zf > vh - r.bottom / zf) card.bottom = Math.round(vh - r.top / zf + 6);
+      else card.top = Math.round(r.bottom / zf + 6);
+    }
+    clearTimeout(pvCloseTimer);
+    if (pvShown && pvShown !== el) pvShown.removeAttribute('aria-describedby');
+    el.setAttribute('aria-describedby', 'arf-lpv');
+    pvShown = el; preview = card;
+  }
+  function pvHide() {
+    clearTimeout(pvCloseTimer); pvCloseTimer = 0;
+    if (pvShown) pvShown.removeAttribute('aria-describedby');
+    pvShown = null; preview = null;
+  }
+  function pvClose() { clearTimeout(pvTimer); pvTimer = 0; pvPending = null; pvHide(); }
+  function pvCloseSoon() { clearTimeout(pvCloseTimer); pvCloseTimer = setTimeout(pvHide, PV_GRACE); }
+  function pvOpen() {
+    const p = preview; if (!p) return;
+    pvClose();
+    if (p.id) open(p.id); else createNamed(p.newTitle);
+  }
+  const pvLinks = (p) => (!p.out && !p.inn ? 'No links yet.'
+    : 'Links to ' + p.out + (p.out === 1 ? ' note' : ' notes') + ', linked from ' + p.inn + '.');
+  $effect(() => {
+    const target = (e) => (e.target && e.target.closest ? e.target.closest(PV_SEL) : null);
+    const over = (e) => {
+      if (e.pointerType !== 'mouse' && e.pointerType !== 'pen') return;
+      const el = target(e);
+      if (el) pvSchedule(el);
+      else if (e.target && e.target.closest && e.target.closest('.lpv')) clearTimeout(pvCloseTimer);
+    };
+    const out = (e) => {
+      const el = target(e); if (!el) return;
+      const to = e.relatedTarget;
+      if (to && to.closest && (to.closest('.lpv') || to.closest(PV_SEL) === el)) return;
+      if (el === pvPending) { clearTimeout(pvTimer); pvTimer = 0; pvPending = null; }
+      if (el === pvShown) pvCloseSoon();
+    };
+    const focusIn = (e) => { const el = target(e); if (el && el.matches(':focus-visible')) pvSchedule(el); };
+    // deferred: Enter on a link, Ctrl+E and Ctrl+N tear the focused link down, and its focusout fires while Svelte
+    // removes the DOM, where writing $state (preview) throws state_unsafe_mutation. Only what still belongs to
+    // this link is cleared, so focus moving on to the next link keeps that link's pending card.
+    const focusOut = (e) => {
+      const el = target(e); if (!el || (el !== pvShown && el !== pvPending)) return;
+      queueMicrotask(() => {
+        if (el === pvPending) { clearTimeout(pvTimer); pvTimer = 0; pvPending = null; }
+        if (el === pvShown) pvHide();
+      });
+    };
+    const down = (e) => { if (!(e.target && e.target.closest && e.target.closest('.lpv'))) pvClose(); };
+    const scroll = () => { if (preview || pvTimer) pvClose(); };
+    document.addEventListener('pointerover', over);
+    document.addEventListener('pointerout', out);
+    document.addEventListener('focusin', focusIn);
+    document.addEventListener('focusout', focusOut);
+    document.addEventListener('pointerdown', down, true);
+    window.addEventListener('scroll', scroll, true);
+    return () => {
+      document.removeEventListener('pointerover', over); document.removeEventListener('pointerout', out);
+      document.removeEventListener('focusin', focusIn); document.removeEventListener('focusout', focusOut);
+      document.removeEventListener('pointerdown', down, true); window.removeEventListener('scroll', scroll, true);
+      pvClose();
+    };
+  });
+  // a note switch, mode or view change takes the anchor away; an overlay or menu covers it
+  $effect(() => { currentId; mode; view; pvBlocked(); untrack(pvClose); });   // pvBlocked() is read for its dependencies
+
+  // toggle the i-th rendered task checkbox in the current note (clicked in the read view). tasks.js maps
+  // the DOM index to its source line through marked's own tokens, so code fences and the like can't shift it.
   function toggleTaskAt(i) {
-    if (i < 0) return; const n = current; if (!n) return;
-    let count = -1;
-    const lines = (n.body || '').split('\n').map((line) => {
-      const m = line.match(/^(\s*(?:[-*+]|\d+[.)]) +)\[([ xX])\](.*)$/);
-      if (!m) return line;
-      count++; if (count !== i) return line;
-      return m[1] + '[' + (m[2] === ' ' ? 'x' : ' ') + ']' + m[3];
-    });
-    n.body = lines.join('\n'); n.updated = new Date().toISOString(); markDirty(n.id); persist();
+    const n = current; if (!n) return;
+    const next = toggleTaskBody(n.body || '', i); if (next == null) return;
+    n.body = next; n.updated = new Date().toISOString(); markDirty(n.id); persist();
   }
   // a [@citekey] citation opens the Library on that reference's detail
   function openReference(key) {
@@ -1428,7 +2135,13 @@
     } catch (e) {}
   }
   $effect(() => { const k = readerSource?.key; readerHls = k ? loadReaderHls(k) : []; });
-  function openReaderNote(id) { if (idx.byId[id] || notes.some((n) => n.id === id)) { reader = { kind: 'note', id }; view = 'notes'; rightHidden = false; } }
+  // load a lazy piece the moment it is needed (the idle prefetch usually got there first)
+  $effect(() => { if (mode === 'write') loadEditor(); });
+  $effect(() => { if (view === 'library') loadLibrary(); });
+  $effect(() => { if (reader) { loadReader(); if (reader.kind === 'note' || reader.kind === 'md') loadMath().catch(() => {}); } });
+  // a Markdown reader re-renders once KaTeX arrives (keyed remount; never for pdf/epub/html sources)
+  const readerKey = $derived(reader && (reader.kind === 'note' || reader.kind === 'md') ? mathVersion : -1);
+  function openReaderNote(id) { if (noteById(id)) { reader = { kind: 'note', id }; view = 'notes'; rightHidden = false; } }
   function closeReader() { reader = null; }
   function addHighlight(text, color) {
     const k = readerSource?.key, t = (text || '').trim(); if (!k || t.replace(/\s/g, '').length < 3) return;
@@ -1682,13 +2395,13 @@
     const others = notes.filter((n) => n.id !== currentId);
     if (!others.length) return null;
     const key = currentId + '#' + others.map((n) => n.id + n.updated).join(',');
-    if (_resVzKey !== key) { _resVz = buildVectorizer(others); _resVzKey = key; }
+    if (_resVzKey !== key) { _resVz = buildVectorizer(others, { evict: false }); _resVzKey = key; }
     const pv = _resVz.vectorize(text);
     let best = null;
     for (const n of others) {
       if (linked.has(n.id) || !_resVz.vecs[n.id] || !n.title || n.title.includes(']')) continue; // must be linkable
       const s = cosine(pv, _resVz.vecs[n.id]);
-      if (s >= 0.13 && (!best || s > best.s)) best = { id: n.id, title: n.title, s };
+      if (s >= TFIDF_FLOOR && (!best || s > best.s)) best = { id: n.id, title: n.title, s };
     }
     return best;
   }
@@ -1696,15 +2409,24 @@
   // command palette. Titles are carried on the items from the live `notes` array so the render never
   // reads idx.byId (rebuilt on a 180ms debounce) — a stale index during boot/edits would otherwise
   // throw on .title and brick the palette.
+  // id -> { t, tl, b, bl }: lower-cased title/body, recomputed only when that note's source string changes
+  let lowerCache = new Map();
+  function lowered(n, k) {
+    let e = lowerCache.get(n.id); if (!e) { e = { t: null, tl: '', b: null, bl: '' }; lowerCache.set(n.id, e); }
+    const src = (k === 't' ? n.title : n.body) || '';
+    if (e[k] !== src) { e[k] = src; e[k + 'l'] = src.toLowerCase(); }
+    return e[k + 'l'];
+  }
   const palItems = $derived.by(() => {
     const q = query.trim().toLowerCase();
     const titleOf = new Map(notes.map((n) => [n.id, n.title || 'Untitled']));
+    if (lowerCache.size > titleOf.size + 64) lowerCache = new Map([...lowerCache].filter(([id]) => titleOf.has(id)));   // drop deleted notes
     let lex = notes.map((n) => {
       let score = 0, why = '';
       if (!q) { score = 1; why = ''; }
-      else if ((n.title || '').toLowerCase().includes(q)) { score = 3; why = 'Title'; }
+      else if (lowered(n, 't').includes(q)) { score = 3; why = 'Title'; }
       else if ((idx.noteTags[n.id] || []).some((t) => t.includes(q))) { score = 2; why = 'Tag'; }
-      else if ((n.body || '').toLowerCase().includes(q)) { score = 1; why = 'Text'; }
+      else if (lowered(n, 'b').includes(q)) { score = 1; why = 'Text'; }
       return { id: n.id, title: n.title || 'Untitled', score, why };
     }).filter((x) => x.score).sort((a, b) => b.score - a.score).slice(0, 8);
     let sem = [];
@@ -1714,17 +2436,37 @@
     }
     return { lex, sem };
   });
+  // keyboard selection in the palette (Notes rows, then Related rows) and the cite picker: ArrowUp/Down move the
+  // active row (aria-activedescendant; focus stays in the input), Enter runs it. A new query starts at the top.
+  let palActive = $state(0), citeActive = $state(0);
+  const palFlat = $derived([...palItems.lex, ...palItems.sem]);
+  const palSel = $derived(palFlat.length ? Math.min(palActive, palFlat.length - 1) : -1);
+  const citeSel = $derived(citeMatches.length ? Math.min(citeActive, citeMatches.length - 1) : -1);
+  $effect(() => { query; palActive = 0; });
+  $effect(() => { citeQuery; citeActive = 0; });
+  function pickerKey(e, n, cur, set, run) {
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      const i = navStep(n, cur, e.key); if (i < 0) return;
+      set(i);
+      queueMicrotask(() => document.querySelector('.palette .prow.active')?.scrollIntoView({ block: 'nearest' }));
+    } else if (e.key === 'Enter' && cur >= 0 && cur < n) { e.preventDefault(); run(cur); }
+  }
+  // the move pickers have no input: arrows move real focus between their rows
+  function roveKey(e) { if (rove(e.currentTarget.parentElement, e, '.prow')) e.preventDefault(); }
+  // which method scored the Synthesis pairs: model cosine (shown) or TF-IDF word overlap (kept in the title)
+  const digestByModel = $derived(mlStatus === 'ready' && !!mlThresholds);
   const digest = $derived.by(() => {
     if (!digestOpen) return [];   // the pairwise scan is O(n²); only run it while the Synthesis panel is open
     let pairs;
-    if (mlStatus === 'ready' && Object.keys(mlVecs).length) {
-      pairs = [];
+    if (digestByModel) {
+      pairs = []; const floor = mlThresholds.synthesis;
       for (let i = 0; i < notes.length; i++) for (let j = i + 1; j < notes.length; j++) {
         const a = notes[i], b = notes[j];
         if (!mlVecs[a.id] || !mlVecs[b.id]) continue;
         if ((idx.fwd[a.id] || []).includes(b.id) || (idx.fwd[b.id] || []).includes(a.id)) continue;
         const s = mlCosine(mlVecs[a.id], mlVecs[b.id]);
-        if (s >= 0.45) pairs.push({ a: a.id, b: b.id, s });
+        if (s >= floor) pairs.push({ a: a.id, b: b.id, s });
       }
       pairs = pairs.sort((x, y) => y.s - x.s).slice(0, 6);
     } else pairs = digestPairs(notes, vecs, idx, { max: 6 });
@@ -1734,19 +2476,21 @@
 
   const editable = (t) => !!(t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable || (t.closest && t.closest('.cm-editor'))));
   function onKey(e) {
-    if (e.defaultPrevented) return; // let the editor/inputs claim a key before the global shortcuts run
+    if (e.defaultPrevented || !cacheReady) return; // let the editor/inputs claim a key before the global shortcuts run
     // Escape closes the topmost open thing, then stops — one Escape shouldn't both dismiss an overlay
     // AND drop out of focus/fullscreen. Only fall through to focus/fullscreen when nothing was open.
+    if (e.key === 'Escape' && (preview || pvTimer)) { pvClose(); return; }   // the link preview first, on its own
     if (e.key === 'Escape') {
-      const hadOverlay = paletteOpen || digestOpen || !!connect || graphFull || docExport || settingsOpen || !!movePick || !!citePick || !!imgCtl || !!ctxMenu;
+      const hadOverlay = paletteOpen || digestOpen || !!connect || graphFull || docExport || settingsOpen || !!movePick || !!citePick || !!imgCtl || !!ctxMenu || libOverlay;
       paletteOpen = false; digestOpen = false; connect = null; graphFull = false; docExport = false; settingsOpen = false; movePick = null; citePick = null; imgCtl = null; closeCtx();
+      if (libOverlay) libraryRef?.closeOverlays();
       if (hadOverlay) return;
       if (focus) setFocus(false); else if (fullscreen) { fullscreen = false; applyFullscreen(false); }
       return;
     }
     if (e.key === 'F11') { e.preventDefault(); toggleFullscreen(); return; }
     // an open overlay owns the keyboard — don't let a global shortcut mutate hidden state behind it
-    if (paletteOpen || settingsOpen || digestOpen || connect || graphFull || docExport || movePick || citePick) return;
+    if (paletteOpen || settingsOpen || digestOpen || connect || graphFull || docExport || movePick || citePick || libOverlay) return;
     const mod = IS_MAC ? e.metaKey : e.ctrlKey; // ⌘ on macOS, Ctrl elsewhere — leaves Ctrl free for caret shortcuts on Mac
     const inField = editable(e.target); // view/edit chords must not fire while typing a title/body
     if (mod && e.key.toLowerCase() === 'k') { e.preventDefault(); paletteOpen = true; query = ''; }
@@ -1755,17 +2499,19 @@
     else if (mod && e.key.toLowerCase() === 'n') { if (inField) return; e.preventDefault(); if (view === 'library') view = 'notes'; create(); }
     else if (mod && e.key.toLowerCase() === 's') { e.preventDefault(); flushSave(); }
     else if (mod && e.key.toLowerCase() === 'b') { if (inField) return; e.preventDefault(); view = view === 'library' ? 'notes' : 'library'; }
-    else if (mod && e.key.toLowerCase() === 'r') { e.preventDefault(); flushSave(); syncFromFolder(); }
+    else if (mod && e.key.toLowerCase() === 'r') { e.preventDefault(); flushSave(); syncFromFolder({ full: true }); }
     else if (mod && e.key === 'Backspace' && current && mode === 'read' && !inField) { e.preventDefault(); deleteNote(currentId); }
   }
 </script>
 
 <!-- with the OS drag-drop handler off (tauri dragDropEnabled:false, required for HTML5 DnD on Windows),
      an unhandled file drop would otherwise make the webview navigate to file:// and replace the app.
-     These bubble-phase guards neutralise any drop the row/editor handlers didn't already accept. -->
-<svelte:window onkeydown={onKey} bind:innerWidth={winW} onmousemove={onFocusMouseMove} ondragover={(e) => e.preventDefault()} ondrop={(e) => e.preventDefault()} />
+     These bubble-phase guards neutralise every drop; recognised files (notes, zip, references, .arf) import. -->
+<svelte:window onkeydown={onKey} bind:innerWidth={winW} onmousemove={onFocusMouseMove} ondragover={(e) => e.preventDefault()} ondrop={onWindowDrop} />
 
-{#if needVault}
+{#if !cacheReady}
+  <!-- the note cache is still loading (IndexedDB, a few ms) -->
+{:else if needVault}
   <div class="welcome">
     <div class="wcard">
       <div class="wwm">Arf<span class="dot">.</span></div>
@@ -1783,51 +2529,54 @@
 {:else}
 <div class="shell" class:focus={focus} class:reveal-top={topReveal}>
   <header class="top" class:scrolled={centerScrolled && view === 'notes' && !focus} bind:this={topEl}>
-    <button class="wm" onclick={() => (view = 'notes')}>Arf<span class="dot">.</span></button>
+    <button class="wm" title="Notes" onclick={() => (view = 'notes')}>Arf<span class="dot">.</span></button>
     <div class="viewtoggle">
-      <button class:on={view === 'notes'} onclick={() => (view = 'notes')}>Notes</button>
-      <button class:on={view === 'library'} onclick={() => (view = 'library')}>Library</button>
+      <button class:on={view === 'notes'} title={'Notes (' + MOD + ' B switches)'} onclick={() => (view = 'notes')}>Notes</button>
+      <button class:on={view === 'library'} title={'Reference library (' + MOD + ' B switches)'} onclick={() => (view = 'library')}>Library</button>
     </div>
     {#if view === 'notes' && !focus}
       <button class="tbtn iconbtn" class:on={!leftHidden} aria-pressed={!leftHidden} title={leftHidden ? 'Show the notes sidebar' : 'Hide the notes sidebar'} aria-label="Toggle notes sidebar" onclick={toggleLeftPanel}>{@html panelIcon('l', !leftHidden)}</button>
     {/if}
     <span class="sp"></span>
-    <button class="searchpill" onclick={() => { paletteOpen = true; query = ''; }}>
+    <button class="searchpill" title={'Search notes, tags and ideas (' + MOD + ' K)'} onclick={() => { paletteOpen = true; query = ''; }}>
       <span class="mag">⌕</span><span class="lbl">Search</span><kbd>{MOD} K</kbd>
     </button>
     <div class="topacts">
-      <button class="tbtn" onclick={() => (digestOpen = true)}>Synthesis</button>
-      <button class="tbtn" onclick={() => (graphFull = true)}>Graph</button>
-      <button class="tbtn" class:on={focus} onclick={toggleFocus}>Focus</button>
-      <button class="tbtn" class:on={fullscreen} onclick={toggleFullscreen} title="Fullscreen (F11)">Fullscreen</button>
-      <button class="tbtn" onclick={toggleTheme}>Theme</button>
-      <button class="tbtn" onclick={() => (settingsOpen = true)}>Settings</button>
+      <button class="tbtn" title="Similar notes you have not linked yet" onclick={() => (digestOpen = true)}>Synthesis</button>
+      <button class="tbtn" title={'Knowledge graph (' + MOD + ' G)'} onclick={() => (graphFull = true)}>Graph</button>
+      <button class="tbtn" class:on={focus} aria-pressed={focus} title="Focus: only the note, full screen (Esc leaves)" onclick={toggleFocus}>Focus</button>
+      <button class="tbtn" class:on={fullscreen} aria-pressed={fullscreen} onclick={toggleFullscreen} title="Fullscreen (F11)">Fullscreen</button>
+      <button class="tbtn" title={theme === 'dark' ? 'Switch to the light theme' : 'Switch to the dark theme'} onclick={toggleTheme}>Theme</button>
+      <button class="tbtn" title="Settings: appearance, connection suggestions, import and export" onclick={() => (settingsOpen = true)}>Settings</button>
       {#if view === 'notes' && !focus && winW > 900}
         <button class="tbtn iconbtn" class:on={!rightHidden} aria-pressed={!rightHidden} title={rightHidden ? 'Show the right panel' : 'Hide the right panel'} aria-label="Toggle right panel" onclick={toggleRightPanel}>{@html panelIcon('r', !rightHidden)}</button>
       {/if}
+      <!-- inside the actions group, so a narrow window wraps the actions and New onto the second row together -->
+      <button class="newbtn" title={'New note (' + MOD + ' N)'} onclick={create}>＋&nbsp;New</button>
     </div>
-    <button class="newbtn" onclick={create}>＋&nbsp;New</button>
   </header>
 
   {#if saveError}
-    <div class="savebanner">⚠ Couldn’t save — local storage may be full or blocked. Export this note now to avoid losing it.</div>
+    <div class="savebanner" out:fade={{ duration: dur(DUR.fast) }}>⚠ Couldn’t save — local storage may be full or blocked. Export this note now to avoid losing it.</div>
   {/if}
   {#if vaultErr}
-    <div class="savebanner">⚠ A file write to your vault folder failed. Arf keeps retrying; check that the folder exists and is writable.</div>
+    <div class="savebanner" out:fade={{ duration: dur(DUR.fast) }}>⚠ A file write to your vault folder failed. Arf keeps retrying; check that the folder exists and is writable.</div>
   {/if}
   {#if vaultCorrupt}
-    <div class="savebanner">⚠ Your saved notes couldn’t be read and were backed up (<span class="mono">{corruptBackupKey()}</span>). Starting with an empty vault. <button class="bnrbtn" onclick={() => (vaultCorrupt = false)}>Dismiss</button></div>
+    <div class="savebanner" out:fade={{ duration: dur(DUR.fast) }}>⚠ Your saved notes couldn’t be read and were backed up (<span class="mono">{corruptBackupKey()}</span>). Starting with an empty vault. <button class="bnrbtn" onclick={() => (vaultCorrupt = false)}>Dismiss</button></div>
   {/if}
   {#if exportError}
-    <div class="savebanner">⚠ {exportError}</div>
+    <div class="savebanner" out:fade={{ duration: dur(DUR.fast) }}>⚠ {exportError}</div>
   {/if}
   {#if uiMsg}
-    <div class="savebanner">{uiMsg}</div>
+    <div class="savebanner" out:fade={{ duration: dur(DUR.fast) }}>{uiMsg}</div>
   {/if}
 
   {#if view === 'library'}
-    <Library bind:this={libraryRef} {notes} {idx} onopen={open} bind:refs bind:libFolders jumpTo={refJump} onjumped={() => (refJump = null)} onrefsdelete={() => queueMicrotask(refsToVault)}
-      hasVault={!!vaultBackend} onopenreader={openReferenceInReader} onattach={attachLocalFile} onfetchpdf={fetchPdfForRef} ondetach={detachFromRef} />
+    {#if LibraryC}
+    <LibraryC bind:this={libraryRef} bind:overlay={libOverlay} {notes} {idx} onopen={open} bind:refs bind:libFolders jumpTo={refJump} onjumped={() => (refJump = null)} onrefsdelete={() => queueMicrotask(refsToVault)}
+      hasVault={!!vaultBackend} onopenreader={openReferenceInReader} onattach={attachLocalFile} onfetchpdf={fetchPdfForRef} ondetach={detachFromRef} onimport={() => pickImport('refs')} />
+    {/if}
   {:else}
     <div class="ws" class:lhide={leftHidden} class:rhide={rightHidden} class:hasreader={!!reader} style="--leftw:{appliedLeftW}px; --rightw:{appliedRightW}px">
       <button type="button" class="resizer rz-l" aria-label="Resize left sidebar"
@@ -1849,8 +2598,7 @@
           <span class="lh">{dropOn === '__root__' ? 'Move to top level' : 'Vault · ' + notes.length}</span>
           <button class="mini" title="New folder" onclick={() => { newFolderParent = ''; renameFolderPath = null; newFolderName = ''; }}>+ Folder</button></div>
         {#if newFolderName !== null}
-          <!-- svelte-ignore a11y_autofocus -->
-          <input class="nfinput" autofocus placeholder={renameFolderPath != null ? 'Rename folder' : (newFolderParent ? 'Subfolder of ' + newFolderParent : 'Folder name')} bind:value={newFolderName}
+          <input class="nfinput" use:focusLater placeholder={renameFolderPath != null ? 'Rename folder' : (newFolderParent ? 'Subfolder of ' + newFolderParent : 'Folder name')} bind:value={newFolderName}
             onkeydown={(e) => { if (e.key === 'Enter') commitFolderInput(); else if (e.key === 'Escape') { newFolderName = null; renameFolderPath = null; } }} onblur={commitFolderInput} />
         {/if}
 
@@ -1872,8 +2620,9 @@
                 data-folder={r.path} style="padding-left:{6 + r.depth * 12}px" draggable="true"
                 ondragstart={(e) => onDragStart(e, { type: 'folder', path: r.path })} ondragend={onDragEnd}
                 ondragover={(e) => { if (!folderRowDragOver(e, r.path)) { onDragOver(e, r.path); if (dropEdge && dropEdge.kind === 'folder' && dropEdge.path === r.path) dropEdge = null; } }} ondragleave={() => { if (dropOn === r.path) dropOn = null; if (dropEdge && dropEdge.kind === 'folder' && dropEdge.path === r.path) dropEdge = null; }} ondrop={(e) => onFolderRowDrop(e, r.path)}
-                onclick={() => { if (activeFolder === r.path) toggleFolder(r.path); else { activeFolder = r.path; collapsed[r.path] = false; } }}>
-                <span class="caret" role="button" tabindex="-1" onclick={(e) => { e.stopPropagation(); toggleFolder(r.path); }}>{r.hasChildren ? (r.collapsed ? '▸' : '▾') : '·'}</span><span class="fn">{r.name}</span>{#if r.count}<span class="fcount">{r.count}</span>{/if}
+                aria-expanded={r.hasChildren ? !r.collapsed : undefined} onkeydown={(e) => folderKey(e, r)}
+                onclick={(e) => { if (e.target.closest('.caret')) toggleFolder(r.path); else if (activeFolder === r.path) toggleFolder(r.path); else { activeFolder = r.path; collapsed[r.path] = false; } }}>
+                <span class="caret" aria-hidden="true">{r.hasChildren ? (r.collapsed ? '▸' : '▾') : '·'}</span><span class="fn">{r.name}</span>{#if r.count}<span class="fcount">{r.count}</span>{/if}
               </button>
             {:else}
               <button class="item" class:on={r.note.id === currentId} class:dropon={dropOn === '__note__' + r.note.id} class:dropbefore={isEdge('note', r.note.id, 'before')} class:dropafter={isEdge('note', r.note.id, 'after')} class:dragging={dragItem && dragItem.type === 'note' && dragItem.id === r.note.id}
@@ -1931,9 +2680,12 @@
             </div>
           </div>
           {#if mode === 'write'}
-            {#key currentId}<div class="editor"><Editor bind:this={editorRef} value={current.body} onchange={editBody} resemble={resembleParagraph} oncite={openCitePicker} onimage={saveNoteImage} /></div>{/key}
+            {#key currentId}<div class="editor">{#if EditorC}<EditorC bind:this={editorRef} value={current.body} onchange={editBody} onmode={(m) => (mode = m)} resemble={resembleParagraph} oncite={openCitePicker} onimage={saveNoteImage} onimport={(list) => importFiles(list)} />{/if}</div>{/key}
           {:else}
             <!-- note switch: opacity-only fade, in-only (never add out: — a dying read view is fine, but the editor key block must never fire onchange for the old note). Keyboard nav stays near-instant at 80ms. -->
+            <!-- click delegate for the rendered note: its links, tags, citations and task boxes are native <a>/<input>
+                 elements that keep their own keyboard activation, so the delegate needs no key handler or role -->
+            <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
             {#key currentId}<div class="read" onclick={readClick} in:fade={{ duration: dur(DUR.exit) }}>{@html readHTML}{@html bibHTML}</div>{/key}
           {/if}
         {:else}
@@ -1943,32 +2695,41 @@
 
       {#if reader}
         <aside class="rail readerpane">
-          <Reader source={readerSource} highlights={readerHls} canQuote={!!current} onclose={closeReader} onquote={quoteIntoNote} onhighlight={addHighlight} onunhighlight={removeHighlight} />
+          {#if ReaderC}{#key readerKey}<ReaderC source={readerSource} highlights={readerHls} canQuote={!!current} onclose={closeReader} onquote={quoteIntoNote} onhighlight={addHighlight} onunhighlight={removeHighlight} />{/key}{/if}
         </aside>
       {:else}
       <aside class="rail">
         <div class="rh">Referenced in <span>{backlinks.length}</span></div>
         {#if backlinks.length}
-          {#each backlinks as b}<button class="ref" data-nid={b.id} onclick={() => open(b.id)}>{b.title}</button>{/each}
+          {#each backlinks as b (b.id)}
+            {@const c = backContext.get(b.id)}
+            <div class="bl"><button class="ref" data-nid={b.id} onclick={() => open(b.id)}>{b.title}</button>{#if c}<p class="bctx">{c.before}<strong>{c.match}</strong>{c.after}</p>{/if}</div>
+          {/each}
         {:else}<div class="rempty">No backlinks yet.</div>{/if}
 
-        <div class="rh" style="margin-top:1.3rem">Resonance · {mlStatus === 'ready' ? 'MiniLM' : 'on-device'}
-          {#if mlStatus === 'off'}<button class="mltoggle" title="Downloads a ~23MB model once; runs entirely on your device" onclick={enableML}>enable AI model</button>
-          {:else if mlStatus === 'loading'}<span class="mlstat">↓ model {mlPct}%</span>
-          {:else if mlStatus === 'ready'}<span class="mlstat ok">✓ on device</span><button class="mltoggle" title="Turn the on-device model off — Resonance falls back to the light TF-IDF method" onclick={disableML}>disable</button>
-          {:else}<span class="mlstat">TF-IDF</span><button class="mltoggle" title="Try loading the on-device model again" onclick={enableML}>retry</button>{/if}
+        <div class="rh" style="margin-top:1.3rem" title="Notes similar to this one that are not linked to it yet"><span class="rhname" title={resonanceByModel ? 'Resonance · ' + activeEntry.name : null}>Resonance · {resonanceByModel ? shortModelName(activeEntry) : 'word overlap'}</span>
+          {#if mlEnabling}<span class="mlstat">Model {railPct}%</span>
+          {:else if mlStatus === 'off'}<button class="mltoggle" title="Connection suggestions: downloads a model once from Hugging Face; your notes stay on this device" onclick={enableML}>Use a model</button>
+          {:else if mlStatus === 'loading'}<span class="mlstat">Model {railPct}%</span>
+          {:else if mlStatus === 'ready'}{#if mlIndex && mlIndex.total > 3}<span class="mlstat" role="status" title="Embedding notes on this device; suggestions use word overlap until this finishes">Indexing {mlIndex.done} / {mlIndex.total}</span>{/if}<button class="mltoggle" title="Turn connection suggestions off; Resonance falls back to word overlap" onclick={disableML}>Turn off</button>
+          {:else}<span class="mlstat" title={mlFiles[mlModel]?.detail || ''}>Model unavailable</span><button class="mltoggle" title="Try loading the model again" onclick={() => { mlStatus = 'off'; }}>Retry</button>{/if}
         </div>
         {#if resonance.length}
           {#each resonance as r}
             <div class="mlrow">
-              <button class="ref ml" data-nid={r.note.id} onclick={() => open(r.note.id)}><span class="sim" title="Similarity 0–1 (on-device)">{r.s.toFixed(2)}</span><span class="nm">{r.note.title}</span></button>
+              {#if resonanceByModel}
+                <button class="ref ml" data-nid={r.note.id} onclick={() => open(r.note.id)}><span class="sim" title={'Similarity 0–1 (' + activeEntry.name + ')'}>{r.s.toFixed(2)}</span><span class="nm">{r.note.title}</span></button>
+              {:else}
+                <!-- word-overlap scores are on a different scale from model scores, so they stay out of sight -->
+                <button class="ref ml" data-nid={r.note.id} title={'Word overlap ' + r.s.toFixed(2)} onclick={() => open(r.note.id)}><span class="nm">{r.note.title}</span></button>
+              {/if}
               <button class="mllink" title={'Link this note to “' + r.note.title + '”'} aria-label={'Link this note to ' + r.note.title} onclick={() => linkResonance(r.note.id)}>+ link</button>
             </div>
           {/each}
         {:else}<div class="rempty">Nothing close enough yet.</div>{/if}
 
-        <div class="rh" style="margin-top:1.3rem">Local graph <button class="expand" onclick={() => (graphFull = true)}>⤢ full</button></div>
-        <GraphView {notes} {idx} centerId={currentId} mode="ego" onopen={open} />
+        <div class="rh" style="margin-top:1.3rem">Local graph <button class="expand" title={'Open the full graph (' + MOD + ' G)'} onclick={() => (graphFull = true)}>⤢ Full</button></div>
+        <GraphView {notes} {idx} centerId={currentId} mode="ego" onopen={open} suggest={graphSuggest} />
       </aside>
       {/if}
     </div>
@@ -1977,31 +2738,34 @@
 {/if}
 
 {#if graphFull}
-  <div class="overlay">
+  <div class="overlay" out:fade={{ duration: dur(DUR.fast) }} onoutrostart={leaving}>
     <div class="ovhead"><h3>Knowledge graph</h3>
-      <div class="ghint">
-        <span class="gh"><kbd>scroll</kbd> zoom</span>
-        <span class="gh"><kbd>drag bg</kbd> pan</span>
-        <span class="gh"><kbd>drag node</kbd> move</span>
-        <span class="gh"><kbd>click</kbd> open</span>
-        <span class="gh"><kbd>{MOD}-click</kbd> select</span>
-      </div>
       <span class="sp"></span><button class="ovclose" onclick={() => (graphFull = false)}>✕ Close</button></div>
-    <GraphView {notes} {idx} centerId={currentId} mode="full" onopen={open} />
+    <GraphView {notes} {idx} centerId={currentId} mode="full" onopen={open} suggest={graphSuggest} onexport={saveGraphExport} />
   </div>
 {/if}
 
+<!-- The scrims below close on a click outside their dialog. That pointer-only path has a keyboard equivalent
+     (Escape, handled globally in onKey), so their click handlers need no key handler or role of their own. -->
 {#if paletteOpen}
-  <div class="scrim" onclick={(e) => { if (e.target === e.currentTarget) paletteOpen = false; }}>
+  <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+  <div class="scrim" onclick={(e) => { if (e.target === e.currentTarget) paletteOpen = false; }} out:fade={{ duration: dur(DUR.exit) }} onoutrostart={leaving}>
     <div class="palette">
       <!-- svelte-ignore a11y_autofocus -->
-      <input autofocus placeholder="Search notes, tags, or ideas…" bind:value={query} onkeydown={(e) => { if (e.key === 'Enter' && (palItems.lex[0] || palItems.sem[0])) open((palItems.lex[0] || palItems.sem[0]).id); }} />
-      <div class="presults">
-        <div class="pg">Notes</div>
-        {#each palItems.lex as l}<button class="prow" onclick={() => open(l.id)}><span class="pt">{l.title}</span><span class="pm">{l.why}</span></button>{:else}<div class="prow none">No matches</div>{/each}
+      <input autofocus placeholder="Search notes, tags, or ideas…" bind:value={query} role="combobox" aria-expanded="true" aria-controls="pal-results" aria-autocomplete="list"
+        aria-activedescendant={palSel >= 0 ? 'pal-opt-' + palSel : undefined}
+        onkeydown={(e) => pickerKey(e, palFlat.length, palSel, (i) => (palActive = i), (i) => open(palFlat[i].id))} />
+      <div class="presults" id="pal-results" role="listbox" aria-label="Notes found">
+        <div role="group" aria-labelledby="pal-g-notes">
+          <div class="pg" id="pal-g-notes">Notes</div>
+          {#each palItems.lex as l, i}<button class="prow" class:active={i === palSel} id={'pal-opt-' + i} role="option" aria-selected={i === palSel} tabindex="-1" onpointermove={() => (palActive = i)} onclick={() => open(l.id)}><span class="pt">{l.title}</span><span class="pm">{l.why}</span></button>{:else}<div class="prow none" role="option" aria-selected="false" aria-disabled="true">No matches</div>{/each}
+        </div>
         {#if palItems.sem.length}
-          <div class="pg sem">Related · on-device</div>
-          {#each palItems.sem as s}<button class="prow" onclick={() => open(s.id)}><span class="pt i">{s.title}</span><span class="psim">{s.s.toFixed(2)}</span></button>{/each}
+          <!-- word-overlap neighbours of the top match; their scores stay in the title (a different scale from model scores) -->
+          <div role="group" aria-labelledby="pal-g-sem">
+            <div class="pg sem" id="pal-g-sem">Related · word overlap</div>
+            {#each palItems.sem as s, j}{@const i = palItems.lex.length + j}<button class="prow" class:active={i === palSel} id={'pal-opt-' + i} role="option" aria-selected={i === palSel} tabindex="-1" title={'Word overlap ' + s.s.toFixed(2)} onpointermove={() => (palActive = i)} onclick={() => open(s.id)}><span class="pt i">{s.title}</span></button>{/each}
+          </div>
         {/if}
       </div>
     </div>
@@ -2009,22 +2773,24 @@
 {/if}
 
 {#if citePick}
-  <div class="scrim" onclick={(e) => { if (e.target === e.currentTarget) citePick = false; }}>
+  <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+  <div class="scrim" onclick={(e) => { if (e.target === e.currentTarget) citePick = false; }} out:fade={{ duration: dur(DUR.exit) }} onoutrostart={leaving}>
     <div class="palette citepicker">
       <!-- svelte-ignore a11y_autofocus -->
-      <input autofocus placeholder="Insert citation — filter by author, title, year, or key…" bind:value={citeQuery}
-        onkeydown={(e) => { if (e.key === 'Enter' && citeMatches[0]) insertCite(citeMatches[0]); else if (e.key === 'Escape') citePick = false; }} />
+      <input autofocus placeholder="Insert citation — filter by author, title, year, or key…" bind:value={citeQuery} role="combobox" aria-expanded="true" aria-controls="cite-results" aria-autocomplete="list"
+        aria-activedescendant={citeSel >= 0 ? 'cite-opt-' + citeSel : undefined}
+        onkeydown={(e) => { if (e.key === 'Escape') citePick = false; else pickerKey(e, citeMatches.length, citeSel, (i) => (citeActive = i), (i) => insertCite(citeMatches[i])); }} />
       <div class="citemode">
         <button class:on={citeMode === 'both'} onclick={() => (citeMode = 'both')} title="Show the citation in the text and list it at the end of the note">In text + list</button>
         <button class:on={citeMode === 'intext'} onclick={() => (citeMode = 'intext')} title="Show the citation in the text only, without an entry in the reference list">In text only</button>
         <button class:on={citeMode === 'ref'} onclick={() => (citeMode = 'ref')} title="Add the work to the reference list without an in-text marker (like \nocite)">References only</button>
       </div>
-      <div class="presults">
-        <div class="pg">References</div>
-        {#each citeMatches as r (r.id)}
-          <button class="prow" onclick={() => insertCite(r)}><span class="pt">{(r.authors && r.authors[0] ? r.authors[0].f : r.citekey)}{r.year ? ' ' + r.year : ''} — {r.title || 'Untitled'}</span><span class="pm">[@{r.citekey}]</span></button>
+      <div class="presults" id="cite-results" role="listbox" aria-labelledby="cite-g">
+        <div class="pg" id="cite-g">References</div>
+        {#each citeMatches as r, i (r.id)}
+          <button class="prow" class:active={i === citeSel} id={'cite-opt-' + i} role="option" aria-selected={i === citeSel} tabindex="-1" onpointermove={() => (citeActive = i)} onclick={() => insertCite(r)}><span class="pt">{(r.authors && r.authors[0] ? r.authors[0].f : r.citekey)}{r.year ? ' ' + r.year : ''} — {r.title || 'Untitled'}</span><span class="pm">[@{r.citekey}]</span></button>
         {:else}
-          <div class="prow none">{refs.length ? 'No matching reference' : 'No references yet — add one in the Library first.'}</div>
+          <div class="prow none" role="option" aria-selected="false" aria-disabled="true">{refs.length ? 'No matching reference' : 'No references yet — add one in the Library first.'}</div>
         {/each}
       </div>
     </div>
@@ -2032,12 +2798,13 @@
 {/if}
 
 {#if movePick}
-  <div class="scrim" onclick={(e) => { if (e.target === e.currentTarget) movePick = null; }}>
-    <div class="palette">
+  <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+  <div class="scrim" onclick={(e) => { if (e.target === e.currentTarget) movePick = null; }} out:fade={{ duration: dur(DUR.exit) }} onoutrostart={leaving}>
+    <div class="palette" role="dialog" aria-modal="true" aria-label={'Move ' + (movePick.kind === 'folder' ? 'folder' : 'note') + ' to'}>
       <div class="pg" style="padding:.7rem .9rem .3rem">Move {movePick.kind === 'folder' ? 'folder' : 'note'} to…</div>
       <div class="presults">
         {#each moveDestinations(movePick.kind === 'folder' ? movePick.src : null) as dest}
-          <button class="prow" onclick={() => doMovePick(dest)}><span class="pt">{dest === '' ? '↑ Top level' : dest}</span></button>
+          <button class="prow" onkeydown={roveKey} onclick={() => doMovePick(dest)}><span class="pt">{dest === '' ? '↑ Top level' : dest}</span></button>
         {/each}
       </div>
     </div>
@@ -2045,7 +2812,8 @@
 {/if}
 
 {#if docExport}
-  <div class="scrim" onclick={(e) => { if (e.target === e.currentTarget) docExport = false; }}>
+  <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+  <div class="scrim" onclick={(e) => { if (e.target === e.currentTarget) docExport = false; }} out:fade={{ duration: dur(DUR.fast) }} onoutrostart={leaving}>
     <div class="modal">
       <button class="dlg-x" onclick={() => (docExport = false)}>✕</button>
       <h3>Export writing</h3>
@@ -2076,7 +2844,8 @@
 {/if}
 
 {#if digestOpen}
-  <div class="scrim" onclick={(e) => { if (e.target === e.currentTarget) digestOpen = false; }}>
+  <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+  <div class="scrim" onclick={(e) => { if (e.target === e.currentTarget) digestOpen = false; }} out:fade={{ duration: dur(DUR.fast) }} onoutrostart={leaving}>
     <div class="modal">
       <button class="dlg-x" onclick={() => (digestOpen = false)}>✕</button>
       <h3>This week's synthesis</h3>
@@ -2088,7 +2857,7 @@
               <span class="pairtitles"><button class="a" onclick={() => open(p.a)}>{idx.byId[p.a].title}</button> <span class="mid">↔</span> <button class="a" onclick={() => open(p.b)}>{idx.byId[p.b].title}</button></span>
               {#if p.terms.length}<span class="shared">shared: {#each p.terms as tm}<span class="shtag">{tm}</span>{/each}</span>{/if}
             </span>
-            <span class="psim">{p.s.toFixed(2)}</span><button class="link" onclick={() => linkPair(p.a, p.b, p.terms)}>Link</button>
+            {#if digestByModel}<span class="psim" title={'Similarity 0–1 (' + (activeEntry?.name || 'model') + ')'}>{p.s.toFixed(2)}</span>{/if}<button class="link" title={digestByModel ? '' : 'Word overlap ' + p.s.toFixed(2)} onclick={() => linkPair(p.a, p.b, p.terms)}>Link</button>
           </div>
         {:else}<div class="rempty" style="padding:1rem 0">Everything similar is already linked. Good week.</div>{/each}
       </div>
@@ -2097,7 +2866,8 @@
 {/if}
 
 {#if connect}
-  <div class="scrim" onclick={(e) => { if (e.target === e.currentTarget) connect = null; }}>
+  <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+  <div class="scrim" onclick={(e) => { if (e.target === e.currentTarget) connect = null; }} out:fade={{ duration: dur(DUR.fast) }} onoutrostart={leaving}>
     <div class="modal">
       <button class="dlg-x" onclick={() => (connect = null)}>✕</button>
       <h3>Connect notes</h3>
@@ -2115,7 +2885,8 @@
 {/if}
 
 {#if settingsOpen}
-  <div class="scrim" onclick={(e) => { if (e.target === e.currentTarget) settingsOpen = false; }}>
+  <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+  <div class="scrim" onclick={(e) => { if (e.target === e.currentTarget) settingsOpen = false; }} out:fade={{ duration: dur(DUR.fast) }} onoutrostart={leaving}>
     <div class="modal settings">
       <button class="dlg-x" onclick={() => (settingsOpen = false)}>✕</button>
       <h3>Settings</h3>
@@ -2127,23 +2898,73 @@
       <div class="setrow"><span class="sk">View zoom</span>
         <div class="zoomctl"><button onclick={() => setZoom(zoom - 8)} aria-label="Smaller">−</button><span class="zval">{zoom}%</span><button onclick={() => setZoom(zoom + 8)} aria-label="Larger">+</button><button class="zreset" onclick={() => setZoom(100)}>reset</button></div>
       </div>
-      <div class="setrow"><span class="sk">Reading width <span class="sh">Width of the writing and reading column — scales with the side panels</span></span>
+      <div class="setrow"><span class="sk">Reading width <span class="sh">Width of the writing and reading column — scales with the side panels. Focus mode narrows Middle; Tight and Comfy keep their width.</span></span>
         <div class="seg"><button class:on={readWidth === 'tight'} onclick={() => setReadWidth('tight')}>Tight</button><button class:on={readWidth === 'middle'} onclick={() => setReadWidth('middle')}>Middle</button><button class:on={readWidth === 'comfy'} onclick={() => setReadWidth('comfy')}>Comfy</button></div>
       </div>
       <div class="setrow"><span class="sk">Reduce transparency <span class="sh">Make menus and the command palette solid instead of frosted glass</span></span>
         <div class="seg"><button class:on={!reduceTransparency} onclick={() => (reduceTransparency = false)}>Off</button><button class:on={reduceTransparency} onclick={() => (reduceTransparency = true)}>On</button></div>
       </div>
 
-      <div class="setlabel">On-device machine</div>
-      <div class="setrow"><span class="sk">Connection suggestions <span class="sh">{mlModel === 'multi' ? 'Multilingual model — runs on your device, ~120 MB once' : 'MiniLM — runs on your device, ~23 MB once'}</span></span>
-        {#if mlStatus === 'off'}<button class="setbtn" onclick={enableML}>Enable</button>
-        {:else if mlStatus === 'loading'}<span class="setbtnrow"><span class="setstat">downloading {mlPct}%…</span><button class="setbtn" onclick={disableML}>Cancel</button></span>
-        {:else if mlStatus === 'ready'}<span class="setbtnrow"><span class="setstat ok">✓ on</span><button class="setbtn" onclick={disableML}>Disable</button></span>
-        {:else}<span class="setbtnrow"><span class="setstat">unavailable — using the light method</span><button class="setbtn" onclick={disableML}>Dismiss</button></span>{/if}
+      <div class="setlabel">Connection suggestions</div>
+      <div class="setrow"><span class="sk">Use a model <span class="sh">Resonance and Synthesis compare notes with a model that runs on this device. Models download from Hugging Face only when you ask; your notes never leave this device. Off: word overlap.</span></span>
+        <div class="seg" role="group" aria-label="Connection suggestions"><button class:on={!mlEnabled} aria-pressed={!mlEnabled} onclick={disableML}>Off</button><button class:on={mlEnabled} aria-pressed={mlEnabled} onclick={() => { if (!mlEnabled) enableML(); }}>On</button></div>
       </div>
-      <div class="setrow"><span class="sk">Model <span class="sh">English is smaller and faster; Multilingual understands 50+ languages, including Turkish</span></span>
-        <div class="seg"><button class:on={mlModel === 'en'} onclick={() => setModel('en')}>English</button><button class:on={mlModel === 'multi'} onclick={() => setModel('multi')}>Multilingual</button></div>
-      </div>
+      <ul class="mlist" aria-label="Models">
+        {#each modelList as m (m.id)}
+          {@const f = mlFiles[m.id]}
+          {@const busy = f?.state === 'downloading' || (m.id === mlModel && mlEnabled && mlStatus === 'loading')}
+          {@const inUse = m.id === mlModel && mlEnabled}
+          {@const noUse = inUse || busy}
+          {@const noRemove = inUse || busy || (!m.custom && f?.state !== 'present')}
+          <li class="mrow" data-model={m.id}>
+            <span class="mglyph">{@html icon(m.icon, 18)}</span>
+            <span class="minfo">
+              <span class="mname">{m.name}{#if m.id === RECOMMENDED_ID}<span class="mrec">Recommended</span>{/if}</span>
+              <span class="mdesc">{m.description}</span>
+              <span class="mmeta">{m.languages}, {modelSize(m)}{#if m.licence}, {m.licence}{/if}</span>
+              {#if busy}<span class="mbar" role="progressbar" aria-label={'Downloading ' + m.name} aria-valuemin="0" aria-valuemax="100" aria-valuenow={f?.pct || mlPct}><span style="width:{f?.pct || mlPct}%"></span></span>{/if}
+            </span>
+            <span class="mstate" title={f?.detail || ''} aria-live="polite">{modelStatus(m)}</span>
+            <!-- one Download/Cancel button whose label and icon switch, and aria-disabled instead of disabled, so
+                 keyboard focus stays put while a download starts, ends or the model changes state -->
+            <span class="mact">
+              {#if busy || f?.state !== 'present'}
+                <button class="mbtn" data-act="fetch" aria-label={busy ? 'Cancel download of ' + m.name : 'Download ' + m.name} title={busy ? 'Cancel download' : 'Download ' + m.name + ' without using it yet'}
+                  onclick={(e) => (busy ? cancelModel(m) : fetchFromButton(m, e.currentTarget))}>{@html icon(busy ? 'close' : 'download')}</button>
+              {/if}
+              <button class="mbtn" data-act="use" aria-label={'Use ' + m.name} title={inUse ? 'In use' : f?.state === 'present' ? 'Use ' + m.name : 'Download and use ' + m.name} aria-disabled={noUse} onclick={() => { if (!noUse) useModel(m); }}>{@html icon('check')}</button>
+              <button class="mbtn" data-act="remove" aria-label={'Remove ' + m.name} title={inUse ? 'Turn suggestions off to remove the model in use' : m.custom ? 'Remove ' + m.name + ' and its files' : 'Delete the downloaded files'} aria-disabled={noRemove} onclick={() => { if (!noRemove) removeModel(m); }}>{@html icon('trash')}</button>
+            </span>
+          </li>
+        {/each}
+        <li class="mrow mcustom">
+          <span class="mglyph">{@html icon('model-add', 18)}</span>
+          <span class="minfo">
+            <span class="mname">Other model</span>
+            <span class="mdesc">Any Hugging Face repo with onnx/model_quantized.onnx in the Transformers.js layout</span>
+            <span class="mcustomrow">
+              <input class="mcinput" placeholder="owner/name" aria-label="Hugging Face repo id" spellcheck="false" autocomplete="off" bind:value={customId}
+                oninput={() => (customCheck = null)} onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); checkCustom(); } }} />
+              <button class="setbtn" disabled={!customId.trim() || customCheck?.busy} onclick={checkCustom}>Validate</button>
+            </span>
+            {#if customCheck?.busy}<span class="mmeta" aria-live="polite">Checking…</span>
+            {:else if customCheck && !customCheck.ok}<span class="mmeta" aria-live="polite">{customCheck.error}</span>
+            {:else if customCheck?.ok}
+              <span class="mmeta" aria-live="polite">Found: {Math.round(customCheck.fileBytes / 1e5) / 10} MB{#if customCheck.dims}, {customCheck.dims}-d{/if}{#if customCheck.licence}, {customCheck.licence}{/if}</span>
+              <span class="mcustomrow">
+                {#if customCheck.pooling === 'cls'}
+                  <span class="mmeta">Pooling</span>
+                  <div class="seg" role="group" aria-label="Pooling"><button class:on={customPooling === 'cls'} aria-pressed={customPooling === 'cls'} onclick={() => (customPooling = 'cls')}>CLS</button><button class:on={customPooling === 'mean'} aria-pressed={customPooling === 'mean'} onclick={() => (customPooling = 'mean')}>Mean</button></div>
+                {/if}
+                <button class="setbtn" onclick={addCustom}>Add to list</button>
+              </span>
+              <span class="mcustomrow">
+                <input class="mcinput" placeholder="Passage prefix, if the model needs one (e.g. passage: )" aria-label="Passage prefix (optional)" spellcheck="false" autocomplete="off" bind:value={customPrefix} />
+              </span>
+            {/if}
+          </span>
+        </li>
+      </ul>
 
       <div class="setlabel">Citations</div>
       <div class="setrow"><span class="sk">Reference list <span class="sh">Append a formatted bibliography of the works a note cites with [@key] — shown at the end of the note and included in exports</span></span>
@@ -2160,9 +2981,22 @@
         <button class="setbtn" onclick={connectFolder}>{vaultBusy ? 'Opening…' : (vaultBackend ? 'Switch folder…' : 'Choose folder…')}</button>
       </div>
       <div class="setrow"><span class="sk">Sync across machines <span class="sh">Keep the vault folder in Dropbox, iCloud Drive, OneDrive, Syncthing, or a Git repo, then open the same folder in Arf on your other computers. Arf keeps it in step automatically — both ways.</span></span></div>
-      <div class="setrow"><span class="sk">Workspace backup <span class="sh">{importMsg || 'one .arf file with every note, folder, and reference'}</span></span>
-        <span class="setbtnrow"><button class="setbtn" onclick={exportWorkspace}>Export .arf</button><button class="setbtn" onclick={() => fileInput.click()}>Import…</button></span>
+
+      <div class="setlabel">Import and export</div>
+      <div class="setrow"><span class="sk">Import notes <span class="sh">Markdown from Obsidian, Jekyll or any folder; a note with the same id keeps its newer copy, and a file imported again is recognised. Files dropped on the window import too.</span></span>
+        <span class="setbtnrow"><button class="setbtn" disabled={importBusy} onclick={() => pickImport('notes')}>Markdown files…</button><button class="setbtn" disabled={importBusy} onclick={() => pickImport('folder')}>Folder…</button><button class="setbtn" disabled={importBusy} onclick={() => pickImport('zip')}>ZIP…</button></span>
       </div>
+      <div class="setrow"><span class="sk">Import references <span class="sh">BibTeX, RIS or CSL-JSON; works already in the Library are skipped</span></span>
+        <button class="setbtn" disabled={importBusy} onclick={() => pickImport('refs')}>.bib, .ris, .json…</button>
+      </div>
+      <div class="setrow"><span class="sk">Export vault <span class="sh">every note as a Markdown file in its folder, plus references.bib, references.json and the vault’s images and reference files</span></span>
+        <button class="setbtn" onclick={exportVaultZipFile}>Export as ZIP</button>
+      </div>
+      <div class="setrow"><span class="sk">Workspace backup <span class="sh">one .arf file with every note, folder, and reference</span></span>
+        <span class="setbtnrow"><button class="setbtn" onclick={exportWorkspace}>Export .arf</button><button class="setbtn" onclick={() => fileInput.click()}>Import .arf…</button></span>
+      </div>
+      <!-- reserved below the buttons so nothing moves when a result arrives; the text stays until the next import or export -->
+      <p class="importmsg" role="status" aria-live="polite">{importMsg}</p>
       <input type="file" accept=".arf,application/json" bind:this={fileInput} onchange={importWorkspace} style="display:none" />
 
       <div class="setlabel">About</div>
@@ -2174,8 +3008,8 @@
 {/if}
 
 {#if imgCtl}
-  <div class="imgctlback" onclick={() => (imgCtl = null)} oncontextmenu={(e) => { e.preventDefault(); imgCtl = null; }} onkeydown={(e) => { if (e.key === 'Escape') imgCtl = null; }} role="button" tabindex="-1" aria-label="Close image controls"></div>
-  <div class="imgctl" style="left:{imgCtl.x}px; top:{imgCtl.y}px">
+  <div class="imgctlback" out:fade={{ duration: dur(DUR.exit) }} onoutrostart={leaving} onclick={() => (imgCtl = null)} oncontextmenu={(e) => { e.preventDefault(); imgCtl = null; }} onkeydown={(e) => { if (e.key === 'Escape') imgCtl = null; }} role="button" tabindex="-1" aria-label="Close image controls"></div>
+  <div class="imgctl" style="left:{imgCtl.x}px; top:{imgCtl.y}px" out:fade={{ duration: dur(DUR.exit) }} onoutrostart={leaving}>
     <div class="imgctl-row">
       <span class="imgctl-lbl">Size</span>
       <button class:on={imgCtl.w === '240'} onclick={() => setImageWidth(imgCtl.index, 240)}>S</button>
@@ -2192,15 +3026,33 @@
 {/if}
 
 {#if ctxMenu}
-  <div class="ctxback" onclick={closeCtx} oncontextmenu={(e) => { e.preventDefault(); e.stopPropagation(); closeCtx(); }} onkeydown={(e) => { if (e.key === 'Escape') closeCtx(); }} role="button" tabindex="0" aria-label="Close menu"></div>
-  <div class="ctxmenu" style="left:{ctxMenu.x}px; top:{ctxMenu.y}px" oncontextmenu={(e) => { e.preventDefault(); e.stopPropagation(); }} role="menu" tabindex="-1">
+  <div class="ctxback" out:fade={{ duration: dur(DUR.exit) }} onoutrostart={leaving} onclick={closeCtx} oncontextmenu={(e) => { e.preventDefault(); e.stopPropagation(); closeCtx(); }} onkeydown={(e) => { if (e.key === 'Escape') closeCtx(); }} role="button" tabindex="0" aria-label="Close menu"></div>
+  <div class="ctxmenu" style="left:{ctxMenu.x}px; top:{ctxMenu.y}px" oncontextmenu={(e) => { e.preventDefault(); e.stopPropagation(); }} onkeydown={ctxKey} role="menu" tabindex="-1"
+    out:fade={{ duration: dur(DUR.exit) }} onoutrostart={leaving}>
     {#each ctxMenu.items as it}
       {#if it.sep}
-        <div class="ctxsep"></div>
+        <div class="ctxsep" role="separator"></div>
       {:else}
-        <button class="ctxi" class:danger={it.danger} disabled={it.disabled} onclick={() => runCtx(it)}>{it.label}</button>
+        <button class="ctxi" class:danger={it.danger} role="menuitem" tabindex="-1" disabled={it.disabled} onclick={() => runCtx(it)}>{it.label}</button>
       {/if}
     {/each}
+  </div>
+{/if}
+
+{#if preview}
+  <!-- the link preview card: never focused (the link it describes keeps focus and is the keyboard path;
+       Enter on it opens the note), so its click handler has no key counterpart -->
+  <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
+  <div class="lpv" id="arf-lpv" role="tooltip" style="left:{preview.x}px; {preview.top != null ? 'top:' + preview.top + 'px' : 'bottom:' + preview.bottom + 'px'}"
+    in:fade={{ duration: dur(DUR.fast) }} out:fade={{ duration: dur(DUR.exit) }}
+    onpointerenter={() => clearTimeout(pvCloseTimer)} onpointerleave={pvCloseSoon} onmousedown={(e) => e.preventDefault()} onclick={pvOpen}>
+    <div class="lpv-t">{preview.title}</div>
+    {#if preview.newTitle != null}
+      <p class="lpv-x lpv-new">Not created yet; open the link to create it</p>
+    {:else}
+      {#if preview.text}<p class="lpv-x">{preview.text}</p>{:else}<p class="lpv-x lpv-new">Empty note.</p>{/if}
+      <div class="lpv-m">{pvLinks(preview)}</div>
+    {/if}
   </div>
 {/if}
 

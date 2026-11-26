@@ -41,3 +41,55 @@ export function conflictDecision(localCur, remote, seen) {
   const conflict = differs && strictlyNewer && !seen.has(key);
   return { conflict, key };
 }
+
+// A frontmatter-less vault file stores no timestamps: its loaded created/updated are stand-ins (the
+// file's mtime, or the first time this content was seen) and the loader marks it `_stamped`. A local
+// copy of it with identical content but other timestamps (2.0.0 cached such notes with the load time,
+// newer than the mtime) is the same note, not a newer edit: it takes the disk copy's timestamps, so it
+// neither wins the merge nor gets written back as Arf frontmatter. Only a real content difference
+// (title, body, tags, folder) keeps the local copy as it is.
+const sameContent = (a, b) => (a.title || '') === (b.title || '') && (a.body || '') === (b.body || '') &&
+  (a.folder || '') === (b.folder || '') && (a.tags || []).join(',') === (b.tags || []).join(',');
+export function adoptDiskStamps(local, disk) {
+  const stamped = new Map();
+  for (const d of disk) if (d._stamped) stamped.set(d.id, d);
+  if (!stamped.size) return local;
+  return local.map((n) => {
+    const d = stamped.get(n.id);
+    if (!d || (n.updated === d.updated && n.created === d.created) || !sameContent(n, d)) return n;
+    return { ...n, created: d.created, updated: d.updated, _path: d._path, _flushed: d.updated };
+  });
+}
+
+// Launch reconnect: merge the cached notes with the folder listing `ex` (pendingDelete = ids whose local
+// delete never confirmed). Returns the merged notes (with _path reconciled to the disk path) and the ids
+// that must be written to the folder: only in the cache, or newer there (a hard quit beat the file flush).
+// F5b: a cached note missing from the folder whose current version was confirmed written there was
+// deleted outside Arf, so it is dropped. Callers handle an empty listing separately.
+export function reconnectMerge(local, ex, pendingDelete) {
+  const live = pendingDelete && pendingDelete.size ? ex.filter((n) => !pendingDelete.has(n.id)) : ex;
+  const diskPath = new Map(ex.map((n) => [n.id, n._path]));
+  const diskUpdated = new Map(live.map((n) => [n.id, n.updated || '']));
+  const cached = adoptDiskStamps(local.filter((n) => diskPath.has(n.id) || !(n._flushed && n._flushed === n.updated)), live);
+  const notes = mergeByUpdated(live, cached), dirty = [];
+  for (const n of notes) {
+    if (diskPath.has(n.id)) n._path = diskPath.get(n.id);   // a stale cached _path would make a rename recreate the old file
+    const d = diskUpdated.get(n.id);
+    if (d === undefined || (n.updated || '') > d) dirty.push(n.id);
+  }
+  return { notes, dirty };
+}
+
+// When the sync loop re-reads the whole folder instead of the incremental scan. Regaining focus fires both
+// `focus` and `visibilitychange`; a full request that arrives while a full read is already in flight is
+// that same request, so it does not schedule a second one. During an incremental tick it still does.
+// request(): ask for a full read; begin() at the start of a tick returns whether it is full;
+// end(ok) after it, where a failed full tick asks again.
+export function fullReadGate() {
+  let want = false, inFlight = false;
+  return {
+    request() { if (!inFlight) want = true; },
+    begin() { inFlight = want; want = false; return inFlight; },
+    end(ok) { if (inFlight && !ok) want = true; inFlight = false; },
+  };
+}

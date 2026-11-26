@@ -6,8 +6,15 @@
 // Build the bundle object written to disk. `exported` is passed in so callers control
 // the timestamp (and tests stay deterministic). `readerHls` is the reader highlight map
 // (source key → snippet list) so highlights travel with the workspace and can be re-synced.
+// _flushed (the `updated` last confirmed on this machine's disk) and _stamped (the loaded timestamps are
+// stand-ins for a frontmatter-less file) are local sync state and never travel.
 export function buildBundle(notes, folders, refs, version, exported, libFolders = [], readerHls = {}) {
-  return { arf: 1, app: 'Arf', version, exported, notes, folders, refs, libFolders, readerHls };
+  return { arf: 1, app: 'Arf', version, exported, notes: notes.map(stripLocal), folders, refs, libFolders, readerHls };
+}
+function stripLocal(n) {
+  if (!n || typeof n !== 'object' || !('_flushed' in n || '_stamped' in n)) return n;
+  const { _flushed, _stamped, ...rest } = n;
+  return rest;
 }
 
 // Parse + validate a bundle's text. Throws a user-facing message if it isn't one.
@@ -22,8 +29,9 @@ export function readBundle(text) {
 // the unrelated file that occupies that path in THIS vault. Keep only a same-id note's own
 // local path. `newId` backfills a missing id (else id-less notes collapse into one on merge).
 export function normalizeNotes(rawNotes, localPathById, newId) {
+  // also drop a foreign _flushed: kept, it would mark the note as already on THIS disk
   return rawNotes.filter((n) => n && typeof n === 'object').map((n) => ({
-    ...n,
+    ...stripLocal(n),
     id: (typeof n.id === 'string' && n.id.trim()) ? n.id : newId(),
     title: typeof n.title === 'string' ? n.title : 'Untitled',
     tags: Array.isArray(n.tags) ? n.tags.filter((t) => typeof t === 'string') : [],

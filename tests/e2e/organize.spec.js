@@ -42,3 +42,32 @@ test('folders, moves, and reordering persist across a reload', async ({ page }) 
   await expect(page.locator('[data-folder="Ideas/Research"]')).toBeVisible();
   await expect(page.locator('select.fmove')).toHaveValue('Ideas/Research');
 });
+
+// Native-run defects D1/D3: a subfolder name typed right after the context-menu command lands in the input (the
+// closing menu must not take focus back), and a collapsed folder stays collapsed after a reload.
+test('new subfolder from the context menu takes typing, and collapse state persists', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.locator('aside.list').getByText('Welcome to Arf')).toBeVisible();
+  await page.locator('button.mini').first().click();
+  await page.locator('input.nfinput').fill('Alpha');
+  await page.locator('input.nfinput').press('Enter');
+  const alpha = page.locator('[data-folder="Alpha"]');
+  await alpha.click({ button: 'right' });
+  await page.getByRole('menuitem', { name: 'New subfolder' }).click();
+  await page.keyboard.type('Beta');   // no fill(): the input must already hold focus
+  await page.keyboard.press('Enter');
+  await expect(page.locator('[data-folder="Alpha/Beta"]')).toBeVisible();
+  await alpha.click({ button: 'right' });
+  await page.getByRole('menuitem', { name: 'Collapse' }).click();
+  await expect(page.locator('[data-folder="Alpha/Beta"]')).toHaveCount(0);
+  await page.reload();
+  await expect(page.locator('[data-folder="Alpha"]')).toBeVisible();
+  await expect(page.locator('[data-folder="Alpha/Beta"]')).toHaveCount(0);
+  // Rename… prefills the old name selected, so keyboard-only typing replaces it
+  await page.locator('[data-folder="Alpha"]').click({ button: 'right' });
+  await page.getByRole('menuitem', { name: 'Rename…' }).click();
+  await page.keyboard.type('Gamma');
+  await page.keyboard.press('Enter');
+  await expect(page.locator('[data-folder="Gamma"]')).toBeVisible();
+  await expect(page.locator('[data-folder="Alpha"]')).toHaveCount(0);
+});

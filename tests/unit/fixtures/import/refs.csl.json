@@ -1,0 +1,4 @@
+[
+ {"id":"doe2018","type":"article-journal","title":"Cells","author":[{"family":"Doe","given":"John"},{"literal":"WHO Consortium"}],"issued":{"date-parts":[[2018,3]]},"container-title":"Cell","DOI":"10.1016/j.cell.2018.01.001","page":"1-10","volume":7,"URL":"https://x.org"},
+ {"type":"chapter","title":"Chapter","author":[{"family":"Şahin","given":"A"}],"issued":{"raw":"2020-01-01"}}
+]

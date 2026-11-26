@@ -34,30 +34,38 @@ const SEED = [
 let _corruptKey = null;
 export function corruptBackupKey() { return _corruptKey; } // set if the last load hit corrupt storage
 
-export function loadNotes() {
+export function loadNotes() { return loadLegacyNotes().notes; }
+
+// { present, notes, corrupt }: whether the key exists, its notes, and whether it failed to parse
+// (in which case it was backed up under corruptBackupKey(), when that write succeeded)
+export function loadLegacyNotes() {
   let raw = null;
   try { raw = localStorage.getItem(KEY); } catch (e) {}
   if (raw != null) {
     // real vault present — never silently reseed over it
-    try { const p = JSON.parse(raw); if (!Array.isArray(p)) throw new Error('vault is not an array'); return p; }
+    try { const p = JSON.parse(raw); if (!Array.isArray(p)) throw new Error('vault is not an array'); return { present: true, notes: p, corrupt: false }; }
     catch (e) {
       // corrupt but recoverable: back it up, flag it, do not overwrite
       const key = KEY + '-corrupt-' + Date.now();
       try { localStorage.setItem(key, raw); _corruptKey = key; } catch (e2) {}
-      return [];
+      return { present: true, notes: [], corrupt: true };
     }
   }
   // localStorage absent: return empty. Seeding is decided by the caller on a genuine first run,
   // so a wiped cache over an existing vault repopulates from disk rather than adding phantom notes.
-  return [];
+  return { present: false, notes: [], corrupt: false };
 }
 
 // The getting-started sample notes — seeded once, only on a true first run (no vault ever chosen).
+// The caller persists them through the note cache (cache.js), so the legacy key is not recreated.
 export function seedNotes() {
-  const seeded = SEED.map((s) => ({ id: ulid(), folder: '', created: nowISO(), updated: nowISO(), ...s }));
-  saveNotes(seeded);
-  return seeded;
+  return SEED.map((s) => ({ id: ulid(), folder: '', created: nowISO(), updated: nowISO(), ...s }));
 }
+
+// The legacy whole-vault localStorage key, kept for the one-time migration into IndexedDB (cache.js)
+// and as the cache when IndexedDB is unavailable.
+export function hasLegacyNotes() { try { return localStorage.getItem(KEY) != null; } catch (e) { return false; } }
+export function removeLegacyNotes() { try { localStorage.removeItem(KEY); return true; } catch (e) { return false; } }
 
 // returns true only on a real write, so the UI never claims "saved" when it wasn't
 export function saveNotes(notes) {

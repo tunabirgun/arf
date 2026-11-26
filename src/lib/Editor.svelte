@@ -8,7 +8,8 @@
   import { syntaxHighlighting, HighlightStyle } from '@codemirror/language';
   import { tags as hlTags } from '@lezer/highlight';
 
-  let { value = '', onchange, resemble = null, oncite = null, onimage = null } = $props();
+  import { importKind } from './importflow.js';
+  let { value = '', onchange, resemble = null, oncite = null, onimage = null, onmode = null, onimport = null } = $props();
   // markers this editor treats as interchangeable list/quote prefixes, so a toolbar
   // button converts one into another instead of stacking or half-stripping it
   const LIST_MARKER = /^(- \[[ xX]\] |[-*+] |\d+\. |> )/;
@@ -52,6 +53,8 @@
           keymap.of([
             { key: 'Mod-b', run: () => { wrap('**'); return true; } },
             { key: 'Mod-i', run: () => { wrap('*'); return true; } },
+            // back to the read view from inside the text (CodeMirror binds nothing to Mod-e on Windows/Linux; on macOS Mod is Cmd)
+            { key: 'Mod-e', run: () => { if (!onmode) return false; onmode('read'); return true; } },
             { key: 'Enter', run: continueList },
             ...defaultKeymap, ...historyKeymap,
           ]),
@@ -66,7 +69,7 @@
           EditorView.domEventHandlers({
             scroll() { if (hint) hint = null; return false; }, // don't let the mark drift from its paragraph
             paste(e) { const fs = e.clipboardData && e.clipboardData.files; if (fs) for (const f of fs) if (/^image\//.test(f.type)) { insertImage(f); e.preventDefault(); return true; } return false; },
-            drop(e) { const fs = e.dataTransfer && e.dataTransfer.files; if (fs && fs.length) { let hit = false; for (const f of fs) if (/^image\//.test(f.type)) { insertImage(f); hit = true; } if (hit) { e.preventDefault(); return true; } } return false; },
+            drop: onDrop,
           }),
         ],
       }),
@@ -92,6 +95,18 @@
       hintTop = Math.max(2, coords.top - host.top);
       hint = m;
     } else hint = null;
+  }
+  // a dropped Markdown, zip, reference or .arf file goes to the import flow (never pasted as text into this
+  // note); a dropped image is inserted here; anything else is left to CodeMirror (plain-text drags)
+  function onDrop(e) {
+    const fs = e.dataTransfer && e.dataTransfer.files;
+    if (!fs || !fs.length) return false;
+    const files = [...fs], imports = files.filter((f) => { const k = importKind(f.name); return k && k !== 'image'; });
+    let hit = false;
+    if (imports.length && onimport) { onimport(imports); hit = true; }
+    for (const f of files) if (/^image\//.test(f.type)) { insertImage(f); hit = true; }
+    if (hit || imports.length) { e.preventDefault(); return true; }
+    return false;
   }
   // paste/drop/insert an image. In the desktop app onimage stores it as a file under the vault's
   // attachments/images/ and returns a relative path (organized, not bloating the .md); on the web,

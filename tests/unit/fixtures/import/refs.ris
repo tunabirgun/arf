@@ -1,0 +1,27 @@
+TY  - JOUR
+ID  - smith2020
+AU  - Smith, Jane
+AU  - John Doe
+TI  - A Study of Things
+JO  - Journal of Things
+PY  - 2020/05/01/
+VL  - 12
+SP  - 34
+EP  - 56
+DO  - 10.1/x
+SN  - 1234-5678
+AB  - First line
+  continued here.
+ER  - 
+
+TY  - BOOK
+AU  - Jones, Amy
+T1  - The Book
+PY  - 2019
+PB  - Uni Press
+SN  - 978-0-262-03561-3
+ER  - 
+TY  - ELEC
+T1  - A Page
+UR  - https://example.org
+ER  -

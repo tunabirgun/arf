@@ -26,7 +26,34 @@ export function parseInlineTags(body) {
   return [...out];
 }
 
+// Per-note parse products memoized by note id, reused only while BOTH body and title are the identical
+// strings. Products fill lazily (index needs links+tags, vectorizer needs terms) and are shared read-only.
+// Ids absent from the notes passed to a build are evicted so deleted notes don't pile up.
+const parseCache = new Map();
+const cacheStats = { hits: 0, misses: 0 };
+export function parseCacheStats() { return { size: parseCache.size, hits: cacheStats.hits, misses: cacheStats.misses }; }
+export function clearParseCache() { parseCache.clear(); cacheStats.hits = cacheStats.misses = 0; }
+function entryOf(n) {
+  const { body, title } = n;
+  // a tampered cache can hold non-string fields: parse those fresh each time and never store them
+  const ok = (typeof body === 'string' || body == null) && (typeof title === 'string' || title == null);
+  const e = ok ? parseCache.get(n.id) : undefined;
+  if (e && e.body === body && e.title === title) { cacheStats.hits++; return e; }
+  cacheStats.misses++;
+  const fresh = { body, title, links: null, tags: null, terms: null };
+  if (ok) parseCache.set(n.id, fresh);
+  return fresh;
+}
+function evictAbsent(notes) {
+  const ids = new Set(notes.map((n) => n.id));
+  for (const id of parseCache.keys()) if (!ids.has(id)) parseCache.delete(id);
+}
+const linksOf = (e) => e.links || (e.links = parseWikilinks(e.body));
+const tagsOf = (e) => e.tags || (e.tags = parseInlineTags(e.body));
+const termsOf = (e) => e.terms || (e.terms = tokenize((e.title || '') + ' ' + (e.body || '')));
+
 export function buildIndex(notes) {
+  evictAbsent(notes);
   // Object.create(null): a note titled/tagged "__proto__" or "constructor" must
   // behave as an ordinary key, not crash index-building for the whole vault.
   const byId = Object.create(null), byTitle = Object.create(null);
@@ -41,7 +68,7 @@ export function buildIndex(notes) {
   const fwd = Object.create(null), back = Object.create(null);
   notes.forEach((n) => {
     const links = new Set();
-    parseWikilinks(n.body).forEach((title) => {
+    linksOf(entryOf(n)).forEach((title) => {
       const t = byTitle[title.toLowerCase()];
       if (t && t.id !== n.id) { links.add(t.id); (back[t.id] = back[t.id] || new Set()).add(n.id); }
     });
@@ -50,7 +77,7 @@ export function buildIndex(notes) {
   const backArr = Object.create(null); Object.keys(back).forEach((k) => (backArr[k] = [...back[k]]));
   const tagIndex = Object.create(null), noteTags = Object.create(null);
   notes.forEach((n) => {
-    const tags = new Set([...(Array.isArray(n.tags) ? n.tags : []), ...parseInlineTags(n.body)].filter((t) => typeof t === 'string').map((t) => t.toLowerCase()));
+    const tags = new Set([...(Array.isArray(n.tags) ? n.tags : []), ...tagsOf(entryOf(n))].filter((t) => typeof t === 'string').map((t) => t.toLowerCase()));
     noteTags[n.id] = [...tags];
     tags.forEach((t) => (tagIndex[t] = tagIndex[t] || []).push(n.id));
   });
@@ -75,8 +102,11 @@ function tokenize(text) {
 
 // Build the note vectors AND a vectorize() that projects arbitrary text (e.g. the
 // paragraph being typed) into the same IDF space, so it can be compared live.
-export function buildVectorizer(notes) {
-  const docs = notes.map((n) => ({ id: n.id, terms: tokenize((n.title || '') + ' ' + (n.body || '')) }));
+// opts.evict = false: a build over a subset of the vault (resembleParagraph leaves out the note being
+// written) must not evict the left-out notes, or the next full build re-parses them. Output is unaffected.
+export function buildVectorizer(notes, opts = {}) {
+  if (opts.evict !== false) evictAbsent(notes);
+  const docs = notes.map((n) => ({ id: n.id, terms: termsOf(entryOf(n)) }));
   const df = Object.create(null); docs.forEach((d) => new Set(d.terms).forEach((t) => (df[t] = (df[t] || 0) + 1)));
   const N = docs.length || 1;
   // smoothed IDF (+1) so terms shared across all notes still carry weight —
@@ -106,6 +136,10 @@ export function cosine(a, b) {
   let s = 0; for (const t in x) if (y[t]) s += x[t] * y[t];
   return s;
 }
+
+// The TF-IDF cosine at which a paragraph counts as resembling another note (the editor's faint mark).
+// Resonance's word-overlap fallback uses the same floor, so both TF-IDF surfaces agree on "close enough".
+export const TFIDF_FLOOR = 0.13;
 
 export function related(id, vecs, notes, { min = 0.06, max = 6, exclude = new Set() } = {}) {
   const v = vecs[id]; if (!v) return [];

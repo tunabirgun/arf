@@ -9,6 +9,19 @@ describe('buildBundle', () => {
       notes: [{ id: 'a' }], folders: ['f'], refs: [{ id: 'r' }], libFolders: ['LibFolder'], readerHls: { 'ref:x': ['a note'] },
     });
   });
+  it('never carries the local _flushed sync marker, and leaves the source notes untouched', () => {
+    const src = [{ id: 'a', updated: 'u', _flushed: 'u', _path: 'a.md' }];
+    const b = buildBundle(src, [], [], '2.1.0', 'x');
+    expect(b.notes).toEqual([{ id: 'a', updated: 'u', _path: 'a.md' }]);
+    expect('_flushed' in b.notes[0]).toBe(false);
+    expect(JSON.stringify(b)).not.toContain('_flushed');
+    expect(src[0]._flushed).toBe('u');
+  });
+  it('never carries the per-load _stamped marker, in a bundle or through an import', () => {
+    const b = buildBundle([{ id: 'a', updated: 'u', _stamped: true }], [], [], '2.1.0', 'x');
+    expect(b.notes).toEqual([{ id: 'a', updated: 'u' }]);
+    expect('_stamped' in normalizeNotes([{ id: 'a', _stamped: true }], new Map(), () => 'n')[0]).toBe(false);
+  });
 });
 
 describe('mergeHls', () => {
@@ -64,6 +77,10 @@ describe('normalizeNotes', () => {
     expect(n.tags).toEqual([]);
     expect(n.body).toBe('');
     expect(n.folder).toBe('');
+  });
+  it('drops a _flushed marker carried in from another machine', () => {
+    const [n] = normalizeNotes([{ id: 'a', updated: 'u', _flushed: 'u' }], new Map(), () => 'GEN');
+    expect('_flushed' in n).toBe(false);
   });
   it('skips non-object entries', () => {
     const out = normalizeNotes([null, 'x', 3, { id: 'a' }], new Map(), () => 'GEN');

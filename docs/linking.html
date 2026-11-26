@@ -28,22 +28,28 @@
   <p>Organization in Arf is a hybrid, because that is what researchers actually use in practice. You get folders and subfolders for coarse structure, concept hashtags for categories, and links for the real conceptual relationships between ideas. None of them is mandatory; you can save a note with no folder and no tag and only connect it later.</p>
 
   <h2>Links that survive a rename</h2>
-  <p>You link one note to another by referring to it, and Arf keeps track of the relationship in both directions. The note you point to shows a <strong>backlinks</strong> list — a quiet "referenced in" section at the foot of the page — so you discover the connections you forgot you made.</p>
-  <p>The important detail is under the surface. Every note carries a stable identifier that never changes, and links resolve to that identifier rather than to a filename. So you can rename a note, in Arf or in Finder, and every link to it still holds. Link rot from renaming, the quiet way a note collection falls apart, does not happen here.</p>
-  <div class="note"><span class="nlabel">Portable by default</span><p>Links are written as ordinary Markdown, so a vault dropped into a GitHub repository or another editor still renders. Wiki-style <code>[[links]]</code> are available as an option for those who prefer them.</p></div>
+  <p>You link one note to another by writing its title in double brackets, <code>[[Pointer states]]</code>, or <code>[[Pointer states|shown text]]</code> to show different words. Arf keeps track of the relationship in both directions. The note you point to lists the link under <strong>Referenced in</strong> in the side panel, so you discover the connections you forgot you made.</p>
+  <p>The important detail is under the surface. Every note carries a stable identifier that never changes, and links resolve to that identifier rather than to a filename. Rename a note in Arf and every <code>[[link]]</code> to it is rewritten to the new title; rename or move the file on disk and the link still finds it by id.</p>
+  <div class="note"><span class="nlabel">Portable by default</span><p><code>[[Wikilinks]]</code> are the same syntax Obsidian and many other Markdown tools use, so a vault opened elsewhere keeps its links readable, and an Obsidian vault imported into Arf keeps its links working.</p></div>
+
+  <h2>Previews and context</h2>
+  <p>Rest the pointer on a link in the reading view and a small card shows the linked note's title, the first lines of its text, and how many links it has in and out; click the card to open the note, or to create it if it does not exist yet. The same card appears when a link receives keyboard focus, and for the notes Resonance suggests in the side panel.</p>
+  <p>Each backlink under <strong>Referenced in</strong> shows the sentence in which the other note mentions this one, with the link in bold. You can see why a note points here without opening it.</p>
 
   <h2>Tags for concepts</h2>
   <p>A hashtag like <code>#decoherence</code> groups notes by concept, and tags nest — <code>#method/statistics</code> — so you can be as coarse or as fine as you like. Clicking a tag filters your notes to it. Tags and folders answer different questions: a folder is where a note lives, a tag is what it is about, and a link is how it relates to another idea.</p>
 
   <h2>The knowledge graph</h2>
-  <p>Most note tools ship a graph that looks impressive in a screenshot and turns into an unreadable hairball the moment you have real notes. Arf takes the opposite approach.</p>
-  <p>The everyday graph is <strong>local</strong>: it shows the note you are reading and its immediate neighbours — the notes one link away, in either direction. It is small, legible, and always about where you are. When you want the whole picture, a single click opens the <strong>full-window graph</strong> of your entire vault, and it is built to be used, not just admired:</p>
+  <p>The everyday graph is <strong>local</strong>: in the side panel it shows the note you are reading, the notes one link away in either direction, and, as dashed lines, the unlinked notes Resonance suggests. The <strong>full-window graph</strong> (<span class="mono">Ctrl/⌘+G</span>, or <em>Full</em> above the local graph) shows the whole vault.</p>
+  <p>The layout is a force simulation: linked notes attract, all notes repel, and the arrangement settles and then stops moving.</p>
   <div class="grid grid3">
-    <div class="cell"><span class="k">Move</span><h3>Drag &amp; arrange</h3><p>Grab any node and place it. The layout settles once and then holds still — no perpetual jitter.</p></div>
-    <div class="cell"><span class="k">Look</span><h3>Zoom, pan, hover</h3><p>Scroll to zoom toward the cursor, drag the background to pan, and hover a node to light up its neighbourhood while the rest recedes.</p></div>
-    <div class="cell"><span class="k">Select</span><h3>Multi-select</h3><p>Ctrl-click (⌘-click on a Mac) gathers several nodes at once, so you can reason about a cluster rather than one note at a time.</p></div>
+    <div class="cell"><span class="k">Move</span><h3>Drag and pin</h3><p>Drag a note and the notes linked to it are pulled along. Release with Shift held, or double-click, to pin a note where it is; pins are remembered, and <em>Unpin all</em> releases them.</p></div>
+    <div class="cell"><span class="k">Look</span><h3>Zoom and pan</h3><p>Zoom toward the cursor with the wheel or a pinch, drag the background to pan (it glides to a stop), and hover a note to light up its neighbours while the rest recedes.</p></div>
+    <div class="cell"><span class="k">Find</span><h3>Search</h3><p>Type in <em>Find a note</em> and press Enter to zoom to the first match. Ctrl-click (⌘-click on a Mac) selects several notes at once.</p></div>
   </div>
-  <p>The graph reads in ink, not colour. A node's size grows with how many links point to it, and a filled circle has connections while a hollow one is still an orphan. Nothing depends on colour alone, so it stays legible for everyone.</p>
+  <p>The toolbar narrows the view: a depth control shows only the notes 1, 2 or 3 links from the open note (or the whole vault); tag and folder filters keep one part of the vault; <em>Hide unlinked</em> drops orphans; and <em>Suggested links</em> turns the dashed edges on or off. The <em>Forces</em> panel adjusts repulsion, link distance, link strength and centring, and the view can be saved as a PNG or SVG image.</p>
+  <p>The graph works from the keyboard too. Arrow keys move from a note to the linked note in that direction, Enter opens it, <span class="mono">P</span> pins or unpins it, <span class="mono">+</span>, <span class="mono">−</span> and <span class="mono">0</span> zoom and fit, and Escape clears the selection. With reduced motion turned on in your system, the layout is computed before it is shown and nothing animates.</p>
+  <p>The graph reads in ink, not colour. A node's size grows with its number of links, a filled circle has connections while a hollow one is still an orphan, and a suggestion is a dashed rather than a solid line. Nothing depends on colour alone.</p>
 
   <div class="pager">
     <a class="prev" href="writing.html"><span class="dir">Previous</span>← Writing &amp; reading</a>

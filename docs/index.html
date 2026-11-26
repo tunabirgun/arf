@@ -90,13 +90,13 @@
   <section class="tour" aria-roledescription="carousel" aria-label="A tour of Arf" tabindex="0">
     <div class="tour-vp" id="tourVp">
       <div class="tour-track" id="tourTrack">
-        <div class="tour-slide"><img src="assets/gallery/plain-files.png" alt="A vault of plain Markdown files — a folder tree beside a note" width="2536" height="1902" draggable="false" loading="lazy"></div>
-        <div class="tour-slide"><img src="assets/gallery/note.png" alt="A note with prose, a typeset equation, a wikilink, and code" width="2536" height="1902" draggable="false" loading="lazy"></div>
-        <div class="tour-slide"><img src="assets/gallery/formatting.png" alt="Write mode with a light formatting bar" width="2536" height="1902" draggable="false" loading="lazy"></div>
-        <div class="tour-slide"><img src="assets/gallery/graph.png" alt="The knowledge graph" width="2536" height="1902" draggable="false" loading="lazy"></div>
-        <div class="tour-slide"><img src="assets/gallery/resonance.png" alt="A note beside the Resonance rail of similar notes" width="2536" height="1902" draggable="false" loading="lazy"></div>
-        <div class="tour-slide"><img src="assets/gallery/faint-mark.png" alt="A note being written, with a faint resemblance mark" width="2536" height="1902" draggable="false" loading="lazy"></div>
-        <div class="tour-slide"><img src="assets/gallery/synthesis.png" alt="The weekly Synthesis pairing two unlinked notes" width="2536" height="1902" draggable="false" loading="lazy"></div>
+        <div class="tour-slide"><img src="assets/gallery/plain-files.png" alt="The notes sidebar with nested folders beside an open note with tasks and a citation" width="2880" height="1800" draggable="false" loading="lazy"></div>
+        <div class="tour-slide"><img src="assets/gallery/note.png" alt="A note with prose and a typeset equation, with the preview card of a linked note" width="2880" height="1800" draggable="false" loading="lazy"></div>
+        <div class="tour-slide"><img src="assets/gallery/formatting.png" alt="Write mode with the formatting toolbar above the Markdown source" width="2880" height="1800" draggable="false" loading="lazy"></div>
+        <div class="tour-slide"><img src="assets/gallery/graph.png" alt="The full-window knowledge graph with its toolbar and dashed suggested links" width="2880" height="1800" draggable="false" loading="lazy"></div>
+        <div class="tour-slide"><img src="assets/gallery/resonance.png" alt="A note beside the side panel with backlinks in context and Resonance scores from ArfLLM" width="2880" height="1800" draggable="false" loading="lazy"></div>
+        <div class="tour-slide"><img src="assets/gallery/faint-mark.png" alt="A note being written, with a faint mark in the margin naming a similar note" width="2880" height="1800" draggable="false" loading="lazy"></div>
+        <div class="tour-slide"><img src="assets/gallery/synthesis.png" alt="The Synthesis panel listing unlinked pairs of similar notes with the words they share" width="2880" height="1800" draggable="false" loading="lazy"></div>
       </div>
       <button class="tour-arrow tprev" id="tourPrev" type="button" aria-label="Previous">‹</button>
       <button class="tour-arrow tnext" id="tourNext" type="button" aria-label="Next">›</button>
@@ -111,17 +111,18 @@
 
   <div class="cardnav">
     <a href="writing.html"><span class="t">Writing &amp; reading</span><span class="d">A calm Markdown editor — write the syntax by hand or format from the toolbar without it. Focus mode, code, and equations.</span></a>
-    <a href="linking.html"><span class="t">Links &amp; the graph</span><span class="d">Bidirectional links that survive renames, concept tags, and a knowledge graph you can actually read.</span></a>
-    <a href="machine.html"><span class="t">The on-device machine</span><span class="d">Resonance and the weekly Synthesis digest — private suggestions that turn a note pile into a network.</span></a>
+    <a href="linking.html"><span class="t">Links &amp; the graph</span><span class="d">Wikilinks that survive renames, link previews, backlinks with their context, concept tags, and a graph you can drag, filter, search and export.</span></a>
+    <a href="machine.html"><span class="t">The on-device machine</span><span class="d">Resonance and Synthesis, the optional on-device models ArfLLM and ArfLLM_Multi, and how suggestion thresholds are set.</span></a>
     <a href="library.html"><span class="t">The Library</span><span class="d">Every reference in detail, fetched from trusted open sources; keyword search, a folder tree, attach or fetch an open-access PDF or EPUB to read and quote, and export to BibTeX, RIS, CSL-JSON, and Zenodo.</span></a>
-    <a href="data.html"><span class="t">Your data</span><span class="d">The plain-file vault, the <span class="mono">.arf</span> bundle, continuous folder sync across devices, and document export to Markdown, HTML, and PDF.</span></a>
+    <a href="data.html"><span class="t">Your data</span><span class="d">The plain-file vault, import from Markdown folders, Obsidian vaults and reference files, ZIP and <span class="mono">.arf</span> export, continuous folder sync, and document export to Markdown, HTML, and PDF.</span></a>
     <a href="design.html"><span class="t">Design &amp; the ink</span><span class="d">Why Arf is set in EB Garamond, why it is monochrome, and why the one accent is iron-gall blue.</span></a>
   </div>
 
   <h2>The name</h2>
   <p>Arf is named after <strong><a href="https://en.wikipedia.org/wiki/Cahit_Arf" target="_blank" rel="noopener">Cahit Arf</a></strong> (1910–1997), the Turkish mathematician. His best-known idea, the <a href="https://en.wikipedia.org/wiki/Arf_invariant" target="_blank" rel="noopener">Arf invariant</a>, reduces a complicated object to a single bit — connected, or not. That spirit runs through the tool: the quiet question behind a second brain is always whether a thought has found its place yet. Every note in Arf wears a small mark for exactly that, a filled dot once it is linked and a hollow one while it stands alone.</p>
 
-  <div class="note"><span class="nlabel">Runs on your device</span><p>Everything — your notes, the graph, and the suggestions from the on-device machine — runs on your own computer. There is no account and no server, and your text never leaves your device. See <a href="machine.html">The Machine</a> for how the private suggestion engine works.</p></div>
+
+  <div class="note"><span class="nlabel">Runs on your device</span><p>Your notes, the graph, and the suggestions all run on your own computer. There is no account and no Arf server, and your note text never leaves your device. The optional suggestion models are downloaded from Hugging Face only when you turn them on; see <a href="machine.html">The Machine</a> for what is downloaded and from where.</p></div>
 
   <h2>Get Arf</h2>
   <p>Arf is a desktop app. Download the installer for your system from the <a href="https://github.com/tunabirgun/arf/releases/latest">releases page</a> — an <span class="mono">.exe</span> for Windows, a <span class="mono">.dmg</span> for macOS, an <span class="mono">.AppImage</span> or <span class="mono">.deb</span> for Linux. At first launch Arf asks you to choose the folder that will hold your notes; that folder is the vault. There is no account to create.</p>
@@ -147,13 +148,14 @@
 <script>
 (function(){
   var slides=[
-    {t:'Plain Markdown files', d:'A folder on your disk — copy it, sync it, open it anywhere.'},
-    {t:'One note: prose, math & code', d:'Markdown in, typeset out — inline math and fenced code.'},
-    {t:'Formatting when you want it', d:'Bold, headings, links, quotes — plain Markdown underneath.'},
-    {t:'The knowledge graph', d:'Every wikilink is an edge; orphans stand alone.'},
-    {t:'Resonance', d:'Related notes surfaced on-device, even when nothing links them.'},
-    {t:'The faint mark', d:'A quiet dot when a thought already lives in another note.'},
-    {t:'The weekly synthesis', d:'Alike-but-unlinked notes, one click from a link.'}
+    {t:'Plain Markdown files', d:'Folders and notes in the sidebar are folders and files on your disk.'},
+    {t:'One note: prose and math', d:'Typeset math, citations, and a preview of the linked note under the pointer.'},
+    {t:'Formatting when you want it', d:'The toolbar writes plain Markdown, which stays visible and editable.'},
+    {t:'The knowledge graph', d:'Drag, pin, filter, and search; dashed edges are suggested links.'},
+    {t:'Resonance', d:'Backlinks with their sentence, and similar unlinked notes scored on-device.'},
+    {t:'The faint mark', d:'A quiet mark in the margin when a paragraph resembles another note.'},
+    {t:'Synthesis', d:'Alike-but-unlinked pairs with the words they share, one click from a link.'}
+
   ];
   var track=document.getElementById('tourTrack'), vp=document.getElementById('tourVp'),
       cap=document.getElementById('tourCap'), dotsWrap=document.getElementById('tourDots'),

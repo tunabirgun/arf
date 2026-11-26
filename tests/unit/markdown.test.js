@@ -1,6 +1,9 @@
 // @vitest-environment jsdom
-import { describe, it, expect } from 'vitest';
-import { renderMarkdown, setLinkResolver, setCiteResolver, parseImageAlt, withSizeHint, numberFigures } from '../../src/lib/markdown.js';
+import { describe, it, expect, beforeAll, vi } from 'vitest';
+import { renderMarkdown, setLinkResolver, setCiteResolver, parseImageAlt, withSizeHint, numberFigures, loadMath } from '../../src/lib/markdown.js';
+import mathExpected from './fixtures/math-expected.json';
+
+beforeAll(() => loadMath()); // KaTeX is lazy; the suite below renders math
 
 setLinkResolver((t) => (t === 'foo' ? { id: 'x1' } : null));
 setCiteResolver((k) => (k === 'guth1981' ? { authors: [{ f: 'Guth' }], year: 1981, title: 'Inflation' } : null));
@@ -100,5 +103,55 @@ describe('numberFigures', () => {
   it('leaves an inline image (not its own paragraph) alone', () => {
     const html = numberFigures('<p>text <img src="a.png" alt="x"> more</p>');
     expect(html).not.toContain('<figure');
+  });
+});
+
+// KaTeX loads on demand: before loadMath() math is an escaped placeholder, after it the output must be
+// byte-identical to the eager-import renderer. Expected strings in fixtures/math-expected.json were captured
+// from the pre-change renderMarkdown (static katex import).
+describe('lazy math', () => {
+  const fresh = async () => { vi.resetModules(); return import('../../src/lib/markdown.js'); }; // unloaded module state
+
+  it('shows an escaped math-pending placeholder before KaTeX is loaded', async () => {
+    const m = await fresh();
+    expect(m.mathReady()).toBe(false); expect(m.mathPending()).toBe(false);
+    const inline = m.renderMarkdown('Energy $a < b & "c"$ here');
+    expect(inline).toContain('<code class="math-pending">a &lt; b &amp; "c"</code>'); // DOMPurify re-serializes &quot; in text
+    expect(inline).not.toContain('katex');
+    const display = m.renderMarkdown('$$x^2$$');
+    expect(display).toContain('<div class="math-display"><code class="math-pending math-pending-display">x^2</code></div>');
+    expect(m.mathPending()).toBe(true);
+  });
+  it('keeps hostile TeX inert through DOMPurify', async () => {
+    const m = await fresh();
+    const html = m.renderMarkdown('x $<img src=x onerror=alert(1)>$ y\n\n$$<script>alert(1)</script>$$');
+    const box = document.createElement('div'); box.innerHTML = html;
+    expect(box.querySelector('img, script')).toBeNull();      // the TeX is text, never an element
+    expect(box.querySelector('[onerror]')).toBeNull();
+    expect(box.textContent).toContain('<img src=x onerror=alert(1)>');
+  });
+  it('does not flag pending for prose without math', async () => {
+    const m = await fresh();
+    m.renderMarkdown('it costs $5 and $10 total, no math here');
+    expect(m.mathPending()).toBe(false);
+  });
+  it('loadMath is idempotent, notifies listeners once, and clears pending', async () => {
+    const m = await fresh();
+    m.renderMarkdown('$x$');
+    expect(m.mathPending()).toBe(true);
+    const cb = vi.fn(); const off = m.onMathReady(cb); const never = vi.fn(); m.onMathReady(never)(); // unsubscribed listener stays silent
+    const p1 = m.loadMath(), p2 = m.loadMath();
+    expect(p2).toBe(p1);
+    await p1; await m.loadMath();
+    expect(m.mathReady()).toBe(true); expect(m.mathPending()).toBe(false);
+    expect(cb).toHaveBeenCalledTimes(1); expect(never).not.toHaveBeenCalled();
+    off();
+    expect(m.renderMarkdown('$x$')).toContain('class="katex"');
+  });
+  it('after loading, output is byte-identical to the eager-import renderer', async () => {
+    const m = await fresh();
+    await m.loadMath();
+    for (const [name, { md, html }] of Object.entries(mathExpected)) expect(m.renderMarkdown(md), name).toBe(html);
+    expect(Object.keys(mathExpected).length).toBeGreaterThanOrEqual(10);
   });
 });

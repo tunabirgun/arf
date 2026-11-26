@@ -1,5 +1,41 @@
 import { describe, it, expect } from 'vitest';
-import { slug, serialize, parse, localISO } from '../../src/lib/vaultadapter.js';
+import { slug, legacySlug, keepPath, serialize, parse, localISO, TauriBackend } from '../../src/lib/vaultadapter.js';
+
+describe('slug: NFC, combining marks, no rename flip-flop', () => {
+  it('composes decomposed (NFD) titles instead of splitting at the accent', () => {
+    expect(slug('café note')).toBe('café-note');
+    expect(slug('İstanbul')).toBe('istanbul');
+    expect(slug('Ç'.normalize('NFD') + 'ağrı')).toBe('çağrı');
+  });
+  it('keeps combining marks that belong to letters (Devanagari vowel signs)', () => {
+    expect(slug('हिन्दी नोट')).toBe('हिन्दी-नोट');
+  });
+  it('keepPath keeps a file named by the pre-3.0 slug while the title is unchanged', () => {
+    expect(legacySlug('İstanbul')).toBe('i-stanbul');
+    const n = { id: '01ABCDEFGHJKMNPQRSTVWXYZ12', title: 'İstanbul', folder: 'Gezi', _path: 'Gezi/i-stanbul.md' };
+    expect(keepPath(n)).toBe('Gezi/i-stanbul.md');
+    expect(keepPath({ ...n, _path: 'Gezi/i-stanbul-xyz12.md' })).toBe('Gezi/i-stanbul-xyz12.md');
+    expect(keepPath({ ...n, title: 'Ankara' })).toBeNull();          // a real rename moves the file
+    expect(keepPath({ ...n, folder: 'Other' })).toBeNull();          // and so does a move
+    expect(keepPath({ ...n, _path: undefined })).toBeNull();
+  });
+  it('saveNote does not rename a legacy-named file on save, and renames on a title change', async () => {
+    const files = new Map([['V/Gezi/i-stanbul.md', 'old']]);
+    const fs = {
+      exists: async (p) => files.has(p), mkdir: async () => {}, writeTextFile: async (p, t) => { files.set(p, t); },
+      remove: async (p) => { files.delete(p); },
+    };
+    const b = new TauriBackend('V', fs);
+    const n = { id: '01ABCDEFGHJKMNPQRSTVWXYZ12', title: 'İstanbul', folder: 'Gezi', tags: [], body: 'x', _path: 'Gezi/i-stanbul.md' };
+    await b.saveNote(n);
+    expect(n._path).toBe('Gezi/i-stanbul.md');
+    expect([...files.keys()]).toEqual(['V/Gezi/i-stanbul.md']);
+    n.title = 'İzmir';
+    await b.saveNote(n);
+    expect(n._path).toBe('Gezi/izmir.md');
+    expect([...files.keys()]).toEqual(['V/Gezi/izmir.md']);
+  });
+});
 
 describe('slug', () => {
   it('lowercases and hyphenates', () => {
@@ -7,6 +43,15 @@ describe('slug', () => {
   });
   it('keeps Unicode letters (Turkish) instead of collapsing to untitled', () => {
     expect(slug('Çağrı Düşünce')).toBe('çağrı-düşünce');
+  });
+  it('folds Turkish dotted capital I (İ -> i, no stray combining dot)', () => {
+    expect(slug('Şeker İşleme')).toBe('şeker-işleme');
+    expect(slug('İSTANBUL')).toBe('istanbul');
+    expect(slug('İ')).toBe('i');
+    expect(slug('Şeker İşleme')).not.toMatch(/̇/);
+  });
+  it('leaves dotless ı and other letters untouched', () => {
+    expect(slug('ışık Ölçümü')).toBe('ışık-ölçümü');   // toLowerCase is not locale-aware: only İ needs the fold
   });
   it('falls back to untitled for empty or symbol-only titles', () => {
     expect(slug('')).toBe('untitled');
@@ -90,5 +135,25 @@ describe('localISO', () => {
   it('round-trips back to the same UTC instant', () => {
     const utc = '2020-06-15T12:34:56.000Z';
     expect(new Date(localISO(utc)).toISOString()).toBe(utc);
+  });
+});
+
+describe('parse stamp option', () => {
+  const STAMP = '2021-05-05T05:05:05.000Z';
+  it('uses opts.stamp for a missing created/updated', () => {
+    const p = parse('plain body', { stamp: STAMP });
+    expect(p.created).toBe(STAMP);
+    expect(p.updated).toBe(STAMP);
+  });
+  it('lets frontmatter timestamps win over the stamp, per field', () => {
+    const p = parse('---\nid: a\nupdated: 2020-01-02T00:00:00.000Z\n---\nbody', { stamp: STAMP });
+    expect(p.updated).toBe('2020-01-02T00:00:00.000Z');
+    expect(p.created).toBe(STAMP);
+  });
+  it('without a stamp still falls back to the current time', () => {
+    const before = Date.now();
+    const p = parse('plain body');
+    expect(Date.parse(p.updated)).toBeGreaterThanOrEqual(before);
+    expect(Date.parse(p.created)).toBeGreaterThanOrEqual(before);
   });
 });

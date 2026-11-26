@@ -6,12 +6,19 @@
 
 // ---------- note <-> markdown file ----------
 
+// Windows reserved device names (CON, NUL, COM1…) can't be real files, with any extension
+const devName = (s) => (/^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i.test(s) ? s + '-note' : s);
 export function slug(title) {
-  // keep Unicode letters/numbers so non-Latin titles (e.g. Turkish) don't collapse to "untitled"
-  let s = (title || 'untitled').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '-').replace(/^-+|-+$/g, '').slice(0, 80) || 'untitled';
-  // Windows reserved device names (CON, NUL, COM1…) can't be real files, with any extension
-  if (/^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i.test(s)) s += '-note';
-  return s;
+  // keep Unicode letters/numbers so non-Latin titles (e.g. Turkish) don't collapse to "untitled". NFC first, so a
+  // decomposed title (macOS: e + U+0301) keeps its accented letter; lowercasing Turkish İ yields i + U+0307
+  // (combining dot above), folded back to i. Any other combining mark stays with its letter.
+  const s = (title || 'untitled').normalize('NFC').toLowerCase().replace(/i̇/g, 'i').replace(/[^\p{L}\p{M}\p{N}]+/gu, '-')
+    .replace(/^[-\p{M}]+|-+$/gu, '').slice(0, 80) || 'untitled';
+  return devName(s);
+}
+// the slug of Arf before 3.0 (no NFC, İ split into 'i-'): a file named by it is not renamed while its title is unchanged
+export function legacySlug(title) {
+  return devName((title || 'untitled').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '-').replace(/^-+|-+$/g, '').slice(0, 80) || 'untitled');
 }
 
 function yamlStr(s) { return '"' + String(s == null ? '' : s).replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"'; }
@@ -64,8 +71,9 @@ export function parse(text, opts = {}) {
   if (/^".*"$/.test(title)) title = title.slice(1, -1).replace(/\\"/g, '"').replace(/\\\\/g, '\\');
   let tags = [];
   if (meta.tags) { const t = meta.tags.trim().replace(/^\[|\]$/g, ''); tags = t.split(',').map((x) => x.trim()).filter(Boolean); }
-  const now = new Date().toISOString();
-  return {
+  // opts.stamp stands in for a missing created/updated so a frontmatter-less file keeps one value across loads
+  const now = opts.stamp || new Date().toISOString();
+  const note = {
     id: (meta.id || '').trim() || opts.fallbackId || 'n' + Math.abs(hash(text)),
     title: title || opts.fallbackTitle || 'Untitled',
     folder: opts.folder || '',
@@ -74,6 +82,10 @@ export function parse(text, opts = {}) {
     updated: (meta.updated || '').trim() || now,
     body: body.replace(/^\r?\n+/, ''),
   };
+  // _stamped: `updated` is the stand-in, not a stored value (see adoptDiskStamps in sync.js). Local load
+  // state like _flushed: never written to a file, the cache or a bundle.
+  if (opts.stamp && !(meta.updated || '').trim()) note._stamped = true;
+  return note;
 }
 
 function hash(s) { let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0; return h; }
@@ -86,10 +98,19 @@ function sanSeg(s) {
   if (/^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i.test(s)) s += '-';
   return s;
 }
-function relPath(note, suffix) {
+function relPath(note, suffix, slugFn = slug) {
   // drop empty / "." / ".." segments so a folder name can never escape the vault root
   const dir = (note.folder || '').split(/[\\/]/).filter((seg) => seg && seg !== '.' && seg !== '..').map(sanSeg).filter(Boolean).join('/');
-  return (dir ? dir + '/' : '') + slug(note.title) + (suffix ? '-' + suffix : '') + '.md';
+  return (dir ? dir + '/' : '') + slugFn(note.title) + (suffix ? '-' + suffix : '') + '.md';
+}
+// The file a save should write. An existing _path stays when it is what the current or the pre-3.0 slug gives
+// for this title and folder (with or without the id suffix), so a slug-rule change alone never renames a file
+// (and two devices on different versions never rename it back and forth). Only a real title/folder change moves it.
+export function keepPath(note) {
+  const p = note._path; if (!p) return null;
+  const sfx = String(note.id || '').slice(-5).toLowerCase();
+  for (const f of [slug, legacySlug]) if (p === relPath(note, '', f) || p === relPath(note, sfx, f)) return p;
+  return null;
 }
 // dedupe loaded notes by id (a stale duplicate file must not shadow the real note)
 function dedupeById(notes) {
@@ -129,8 +150,28 @@ async function writeVaultConfig(cfg) {
 
 // ---------- Tauri filesystem backend ----------
 
+const READ_POOL = 12;          // files read in flight at once
+const FULL_REREAD_EVERY = 15;  // every Nth loadAll ignores the scan cache
+const RECENT_MS = 3000;        // a file modified this close to now is always re-read: a same-size edit within one
+                               // mtime tick (the scan reports ms; FAT/exFAT store 2 s) keeps both mtime and size
+
+// run fn over items with at most n in flight
+async function pool(items, n, fn) {
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(n, items.length) }, async () => {
+    while (next < items.length) { const i = next++; await fn(items[i], i); }
+  }));
+}
+
 export class TauriBackend {
-  constructor(root, fs) { this.root = root; this.fs = fs; }
+  // opts.invoke replaces the Tauri IPC call (tests, web build); opts.now the clock (tests)
+  constructor(root, fs, opts = {}) {
+    this.root = root; this.fs = fs; this._invoke = opts.invoke || null; this._now = opts.now || Date.now;
+    this._scanWarned = false;  // a failing vault_scan is logged once per backend, not every tick
+    this._cache = new Map();   // rel -> { mtime, size, note } from the last vault_scan load
+    this._stamps = new Map();  // rel -> { h, t } fallback timestamps when the scan gives no mtime
+    this._loads = 0;
+  }
   get name() { return (this.root && this.root.split(/[\\/]/).filter(Boolean).pop()) || 'your folder'; }
   static async pick() {
     const { open } = await import('@tauri-apps/plugin-dialog');
@@ -156,8 +197,47 @@ export class TauriBackend {
     return new TauriBackend(root, fs);
   }
   join(...p) { return p.filter(Boolean).join('/'); }
-  async loadAll() {
-    const notes = [];
+  // Walks the vault and returns every note. One vault_scan IPC lists the .md files with
+  // (mtime, size); only files that differ from the cached pair are read and parsed. The
+  // fallback JS walk (no scan command, scope rejection, web build) behaves as before.
+  // opts.full re-reads everything; so does every 15th call, as a safety net for edits that
+  // keep both mtime and size.
+  async loadAll(opts = {}) {
+    const full = opts.full === true || ++this._loads % FULL_REREAD_EVERY === 0;
+    let list = null;
+    try { list = await this._scan(); } catch (e) {
+      list = null;
+      if (!this._scanWarned) { this._scanWarned = true; console.warn('Arf: vault_scan unavailable, reading the folder with the plugin-fs walk instead:', e); }
+    }
+    const cached = !!list;
+    if (!list) list = await this._walk();
+    const cache = new Map(), results = new Array(list.length), now = this._now();
+    await pool(list, READ_POOL, async (f, i) => {
+      const hit = cached && !full && f.mtime > 0 && Math.abs(now - f.mtime) >= RECENT_MS && this._cache.get(f.rel);
+      if (hit && hit.mtime === f.mtime && hit.size === f.size) { results[i] = hit.note; cache.set(f.rel, hit); return; }
+      try {
+        const text = await this.fs.readTextFile(this.join(this.root, f.rel));
+        const name = f.rel.slice(f.rel.lastIndexOf('/') + 1);
+        const folder = f.rel.includes('/') ? f.rel.slice(0, f.rel.lastIndexOf('/')) : '';
+        const note = parse(text, { folder, fallbackId: f.rel, fallbackTitle: name.replace(/\.md$/, ''), stamp: this._stamp(f.rel, text, f.mtime) });
+        note._path = f.rel; results[i] = note;
+        if (cached && f.mtime > 0) cache.set(f.rel, { mtime: f.mtime, size: f.size, note });
+      } catch (err) { /* skip one locked/unreadable file instead of aborting the whole vault load */ }
+    });
+    this._cache = cache;
+    if (this._stamps.size) { const live = new Set(list.map((f) => f.rel)); for (const rel of this._stamps.keys()) if (!live.has(rel)) this._stamps.delete(rel); }
+    // hand out copies so in-place edits of an adopted note never reach the cache
+    return dedupeById(results.filter(Boolean).map((n) => ({ ...n, tags: n.tags.slice() })));
+  }
+  async _scan() {
+    this._invoke = this._invoke || (await import('@tauri-apps/api/core')).invoke;
+    const list = await this._invoke('vault_scan', { root: this.root });
+    if (!Array.isArray(list)) throw new Error('vault_scan returned no list');
+    return list;
+  }
+  // the original recursive readDir walk, only collecting paths so the reads can run in a pool
+  async _walk() {
+    const list = [];
     const walk = async (dir, prefix) => {
       let entries = []; try { entries = await this.fs.readDir(dir); } catch (e) { return; }
       for (const e of entries) {
@@ -168,22 +248,26 @@ export class TauriBackend {
         if (!prefix && e.isDirectory && e.name === 'attachments') continue;
         const rel = prefix ? prefix + '/' + e.name : e.name;
         if (e.isDirectory) await walk(this.join(dir, e.name), rel);
-        else if (e.name.endsWith('.md')) {
-          try {
-            const text = await this.fs.readTextFile(this.join(dir, e.name));
-            const folder = rel.includes('/') ? rel.slice(0, rel.lastIndexOf('/')) : '';
-            const note = parse(text, { folder, fallbackId: rel, fallbackTitle: e.name.replace(/\.md$/, '') });
-            note._path = rel; notes.push(note);
-          } catch (err) { /* skip one locked/unreadable file instead of aborting the whole vault load */ }
-        }
+        else if (e.name.endsWith('.md')) list.push({ rel, mtime: 0, size: 0 });
       }
     };
     await walk(this.root, '');
-    return dedupeById(notes);
+    return list;
+  }
+  // created/updated for a file without frontmatter timestamps: the file's mtime when known,
+  // else the first time this content was seen (stable while unchanged, newer once it changes)
+  _stamp(rel, text, mtime) {
+    if (mtime > 0) return new Date(mtime).toISOString();
+    const h = hash(text) + ':' + text.length, prev = this._stamps.get(rel);
+    if (prev && prev.h === h) return prev.t;
+    let t = new Date().toISOString();
+    if (prev && t <= prev.t) t = new Date(Date.parse(prev.t) + 1).toISOString();
+    this._stamps.set(rel, { h, t });
+    return t;
   }
   async pathExists(path) { try { return await this.fs.exists(this.join(this.root, path)); } catch (e) { return false; } }
   async saveNote(note) {
-    let path = relPath(note);
+    let path = keepPath(note) || relPath(note);
     if (note._path !== path && (await this.pathExists(path))) path = relPath(note, note.id.slice(-5).toLowerCase());
     const abs = this.join(this.root, path);
     const dir = abs.slice(0, abs.lastIndexOf('/'));

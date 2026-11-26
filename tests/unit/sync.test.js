@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mergeByUpdated, syncChanged, conflictDecision } from '../../src/lib/sync.js';
+import { mergeByUpdated, syncChanged, conflictDecision, fullReadGate } from '../../src/lib/sync.js';
 
 describe('mergeByUpdated', () => {
   it('keeps the strictly-newer copy of a note', () => {
@@ -69,5 +69,38 @@ describe('conflictDecision', () => {
   it('is inert when either side is missing', () => {
     expect(conflictDecision(local, null, new Set())).toEqual({ conflict: false, key: null });
     expect(conflictDecision(null, { id: 'a', updated: 't' }, new Set())).toEqual({ conflict: false, key: null });
+  });
+});
+
+describe('fullReadGate (focus + visibilitychange coalescing)', () => {
+  it('a full request during a full tick does not schedule another full read', () => {
+    const g = fullReadGate();
+    g.request();                       // focus
+    expect(g.begin()).toBe(true);      // the tick takes it: a full read
+    g.request();                       // visibilitychange, same regain, while that read is in flight
+    g.end(true);
+    expect(g.begin()).toBe(false);     // the next tick is incremental
+    g.end(true);
+  });
+  it('a full request during an incremental tick still runs a full read next', () => {
+    const g = fullReadGate();
+    expect(g.begin()).toBe(false);
+    g.request();
+    g.end(true);
+    expect(g.begin()).toBe(true);
+    g.end(true);
+    expect(g.begin()).toBe(false);
+  });
+  it('a failed full tick asks again', () => {
+    const g = fullReadGate();
+    g.request(); expect(g.begin()).toBe(true);
+    g.end(false);
+    expect(g.begin()).toBe(true);
+  });
+  it('a request with no tick running waits for the next tick', () => {
+    const g = fullReadGate();
+    g.request(); g.request();
+    expect(g.begin()).toBe(true); g.end(true);
+    expect(g.begin()).toBe(false);
   });
 });

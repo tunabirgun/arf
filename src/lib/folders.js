@@ -10,6 +10,14 @@ const sanSeg = (s) => { s = s.replace(/[. ]+$/, ''); return /^(con|prn|aux|nul|c
 // tree, drop empty / "." / ".." segments, join with "/". Used everywhere a folder is keyed.
 export const canonFolder = (p) => (p || '').split(/[\\/]/).filter((seg) => seg && seg !== '.' && seg !== '..').map(sanSeg).filter(Boolean).join('/');
 
+// The vault root's attachments/ holds reference files and images; the scan (vault_scan, the JS walk)
+// skips it, so a note folder of that name would vanish from the vault on the next sync tick.
+// Case-insensitive because Windows/macOS file systems fold case.
+export const RESERVED_ROOT = 'attachments';
+export const isReservedRoot = (p) => { const c = canonFolder(p); return c.split('/')[0].toLowerCase() === RESERVED_ROOT && c !== ''; };
+// an imported folder path under a root "attachments" moves to "attachments-notes" (same case as given)
+export const mapReservedRoot = (p) => { const c = canonFolder(p); if (!isReservedRoot(c)) return c; const i = c.indexOf('/'); return i < 0 ? c + '-notes' : c.slice(0, i) + '-notes' + c.slice(i); };
+
 export function allFolderPaths(folders, notes) {
   const set = new Set();
   const add = (p) => {
@@ -79,6 +87,7 @@ export function planFolderMove(src, destParent, folders, notes) {
   const leaf = src.slice(src.lastIndexOf('/') + 1);
   const newPath = destParent ? destParent + '/' + leaf : leaf;
   if (newPath === src) return { ok: false, reason: 'noop' };
+  if (!destParent && isReservedRoot(newPath)) return { ok: false, reason: 'reserved', leaf };
   // refuse to merge into an unrelated folder that already owns this leaf name — a silent
   // Set-dedup merge would fuse two subtrees and reassign every note under them, unrecoverably
   if (folders.some((p) => (p === newPath || p.startsWith(newPath + '/')) && !(p === src || p.startsWith(src + '/'))) ||

@@ -1,0 +1,14 @@
+{
+  "tunabirgun/ArfLLM": {
+    "resonance": 0.26881995423123906,
+    "synthesis": 0.43499471842351306
+  },
+  "tunabirgun/ArfLLM_Multi": {
+    "resonance": 0.1777473396872741,
+    "synthesis": 0.2995764679292037
+  },
+  "Xenova/paraphrase-multilingual-MiniLM-L12-v2": {
+    "resonance": 0.614357973453536,
+    "synthesis": 0.7445510474626656
+  }
+}

@@ -1,7 +1,6 @@
 // Render a note's Markdown body to HTML for the read view.
 // marked for structure; KaTeX for math; custom inline tokens for [[wikilinks]] and #tags.
 import { marked } from 'marked';
-import katex from 'katex';
 import DOMPurify from 'dompurify';
 
 let resolveTitle = () => null; // (lowercaseTitle) -> note | null
@@ -10,7 +9,28 @@ let resolveCite = () => null; // (citekey) -> reference | null
 export function setCiteResolver(fn) { resolveCite = fn; }
 
 function esc(s) { return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
+// KaTeX is ~260 kB, so it loads on demand. Until loadMath() resolves, math renders as an escaped <code
+// class="math-pending"> placeholder and mathPending() turns true so the app can re-render after load.
+let katex = null, katexLoad = null, mathSeen = false;
+const mathWaiters = new Set();
+export function mathReady() { return katex !== null; }
+export function mathPending() { return mathSeen && katex === null; }
+export function onMathReady(cb) { mathWaiters.add(cb); return () => mathWaiters.delete(cb); } // fires once, when KaTeX finishes loading
+export function loadMath() {
+  if (!katexLoad) {
+    katexLoad = import('katex').then((m) => {
+      katex = m.default || m; mathSeen = false;
+      mathWaiters.forEach((cb) => { try { cb(); } catch (e) {} });
+    }, (e) => { katexLoad = null; throw e; }); // a failed chunk load can be retried
+  }
+  return katexLoad;
+}
+// set only while tasks.js probes a note (renderTaskProbe): GFM task checkboxes then carry
+// data-tslot="<nonce>:<k>", and math stays a placeholder so a probe never flags KaTeX as pending
+let probe = null;
 function math(tex, display) {
+  if (probe) return '<code class="math-pending">' + esc(tex) + '</code>';
+  if (!katex) { mathSeen = true; return '<code class="math-pending' + (display ? ' math-pending-display' : '') + '">' + esc(tex) + '</code>'; }
   try { return katex.renderToString(tex, { displayMode: display, throwOnError: false, output: 'html' }); }
   catch (e) { return '<code>' + esc(tex) + '</code>'; }
 }
@@ -124,17 +144,36 @@ export function numberFigures(html) {
 }
 
 marked.use({ gfm: true, breaks: false, extensions: [mathBlock, mathInline, wikilink, tag, cite] });
+// false = marked's own checkbox, so renderMarkdown's output is unchanged outside a probe
+marked.use({ renderer: {
+  checkbox({ checked }) {
+    if (!probe) return false;
+    return '<input ' + (checked ? 'checked="" ' : '') + 'disabled="" type="checkbox" data-tslot="' + probe.nonce + ':' + (probe.k++) + '">';
+  },
+} });
 
+// block tokens of a note exactly as renderMarkdown lexes them (same marked instance and extensions); used by tasks.js
+export function lexMarkdown(md) { return marked.lexer(md || ''); }
+
+const ATTRS = ['data-nav', 'data-tag', 'data-cite', 'data-task', 'data-newlink', 'data-imw'];
+function render(md, attrs) {
+  let html = marked.parse(md || '');
+  // make GFM task checkboxes interactive: drop `disabled` and tag them so the read view
+  // can toggle the matching `- [ ]` line in the source when one is clicked
+  html = html.replace(/<input\b([^>]*)>/g, (m, a) => /type=["']?checkbox/i.test(a)
+    ? '<input' + a.replace(/\s*disabled(=(["'])[^"']*\2|=[^\s>]+)?/gi, '') + ' data-task>' : m);
+  html = numberFigures(html);   // standalone images → numbered <figure> captions (read view + export)
+  // sanitize: a note may come from an external .md file in the vault, so strip
+  // scripts/handlers while keeping wikilink data-attrs and KaTeX's spans/styles
+  return DOMPurify.sanitize(html, { ADD_ATTR: attrs });
+}
 export function renderMarkdown(md) {
-  try {
-    let html = marked.parse(md || '');
-    // make GFM task checkboxes interactive: drop `disabled` and tag them so the read view
-    // can toggle the matching `- [ ]` line in the source when one is clicked
-    html = html.replace(/<input\b([^>]*)>/g, (m, attrs) => /type=["']?checkbox/i.test(attrs)
-      ? '<input' + attrs.replace(/\s*disabled(=(["'])[^"']*\2|=[^\s>]+)?/gi, '') + ' data-task>' : m);
-    html = numberFigures(html);   // standalone images → numbered <figure> captions (read view + export)
-    // sanitize: a note may come from an external .md file in the vault, so strip
-    // scripts/handlers while keeping wikilink data-attrs and KaTeX's spans/styles
-    return DOMPurify.sanitize(html, { ADD_ATTR: ['data-nav', 'data-tag', 'data-cite', 'data-task', 'data-newlink', 'data-imw'] });
-  } catch (e) { return '<p>' + esc(md || '') + '</p>'; }
+  try { return render(md, ATTRS); } catch (e) { return '<p>' + esc(md || '') + '</p>'; }
+}
+// The read-view HTML of a note with every GFM task checkbox also tagged data-tslot="<nonce>:<k>", k counting
+// task items in token order, so tasks.js can tell task boxes from raw-HTML ones after the sanitizer and the
+// HTML parser have had their say. count = how many task checkboxes marked rendered.
+export function renderTaskProbe(md, nonce) {
+  probe = { nonce, k: 0 };
+  try { const html = render(md, [...ATTRS, 'data-tslot']); return { html, count: probe.k }; } finally { probe = null; }
 }

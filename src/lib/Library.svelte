@@ -1,9 +1,14 @@
 <script>
   import MiniSearch from 'minisearch';
+  import { confirmAsk } from './confirm.js';
   import { shortAuth, joinRefs } from './cite.js';
   import { folderList, canonFolder, buildFolderRows, planFolderMove } from './folders.js';
+  import { fade } from 'svelte/transition';
+  import { dur, DUR } from './motion.svelte.js';
+  import { rove } from './listnav.js';
+  // overlay: true while this view's export modal or move picker is open, so App's dialog/inert/Escape handling covers them
   let { notes, idx, onopen, refs = $bindable([]), libFolders = $bindable([]), jumpTo = null, onjumped = null, onrefsdelete = null,
-    hasVault = false, onopenreader = null, onattach = null, onfetchpdf = null, ondetach = null } = $props();
+    hasVault = false, onopenreader = null, onattach = null, onfetchpdf = null, ondetach = null, onimport = null, overlay = $bindable(false) } = $props();
 
   const TYPELABEL = { 'article-journal': 'Article', 'article-magazine': 'Magazine', book: 'Book', preprint: 'Preprint', dataset: 'Dataset', webpage: 'Web' };
   const FILTERS = [
@@ -36,9 +41,9 @@
       onjumped && onjumped();
     }
   });
-  function deleteRef() {
+  async function deleteRef() {
     if (!sel) return;
-    if (!confirm('Delete the reference “' + (sel.title || sel.citekey) + '”?\n\nCitations to it in your notes will show as unknown until you re-add it.')) return;
+    if (!(await confirmAsk('Delete the reference “' + (sel.title || sel.citekey) + '”?\n\nCitations to it in your notes will show as unknown until you re-add it.'))) return;
     const id = sel.id;
     refs = refs.filter((r) => r.id !== id);
     selId = refs[0]?.id ?? null;
@@ -145,9 +150,9 @@
     if (libCollapsed[src] != null) { libCollapsed[newPath] = libCollapsed[src]; delete libCollapsed[src]; }
     if (folderFilter === src || (folderFilter && folderFilter.startsWith(src + '/'))) folderFilter = re(folderFilter);
   }
-  function deleteLibFolder(path) {
+  async function deleteLibFolder(path) {
     path = canonFolder(path); if (!path) return;
-    if (!confirm('Delete the library folder “' + path.slice(path.lastIndexOf('/') + 1) + '”?\n\nReferences inside move up to the parent — none are deleted.')) return;
+    if (!(await confirmAsk('Delete the library folder “' + path.slice(path.lastIndexOf('/') + 1) + '”?\n\nReferences inside move up to the parent — none are deleted.'))) return;
     const parent = path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '';
     const reDesc = (p) => { const suf = p.slice(path.length + 1); return parent ? parent + '/' + suf : suf; };
     libFolders = [...new Set(libFolders.flatMap((p) => p === path ? [] : (p.startsWith(path + '/') ? [reDesc(p)] : [p])))];
@@ -185,6 +190,23 @@
   export function ctxSelectFolder(path) { folderFilter = path; libCollapsed[path] = false; }
   export function ctxNewRef() { adding = true; addMode = 'search'; addResult = undefined; addInput = ''; addError = ''; addBusy = false; fetchToken++; clearSearch(); }
   export function ctxFolderCollapsed(path) { return !!libCollapsed[path]; }
+  export function closeOverlays() { exportScope = null; movePick = null; }
+  $effect(() => { overlay = !!exportScope || !!movePick; });
+  // an overlay fading out goes inert at once (no focus, clicks or dialog role on the dying node)
+  const leaving = (e) => { e.currentTarget.setAttribute('inert', ''); e.currentTarget.setAttribute('data-leaving', ''); };
+  // folder rows: ArrowRight expands, ArrowLeft collapses (the caret is pointer-only and aria-hidden)
+  function folderKey(e, r) {
+    if (!r.hasChildren || (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft')) return;
+    e.preventDefault();
+    libCollapsed[r.path] = e.key === 'ArrowLeft';
+  }
+  // reference rows: Enter or a click opens the detail; Space (or the ☐ mark) toggles bulk-export selection.
+  // A button fires its Space click on keyup, so both key events are claimed.
+  function refKey(e, id) {
+    if (e.key !== ' ') return;
+    e.preventDefault();
+    if (e.type === 'keydown' && !e.repeat) toggleSel(id);
+  }
   const exportRefs = $derived(exportScope === 'all' ? refs : exportScope === 'selected' ? refs.filter((r) => selected.has(r.id)) : refs.filter((r) => r.id === exportScope));
   const exportText = $derived(joinRefs(exportRefs, expFmt));
 
@@ -366,8 +388,9 @@
         ondragstart={() => (dragFolder = r.path)} ondragend={() => { dragFolder = null; dropFolder = undefined; }}
         ondragover={(e) => { if (folderDragAllowed(r.path)) { e.preventDefault(); dropFolder = r.path; } }} ondragleave={() => { if (dropFolder === r.path) dropFolder = undefined; }}
         ondrop={() => { if (dropFolder === r.path) onFolderDrop(r.path); }}
-        onclick={() => { if (folderFilter === r.path) toggleLibFolder(r.path); else { folderFilter = r.path; libCollapsed[r.path] = false; } }}>
-        <span class="caret" role="button" tabindex="-1" onclick={(e) => { e.stopPropagation(); toggleLibFolder(r.path); }}>{r.hasChildren ? (r.collapsed ? '▸' : '▾') : '·'}</span><span class="fn">{r.name}</span><span class="fcount">{folderCount(r.path)}</span>
+        aria-expanded={r.hasChildren ? !r.collapsed : undefined} onkeydown={(e) => folderKey(e, r)}
+        onclick={(e) => { if (e.target.closest('.caret')) toggleLibFolder(r.path); else if (folderFilter === r.path) toggleLibFolder(r.path); else { folderFilter = r.path; libCollapsed[r.path] = false; } }}>
+        <span class="caret" aria-hidden="true">{r.hasChildren ? (r.collapsed ? '▸' : '▾') : '·'}</span><span class="fn">{r.name}</span><span class="fcount">{folderCount(r.path)}</span>
       </button>
     {/each}
     {#if hasUnfiled || dragRef}
@@ -378,7 +401,8 @@
     {/if}
     {#if uiMsg}<div class="libnote">{uiMsg}</div>{/if}
     <button class="libbtn pri" style="margin-top:.9rem" onclick={ctxNewRef}>＋ Add reference</button>
-    <button class="libbtn" onclick={() => { exportScope = 'all'; }}>⇩ Export library</button>
+    <button class="libbtn" disabled={!refs.length} onclick={() => { exportScope = 'all'; }}>⇩ Export library</button>
+    {#if onimport}<button class="libbtn" title="Add references from a BibTeX, RIS or CSL-JSON file" onclick={() => onimport()}>Import…</button>{/if}
     {#if selected.size}
       <button class="libbtn pri" onclick={() => { exportScope = 'selected'; }}>⇩ Export selected ({selected.size})</button>
       <button class="libbtn" onclick={() => (selected = new Set())}>Clear selection</button>
@@ -394,13 +418,14 @@
     </div>
     {#if libQuery.trim()}<div class="libsearchmeta">{filtered.length} {filtered.length === 1 ? 'match' : 'matches'}{filter !== 'all' || folderFilter != null ? ' in filter' : ''}</div>{/if}
     {#each filtered as r (r.id)}
-      <button class="refrow" class:on={r.id === selId} class:sel={selected.has(r.id)} data-ref={r.id} draggable="true"
-        ondragstart={() => (dragRef = r.id)} ondragend={() => { dragRef = null; dropFolder = undefined; }} onclick={() => (selId = r.id)}>
-        <span class="refsel" role="checkbox" tabindex="-1" aria-checked={selected.has(r.id)} title="Select for bulk export"
-          onclick={(e) => { e.stopPropagation(); toggleSel(r.id); }}>{selected.has(r.id) ? '☑' : '☐'}</span>
-        <div class="rtitle"><span class="rtype">{TYPELABEL[r.type] || r.type}</span>{r.title}{#if r.attachment}<span class="attclip" title="Has a reader file">▤</span>{/if}</div>
-        <div class="rmeta">{shortAuth(r.authors)} · {r.year}{r.container ? ' · ' + r.container : r.publisher ? ' · ' + r.publisher : ''}</div>
-        <div class="rsrc">{#each r.sources || [] as s}<span class="sb">{s}</span>{/each}</div>
+      <button class="refrow" class:on={r.id === selId} class:sel={selected.has(r.id)} data-ref={r.id} draggable="true" aria-pressed={selected.has(r.id)}
+        title="Enter opens the reference; Space selects it for bulk export"
+        ondragstart={() => (dragRef = r.id)} ondragend={() => { dragRef = null; dropFolder = undefined; }}
+        onkeydown={(e) => refKey(e, r.id)} onkeyup={(e) => refKey(e, r.id)}
+        onclick={(e) => { if (e.target.closest('.refsel')) toggleSel(r.id); else selId = r.id; }}>
+        <span class="refsel" aria-hidden="true">{selected.has(r.id) ? '☑' : '☐'}</span>
+        <div class="rtitle">{r.title}{#if r.attachment}<span class="attclip" title="Has a reader file">▤</span>{/if}</div>
+        <div class="rmeta">{TYPELABEL[r.type] || r.type} · {shortAuth(r.authors)} · {r.year}{r.container ? ' · ' + r.container : r.publisher ? ' · ' + r.publisher : ''}</div>
       </button>
     {:else}
       <div class="rempty" style="padding:1.2rem .2rem">{libQuery.trim() ? 'No reference matches “' + libQuery + '”.' : (refs.length ? 'No references in this view.' : 'Your library is empty — add a reference to begin.')}</div>
@@ -487,12 +512,14 @@
       <div class="dfield"><div class="dl">Cite in a note</div><div class="dv"><button class="libbtn" style="width:auto;padding:.35rem .8rem" onclick={() => copyCite(sel)}>Copy [@{sel.citekey}]</button></div></div>
       <button class="libbtn pri" onclick={() => (exportScope = sel.id)}>⇩ Export this reference</button>
       <button class="libbtn" style="margin-top:.5rem;color:var(--danger,#c0392b)" onclick={deleteRef}>Delete reference</button>
-    {:else}<div class="rempty">Select a reference.</div>{/if}
+    {:else}<div class="rempty">{refs.length ? 'Select a reference.' : 'Add a reference by DOI, ISBN or arXiv ID, or search the open databases, to start your library.'}</div>{/if}
   </div>
 </div>
 
+<!-- the scrims close on a click outside their dialog; Escape is the keyboard path (App's onKey calls closeOverlays) -->
 {#if exportScope}
-  <div class="scrim" onclick={(e) => { if (e.target === e.currentTarget) exportScope = null; }}>
+  <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+  <div class="scrim" onclick={(e) => { if (e.target === e.currentTarget) exportScope = null; }} out:fade={{ duration: dur(DUR.fast) }} onoutrostart={leaving}>
     <div class="modal">
       <button class="dlg-x" onclick={() => (exportScope = null)}>✕</button>
       <h3>Export references</h3>
@@ -508,12 +535,13 @@
 {/if}
 
 {#if movePick}
-  <div class="scrim" onclick={(e) => { if (e.target === e.currentTarget) movePick = null; }}>
-    <div class="palette">
+  <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+  <div class="scrim" onclick={(e) => { if (e.target === e.currentTarget) movePick = null; }} out:fade={{ duration: dur(DUR.exit) }} onoutrostart={leaving}>
+    <div class="palette" role="dialog" aria-modal="true" aria-label="Move folder to">
       <div class="pg" style="padding:.7rem .9rem .3rem">Move folder to…</div>
       <div class="presults">
         {#each moveDestinations(movePick.src) as dest}
-          <button class="prow" onclick={() => doMovePick(dest)}><span class="pt">{dest === '' ? '↑ Top level' : dest}</span></button>
+          <button class="prow" onkeydown={(e) => { if (rove(e.currentTarget.parentElement, e, '.prow')) e.preventDefault(); }} onclick={() => doMovePick(dest)}><span class="pt">{dest === '' ? '↑ Top level' : dest}</span></button>
         {/each}
       </div>
     </div>

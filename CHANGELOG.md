@@ -6,6 +6,46 @@ All notable changes to Arf are recorded here. The format follows
 below matches a `v*` git tag and a GitHub Release; the release notes are generated
 from the matching section of this file.
 
+## [3.0.0] - 2026-11-26
+
+### Added
+- **A rebuilt knowledge graph.** The local and full-window graphs are now drawn on a canvas with a d3-force simulation. Drag a note and its linked notes are pulled along; release with Shift held, or double-click, to pin it in place (pins are remembered; "Unpin all" clears them). Zoom with the wheel or a pinch, pan with inertia, and fit the view with one button.
+- **Graph tools.** The full-window graph has a search box that zooms to the matching note, a depth control (1, 2 or 3 links from the open note, or the whole vault), tag and folder filters, a switch to hide orphans, a Forces panel (repulsion, link distance, link strength, centring), and PNG and SVG export of the current view.
+- **Suggested links in the graph.** The notes Resonance lists for the open note appear as dashed edges, so unlinked but similar notes are visible next to the real links. They can be hidden with one switch.
+- **Keyboard and reduced motion in the graph.** Arrow keys move between linked notes, Enter opens one, P pins or unpins it, `+`, `-` and `0` zoom and fit, and Escape clears the selection. With reduced motion the layout is computed before it is shown, and nothing animates.
+- **Import of Markdown notes.** Settings → Import and export imports single Markdown files, a whole folder (including an Obsidian or Jekyll vault) or a ZIP archive. Folders are kept, images referenced by notes in an imported folder or ZIP are copied into the vault, and Obsidian image embeds (`![[image.png]]`) become standard Markdown images. A note whose id is already in the vault keeps the newer copy.
+- **Import of references.** BibTeX, RIS and CSL-JSON files add their entries to the Library; a work already there (same DOI, or same title, first author and year) is skipped.
+- **Drag and drop to import.** Markdown files, ZIP archives, reference files and `.arf` bundles dropped on the window are imported.
+- **Vault export as ZIP.** Settings → Export as ZIP writes every note as a Markdown file in its folder, the Library as `references.bib` and `references.json`, and, in the desktop app, the vault's images and reference files under `attachments/`. The archive can be imported again.
+- **Link previews.** Resting the pointer on a `[[wikilink]]` in the reading view, or on a Resonance entry in the side panel, shows the linked note's title, the start of its text and its link counts. Keyboard focus shows the same card.
+- **Backlink context.** Each entry under "Referenced in" shows the sentence in which the other note links to this one.
+- **A model picker.** Settings → Connection suggestions lists the embedding models Arf can use, with their size and licence, and downloads, switches or removes them. It includes Arf's own models, ArfLLM and ArfLLM_Multi (see Models below), the two models earlier versions used, and any Hugging Face repository in the Transformers.js layout entered by id.
+
+### Changed
+- **No model ships with the app.** Connection suggestions are off until you turn them on, and every model is downloaded from Hugging Face only when you ask. The onnxruntime-web runtime is fetched from jsDelivr on first use and checked against SHA-384 hashes recorded at build time before it runs. Note text is never sent anywhere.
+- **Smaller download and faster start.** The Windows installer is about 5.8 MB instead of about 9.8 MB, because the machine-learning runtime is no longer bundled. The script loaded at startup is about 0.4 MB instead of 1.1 MB; the editor, Library, reader, KaTeX and importers load when first needed.
+- **Models run on the CPU, with visible progress.** Connection-suggestion models now always use the WebAssembly backend, so they work on machines without a usable GPU, and the first indexing of a vault shows "Indexing n / N" in the side panel. In the desktop app with a 304-note test vault this took about 0.3 s per note with ArfLLM and 0.5 s per note with ArfLLM_Multi; later edits re-embed only the notes that changed.
+- **Faster vault sync.** The desktop app lists the vault folder with one native call and re-reads only the files whose size or modification time changed.
+- **The local cache moved to IndexedDB.** Notes are cached per note instead of as one localStorage value, so large vaults (above about 1,500 notes in testing) no longer hit the browser storage limit or show a false "Couldn't save" banner. An existing cache is migrated on first launch.
+- **Command palette.** Arrow keys move through the results and Enter opens the highlighted one; the list carries listbox roles for screen readers.
+- **Design and accessibility.** Text that fell below WCAG AA contrast was darkened in both themes; buttons that rendered in the browser's default font now use Arf's fonts; controls that lacked a visible focus ring now have one; dialogs and menus have proper roles and keep focus inside while open; the context menu works from the keyboard (Shift+F10); closing panels fades out instead of vanishing; and the Read/Write controls no longer shift between modes.
+
+### Fixed
+- **Files without a frontmatter header no longer churn.** Such a file is dated by its modification time, so it is not treated as changed on every sync tick.
+- **Edits made outside Arf update links and tags.** An external edit that kept the note's `updated` time now refreshes the index, the graph and the suggestions.
+- **Deleted notes stay deleted.** A note deleted in Arf or on disk no longer reappears at the next launch.
+- **Delete confirmations work in the desktop app.** Deleting a note, deleting a reference and removing a model ask for confirmation again; in earlier desktop builds the confirmation was bypassed and the action ran immediately.
+- **Ticking a task checks the right line.** A task-like line inside a code block no longer shifts which checkbox a click in the reading view changes.
+- **Folder names can be typed at once.** The name field for a new or renamed folder receives keyboard focus.
+- **Folder collapse state is remembered** across launches.
+- **Turkish file names.** Titles with a dotted capital İ produce correct file names, and existing files named by the earlier rule are not renamed while their title is unchanged.
+- Actions on a note created moments earlier (delete, duplicate, copy as Markdown or wikilink, rename) no longer fail during the first fraction of a second.
+
+### Models
+- [ArfLLM](https://huggingface.co/tunabirgun/ArfLLM) contains the unmodified weights of all-MiniLM-L6-v2 in an int8 ONNX export prepared for Arf (inputs truncated at 256 tokens). No quality gain over the base model is claimed: the fine-tuned English candidates did not pass the acceptance rule fixed before training.
+- [ArfLLM_Multi](https://huggingface.co/tunabirgun/ArfLLM_Multi) is a fine-tuned paraphrase-multilingual-MiniLM-L12-v2. On SCIDOCS (nDCG@10) it scores 1.3 points above its base model at the base's default settings (95% CI +0.6 to +2.0); compared with Arf 2.0's multilingual option it scores 5.3 points higher on SCIDOCS and 12.5 points higher on NFCorpus. No improvement is claimed for non-English scientific text.
+- Each listed model has its own Resonance and Synthesis thresholds. A custom model's thresholds are derived from your own vault and need at least 29 notes; until then Arf uses word overlap.
+
 ## [2.0.0] - 2026-07-15
 
 ### Changed
@@ -173,6 +213,11 @@ from the matching section of this file.
 ### Added
 - First public release: a local-first Markdown vault, `[[wikilinks]]` and backlinks, concept tags, a knowledge graph, on-device similarity (Resonance and the weekly Synthesis digest), continuous two-way folder sync, and document export.
 
+[3.0.0]: https://github.com/tunabirgun/arf/releases/tag/v3.0.0
+[2.0.0]: https://github.com/tunabirgun/arf/releases/tag/v2.0.0
+[1.9.1]: https://github.com/tunabirgun/arf/releases/tag/v1.9.1
+[1.9.0]: https://github.com/tunabirgun/arf/releases/tag/v1.9.0
+[1.8.0]: https://github.com/tunabirgun/arf/releases/tag/v1.8.0
 [1.7.0]: https://github.com/tunabirgun/arf/releases/tag/v1.7.0
 [1.6.1]: https://github.com/tunabirgun/arf/releases/tag/v1.6.1
 [1.6.0]: https://github.com/tunabirgun/arf/releases/tag/v1.6.0

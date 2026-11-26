@@ -1,0 +1,27 @@
+% a comment with an @ sign
+@comment{ignored @entry{x, title={no}} }
+@string{jgb = "Journal of Great Biology"}
+@string{pub = {Big} # " Press"}
+@preamble{"\newcommand{\noop}[1]{}"}
+@article{Sahin2021,
+  author = {{\c{S}}ahin, Ay{\c{s}}e and K{\i}l{\i}{\c{c}}, Mehmet and M{\"u}ller, Hans and G{\"o}k{\u{g}}ul-Ok, Z.},
+  title = {A {DNA} study of {B}rain {\"o}rg{\"u}t: nested {{braces}} and $\alpha$-decay},
+  journal = jgb,
+  year = 2021, month = mar,
+  volume = {12},
+  pages = {34--56},
+  doi = {10.1000/ABC_1},
+}
+@book{knuth84,
+  author = "Donald E. Knuth",
+  title = "The {TeX}book",
+  publisher = pub,
+  year = "1984",
+  isbn = {978-0-201-13447-6}
+}
+@misc{noyear,
+  author = {Doe, Jane and van der Berg, Ludwig and others},
+  title = {Untitled work},
+  howpublished = {\url{https://example.org/a_b}}
+}
+@inproceedings{conf1, author={Poe, E.}, title={Conf {\'e}tude}, booktitle={Proc. of Things}, year={2019}, pages={1-9}}
